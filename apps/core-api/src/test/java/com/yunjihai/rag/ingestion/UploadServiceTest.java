@@ -88,7 +88,8 @@ class UploadServiceTest {
         var first = service.accept(command("v1.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
         var parsedAt = Instant.parse("2026-09-24T08:01:00Z");
         documents.markParsingSucceeded(first.documentId(), first.versionId(), parsedAt);
-        documents.submitForReview(first.documentId(), first.versionId(), ACTOR_ID, parsedAt.plusSeconds(1));
+        documents.submitForReview(
+                first.documentId(), first.versionId(), ACTOR_ID, parsedAt.plusSeconds(1));
         documents.publish(first.documentId(), first.versionId(), ACTOR_ID, parsedAt.plusSeconds(2));
         documents.createNextDraft(
                 first.documentId(), "blobs/sha256/different", ACTOR_ID, parsedAt.plusSeconds(3));

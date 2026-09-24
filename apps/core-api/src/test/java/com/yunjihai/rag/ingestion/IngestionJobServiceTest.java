@@ -128,6 +128,24 @@ class IngestionJobServiceTest {
     }
 
     @Test
+    void pendingDraftCannotEnterReviewBeforeIngestionCompletes() {
+        var fixture = new Fixture();
+
+        assertThatThrownBy(() -> fixture.documentService.submitForReview(
+                fixture.document.id(), fixture.document.latestVersion().id(), ACTOR_ID, NOW))
+                .isInstanceOf(com.yunjihai.rag.knowledge.DocumentLifecycleException.class)
+                .hasMessageContaining("解析");
+
+        fixture.jobs.enqueue(fixture.request);
+        var lease = fixture.jobs.claimNext("worker-a").orElseThrow();
+        fixture.jobs.complete(lease, fixture.success(lease.jobId()));
+
+        assertThat(fixture.documents.findById(fixture.document.id()).orElseThrow()
+                .latestVersion().status()).isEqualTo(DocumentStatus.IN_REVIEW);
+        assertThat(fixture.repository.onlyState()).isEqualTo(IngestionState.SUCCEEDED);
+    }
+
+    @Test
     void workerConvertsStructuredFailureIntoFailedJobAndParseStatus() {
         var fixture = new Fixture();
         fixture.jobs.enqueue(fixture.request);
@@ -235,6 +253,7 @@ class IngestionJobServiceTest {
         private final MemoryIngestionJobRepository repository = new MemoryIngestionJobRepository();
         private final MemoryParsedDocumentStore parsed = new MemoryParsedDocumentStore();
         private final List<AuditEvent> auditEvents = new ArrayList<>();
+        private final DocumentService documentService;
         private final IngestionJobService jobs;
 
         private Fixture() {
@@ -250,7 +269,7 @@ class IngestionJobServiceTest {
         }
 
         private Fixture(AuditEventStore eventStore, Clock clock) {
-            var documentService = documentService(documents);
+            documentService = documentService(documents);
             document = documentService.createDraft(SPACE_ID, "方案", "blob-801", ACTOR_ID, NOW);
             request = new IngestionRequest(
                     new DocumentVersionId(document.id(), document.latestVersion().id()),

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.web.bind.annotation.PostMapping;
 
 import java.lang.reflect.Method;
@@ -83,6 +84,31 @@ class KnowledgeAuthorizationTest {
     }
 
     @Test
+    @DisplayName("公开提交评审入口拒绝尚未解析成功的草稿")
+    void publicSubmitReviewEndpointRejectsPendingDraft() {
+        var repository = new DocumentLifecycleTest.InMemoryDocumentRepository();
+        var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
+        var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> membership),
+                (spaceId, documentId, refs, at) -> Optional.of(
+                        new AccessSnapshot(true, true, true, PublicationState.DRAFT, null)));
+        var service = new DocumentService(
+                repository, access, DocumentContentGateway.unavailable(),
+                (userId, spaceId, at) -> List.of(), KnowledgeWriteAuthorization.allowAll());
+        var document = service.createDraft(SPACE_ID, "待解析", "blob-pending", USER_ID, NOW);
+        var controller = new KnowledgeController(
+                new KnowledgeSpaceService(space -> { }, KnowledgeWriteAuthorization.allowAll()), service);
+        var authentication = new UsernamePasswordAuthenticationToken(
+                USER_ID.toString(), "n/a", List.of());
+
+        assertThatThrownBy(() -> controller.submitForReview(
+                authentication, document.id(), document.latestVersion().id()))
+                .isInstanceOf(DocumentLifecycleException.class)
+                .hasMessageContaining("解析");
+        assertThat(repository.findById(document.id()).orElseThrow().latestVersion().status())
+                .isEqualTo(DocumentStatus.DRAFT);
+    }
+
+    @Test
     @DisplayName("列表先校验空间权限且不会泄漏仓储误返的草稿")
     void listRequiresSpaceAccessAndRechecksEveryProjection() {
         var repository = new DocumentLifecycleTest.InMemoryDocumentRepository();
@@ -122,8 +148,8 @@ class KnowledgeAuthorizationTest {
                 KnowledgeWriteAuthorization.allowAll());
         var document = service.createDraft(SPACE_ID, "已发布制度", "blob-v1", USER_ID, NOW.minusSeconds(10));
         var versionId = document.latestVersion().id();
-        service.submitForReview(document.id(), versionId, USER_ID, NOW.minusSeconds(9));
-        service.markParsingSucceeded(document.id(), versionId, NOW.minusSeconds(8));
+        service.markParsingSucceeded(document.id(), versionId, NOW.minusSeconds(9));
+        service.submitForReview(document.id(), versionId, USER_ID, NOW.minusSeconds(8));
         service.publish(document.id(), versionId, USER_ID, NOW.minusSeconds(7));
         service.createNextDraft(document.id(), "blob-v2-secret", USER_ID, NOW.minusSeconds(6));
         var spaces = new KnowledgeSpaceService(space -> { }, KnowledgeWriteAuthorization.allowAll());

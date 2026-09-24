@@ -70,6 +70,9 @@ public record DocumentAggregate(
         if (current.status() != DocumentStatus.DRAFT) {
             throw new DocumentLifecycleException("只有草稿可以提交评审");
         }
+        if (current.parseStatus() != ParseStatus.SUCCEEDED) {
+            throw new DocumentLifecycleException("文档解析成功后才能提交评审");
+        }
         return replaceVersion(current.withStatus(DocumentStatus.IN_REVIEW, actorId, at), publishedVersionId, false);
     }
 

@@ -34,14 +34,14 @@ class DocumentLifecycleTest {
         var documentId = document.id();
         var versionId = document.latestVersion().id();
 
-        document = service.submitForReview(documentId, versionId, ACTOR_ID, NOW.plusSeconds(1));
-        assertThat(document.version(versionId).status()).isEqualTo(DocumentStatus.IN_REVIEW);
-        assertThatThrownBy(() -> service.publish(
-                documentId, versionId, ACTOR_ID, NOW.plusSeconds(2)))
+        assertThatThrownBy(() -> service.submitForReview(
+                documentId, versionId, ACTOR_ID, NOW.plusSeconds(1)))
                 .isInstanceOf(DocumentLifecycleException.class)
                 .hasMessageContaining("解析");
 
-        document = service.markParsingSucceeded(documentId, versionId, NOW.plusSeconds(3));
+        document = service.markParsingSucceeded(documentId, versionId, NOW.plusSeconds(2));
+        document = service.submitForReview(documentId, versionId, ACTOR_ID, NOW.plusSeconds(3));
+        assertThat(document.version(versionId).status()).isEqualTo(DocumentStatus.IN_REVIEW);
         document = service.publish(documentId, versionId, ACTOR_ID, NOW.plusSeconds(4));
         assertThat(document.currentPublishedVersionId()).contains(versionId);
         assertThat(document.version(versionId).status()).isEqualTo(DocumentStatus.PUBLISHED);
@@ -58,14 +58,14 @@ class DocumentLifecycleTest {
         var service = service(repository);
         var document = service.createDraft(SPACE_ID, "需求规格", "blob-v1", ACTOR_ID, NOW);
         var firstVersionId = document.latestVersion().id();
-        service.submitForReview(document.id(), firstVersionId, ACTOR_ID, NOW.plusSeconds(1));
-        service.markParsingSucceeded(document.id(), firstVersionId, NOW.plusSeconds(2));
+        service.markParsingSucceeded(document.id(), firstVersionId, NOW.plusSeconds(1));
+        service.submitForReview(document.id(), firstVersionId, ACTOR_ID, NOW.plusSeconds(2));
         service.publish(document.id(), firstVersionId, ACTOR_ID, NOW.plusSeconds(3));
 
         document = service.createNextDraft(document.id(), "blob-v2", ACTOR_ID, NOW.plusSeconds(4));
         var secondVersionId = document.latestVersion().id();
-        service.submitForReview(document.id(), secondVersionId, ACTOR_ID, NOW.plusSeconds(5));
-        service.markParsingSucceeded(document.id(), secondVersionId, NOW.plusSeconds(6));
+        service.markParsingSucceeded(document.id(), secondVersionId, NOW.plusSeconds(5));
+        service.submitForReview(document.id(), secondVersionId, ACTOR_ID, NOW.plusSeconds(6));
         document = service.publish(document.id(), secondVersionId, ACTOR_ID, NOW.plusSeconds(7));
 
         assertThat(document.versions()).hasSize(2);
