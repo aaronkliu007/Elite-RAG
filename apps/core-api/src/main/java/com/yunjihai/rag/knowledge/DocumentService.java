@@ -2,10 +2,15 @@ package com.yunjihai.rag.knowledge;
 
 import com.yunjihai.rag.access.AccessDecisionService;
 import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
+import com.yunjihai.rag.audit.AuditAction;
+import com.yunjihai.rag.audit.AuditCommand;
+import com.yunjihai.rag.audit.AuditOutcome;
+import com.yunjihai.rag.audit.AuditSink;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
@@ -17,6 +22,7 @@ public class DocumentService {
     private final DocumentContentGateway content;
     private final AuthorizedDocumentQuery authorizedQuery;
     private final KnowledgeWriteAuthorization writeAuthorization;
+    private final AuditSink audit;
 
     public DocumentService(
             DocumentRepository repository,
@@ -24,11 +30,22 @@ public class DocumentService {
             DocumentContentGateway content,
             AuthorizedDocumentQuery authorizedQuery,
             KnowledgeWriteAuthorization writeAuthorization) {
+        this(repository, access, content, authorizedQuery, writeAuthorization, AuditSink.noop());
+    }
+
+    public DocumentService(
+            DocumentRepository repository,
+            AccessDecisionService access,
+            DocumentContentGateway content,
+            AuthorizedDocumentQuery authorizedQuery,
+            KnowledgeWriteAuthorization writeAuthorization,
+            AuditSink audit) {
         this.repository = Objects.requireNonNull(repository);
         this.access = Objects.requireNonNull(access);
         this.content = Objects.requireNonNull(content);
         this.authorizedQuery = Objects.requireNonNull(authorizedQuery);
         this.writeAuthorization = Objects.requireNonNull(writeAuthorization);
+        this.audit = Objects.requireNonNull(audit);
     }
 
     @Transactional
@@ -42,14 +59,18 @@ public class DocumentService {
 
     @Transactional
     public DocumentAggregate createNextDraft(UUID documentId, String sourceBlobId, UUID actorId, Instant at) {
-        return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.EDIT_DOCUMENT,
+        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.EDIT_DOCUMENT,
                 document -> document.appendDraft(sourceBlobId, actorId, at));
+        record(actorId, AuditAction.EDIT, "DOCUMENT_VERSION", updated.latestVersion().id(), updated);
+        return updated;
     }
 
     @Transactional
     public DocumentAggregate submitForReview(UUID documentId, UUID versionId, UUID actorId, Instant at) {
-        return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.REVIEW_DOCUMENT,
+        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.REVIEW_DOCUMENT,
                 document -> document.submitForReview(versionId, actorId, at));
+        record(actorId, AuditAction.REVIEW, "DOCUMENT_VERSION", versionId, updated);
+        return updated;
     }
 
     @Transactional
@@ -70,23 +91,28 @@ public class DocumentService {
 
     @Transactional
     public DocumentAggregate publish(UUID documentId, UUID versionId, UUID actorId, Instant at) {
-        return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
+        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
                 document -> document.publish(versionId, actorId, at));
+        record(actorId, AuditAction.PUBLISH, "DOCUMENT_VERSION", versionId, updated);
+        return updated;
     }
 
     @Transactional
     public DocumentAggregate archive(UUID documentId, UUID actorId, Instant at) {
-        return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.ARCHIVE_DOCUMENT,
+        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.ARCHIVE_DOCUMENT,
                 document -> document.archive(actorId, at));
+        record(actorId, AuditAction.ARCHIVE, "DOCUMENT", documentId, updated);
+        return updated;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public DocumentAggregate getAuthorizedDocument(UUID userId, UUID documentId, Instant at) {
         var document = findOrHide(documentId);
         access.requireRead(userId, document.spaceId(), document.id(), at);
         if (document.archived() || document.currentPublishedVersionId().isEmpty()) {
             throw new AccessDeniedAsNotFoundException();
         }
+        record(userId, AuditAction.VIEW, "DOCUMENT", documentId, document);
         return document;
     }
 
@@ -95,16 +121,18 @@ public class DocumentService {
         return List.copyOf(authorizedQuery.listAuthorized(userId, spaceId, at));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public DocumentContent getAuthorizedParsedContent(UUID userId, UUID documentId, Instant at) {
         var document = getAuthorizedDocument(userId, documentId, at);
         return content.readParsed(document.id(), document.currentPublishedVersionId().orElseThrow());
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public DocumentContent getAuthorizedSource(UUID userId, UUID documentId, Instant at) {
         var document = getAuthorizedDocument(userId, documentId, at);
-        return content.readSource(document.id(), document.currentPublishedVersionId().orElseThrow());
+        var source = content.readSource(document.id(), document.currentPublishedVersionId().orElseThrow());
+        record(userId, AuditAction.DOWNLOAD, "DOCUMENT", documentId, document);
+        return source;
     }
 
     private DocumentAggregate mutate(UUID documentId, UnaryOperator<DocumentAggregate> operation) {
@@ -134,5 +162,20 @@ public class DocumentService {
     private DocumentAggregate findOrHide(UUID documentId) {
         return repository.findById(documentId)
                 .orElseThrow(AccessDeniedAsNotFoundException::new);
+    }
+
+    private void record(
+            UUID actorId,
+            AuditAction action,
+            String resourceType,
+            UUID resourceId,
+            DocumentAggregate document) {
+        audit.record(new AuditCommand(
+                actorId,
+                action,
+                resourceType,
+                resourceId,
+                AuditOutcome.SUCCEEDED,
+                Map.of("spaceId", document.spaceId().toString())));
     }
 }

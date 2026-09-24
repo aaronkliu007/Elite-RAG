@@ -9,7 +9,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
-public class AuditService {
+public class AuditService implements AuditSink {
 
     private static final Set<String> ALLOWED_METADATA_KEYS = Set.of(
             "jobId",
@@ -31,6 +31,7 @@ public class AuditService {
     }
 
     @Transactional
+    @Override
     public AuditEvent record(AuditCommand command) {
         Objects.requireNonNull(command);
         Objects.requireNonNull(command.actorId());

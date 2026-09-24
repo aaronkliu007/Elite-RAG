@@ -1,16 +1,24 @@
 package com.yunjihai.rag.ingestion;
 
+import com.yunjihai.rag.audit.AuditAction;
+import com.yunjihai.rag.audit.AuditCommand;
+import com.yunjihai.rag.audit.AuditOutcome;
+import com.yunjihai.rag.audit.AuditSink;
+import org.springframework.transaction.annotation.Transactional;
+
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.Map;
 import java.util.Objects;
 
-public final class UploadService {
+public class UploadService {
 
     private final UploadPolicy policy;
     private final UploadSpooler spooler;
     private final UploadSecurityScanner scanner;
     private final BlobStore blobStore;
     private final DocumentDraftGateway drafts;
+    private final AuditSink audit;
 
     public UploadService(
             UploadPolicy policy,
@@ -18,13 +26,25 @@ public final class UploadService {
             UploadSecurityScanner scanner,
             BlobStore blobStore,
             DocumentDraftGateway drafts) {
+        this(policy, spooler, scanner, blobStore, drafts, AuditSink.noop());
+    }
+
+    public UploadService(
+            UploadPolicy policy,
+            UploadSpooler spooler,
+            UploadSecurityScanner scanner,
+            BlobStore blobStore,
+            DocumentDraftGateway drafts,
+            AuditSink audit) {
         this.policy = Objects.requireNonNull(policy);
         this.spooler = Objects.requireNonNull(spooler);
         this.scanner = Objects.requireNonNull(scanner);
         this.blobStore = Objects.requireNonNull(blobStore);
         this.drafts = Objects.requireNonNull(drafts);
+        this.audit = Objects.requireNonNull(audit);
     }
 
+    @Transactional
     public DocumentVersionId accept(UploadCommand command) {
         policy.validateMetadata(command);
         try (var isolated = spooler.spool(command.stream(), policy.maxBytes())) {
@@ -41,8 +61,18 @@ public final class UploadService {
                         isolated.sha256(), input, isolated.length(), inspection.detectedMediaType());
             }
             try {
-                return drafts.createDraft(new ValidatedUpload(
+                var version = drafts.createDraft(new ValidatedUpload(
                         command.spaceId(), command.title(), command.originalFilename(), command.actorId(), blob));
+                audit.record(new AuditCommand(
+                        command.actorId(),
+                        AuditAction.UPLOAD,
+                        "DOCUMENT_VERSION",
+                        version.versionId(),
+                        AuditOutcome.SUCCEEDED,
+                        Map.of(
+                                "spaceId", command.spaceId().toString(),
+                                "versionId", version.versionId().toString())));
+                return version;
             } catch (RuntimeException exception) {
                 try {
                     blobStore.scheduleCleanup(blob);
