@@ -52,7 +52,7 @@ public final class UploadPolicy {
             throw new UploadRejectedException("文件为空或超过大小限制");
         }
         var expected = expectedMediaType(command.originalFilename());
-        if (command.declaredMediaType() == null || !expected.isCompatibleWith(command.declaredMediaType())) {
+        if (!isExactMediaType(expected, command.declaredMediaType())) {
             throw new UploadRejectedException("文件扩展名与声明 MIME 不一致");
         }
     }
@@ -62,8 +62,8 @@ public final class UploadPolicy {
             throw new UploadRejectedException("无法识别文件类型");
         }
         var expected = expectedMediaType(command.originalFilename());
-        if (!expected.isCompatibleWith(inspection.detectedMediaType())) {
-            throw new UploadRejectedException("文件真实类型与扩展名不一致");
+        if (!isExactMediaType(expected, inspection.detectedMediaType())) {
+            throw new UploadRejectedException("文件真实 MIME 与扩展名不一致");
         }
         if (inspection.encrypted()) {
             throw new UploadRejectedException("暂不接受加密文档");
@@ -86,6 +86,14 @@ public final class UploadPolicy {
 
     public int maxCompressionRatio() {
         return maxCompressionRatio;
+    }
+
+    private static boolean isExactMediaType(MediaType expected, MediaType actual) {
+        if (actual == null || actual.isWildcardType() || actual.isWildcardSubtype()) {
+            return false;
+        }
+        return expected.getType().equalsIgnoreCase(actual.getType())
+                && expected.getSubtype().equalsIgnoreCase(actual.getSubtype());
     }
 
     private static MediaType expectedMediaType(String filename) {

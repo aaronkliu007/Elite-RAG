@@ -9,19 +9,21 @@ public final class MinioBlobStore implements BlobStore {
 
     private final String bucket;
     private final MinioObjectClient client;
+    private final OrphanBlobRecorder orphanRecorder;
 
-    public MinioBlobStore(String bucket, MinioObjectClient client) {
+    public MinioBlobStore(String bucket, MinioObjectClient client, OrphanBlobRecorder orphanRecorder) {
         if (bucket == null || bucket.isBlank()) {
             throw new IllegalArgumentException("MinIO bucket 不能为空");
         }
         this.bucket = bucket;
         this.client = Objects.requireNonNull(client);
+        this.orphanRecorder = Objects.requireNonNull(orphanRecorder);
     }
 
     @Override
     public StoredBlob putIfAbsent(
             String sha256, InputStream stream, long length, MediaType mediaType) {
-        if (sha256 == null || sha256.length() < 2) {
+        if (sha256 == null || !sha256.matches("[0-9a-f]{64}")) {
             throw new IllegalArgumentException("SHA-256 无效");
         }
         var key = "sha256/" + sha256.substring(0, 2) + "/" + sha256;
@@ -30,9 +32,9 @@ public final class MinioBlobStore implements BlobStore {
     }
 
     @Override
-    public void deleteIfUnreferenced(StoredBlob blob) {
+    public void scheduleCleanup(StoredBlob blob) {
         if (blob.created()) {
-            client.deleteIfUnreferenced(bucket, blob.objectKey());
+            orphanRecorder.record(new OrphanBlobCandidate(bucket, blob.sha256(), blob.objectKey()));
         }
     }
 }

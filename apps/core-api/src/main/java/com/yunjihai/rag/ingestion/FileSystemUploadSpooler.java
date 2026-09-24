@@ -11,11 +11,29 @@ import java.util.HexFormat;
 
 public final class FileSystemUploadSpooler implements UploadSpooler {
 
+    private final Path quarantineDirectory;
+
+    public FileSystemUploadSpooler() {
+        this(Path.of(System.getProperty("java.io.tmpdir"), "yunect-rag-quarantine"));
+    }
+
+    public FileSystemUploadSpooler(Path quarantineDirectory) {
+        this.quarantineDirectory = quarantineDirectory.toAbsolutePath().normalize();
+        try {
+            Files.createDirectories(this.quarantineDirectory);
+            if (!Files.isDirectory(this.quarantineDirectory)) {
+                throw new IllegalArgumentException("上传隔离区不是目录");
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("无法初始化上传隔离区", exception);
+        }
+    }
+
     @Override
     public SpooledUpload spool(InputStream source, long maxBytes) {
         Path path = null;
         try {
-            path = Files.createTempFile("rag-upload-quarantine-", ".bin");
+            path = Files.createTempFile(quarantineDirectory, "upload-", ".bin");
             var digest = MessageDigest.getInstance("SHA-256");
             long length;
             try (OutputStream target = Files.newOutputStream(path)) {

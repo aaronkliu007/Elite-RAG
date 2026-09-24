@@ -77,8 +77,8 @@ class UploadServiceTest {
     }
 
     @Test
-    @DisplayName("创建文档版本失败时补偿删除本次新建且尚未引用的 Blob")
-    void compensatesNewBlobWhenDatabaseWriteFails() {
+    @DisplayName("创建文档版本失败时登记延迟清理候选，不立即删除可能已被并发引用的 Blob")
+    void schedulesSafeCleanupWhenDatabaseWriteFails() {
         var blobs = new InMemoryBlobStore();
         DocumentDraftGateway failing = command -> {
             throw new IllegalStateException("database unavailable");
@@ -87,8 +87,42 @@ class UploadServiceTest {
 
         assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes())))
                 .isInstanceOf(IllegalStateException.class);
+        assertThat(blobs.values).hasSize(1);
+        assertThat(blobs.cleanupCandidates).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("延迟清理登记失败不覆盖原始数据库异常")
+    void preservesDatabaseFailureWhenCleanupSchedulingFails() {
+        var blobs = new InMemoryBlobStore();
+        blobs.failCleanup = true;
+        var databaseFailure = new IllegalStateException("database unavailable");
+        var service = service(blobs, command -> {
+            throw databaseFailure;
+        }, UploadInspection.safe(MediaType.APPLICATION_PDF));
+
+        assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes())))
+                .isSameAs(databaseFailure)
+                .satisfies(error -> assertThat(error.getSuppressed())
+                        .extracting(Throwable::getMessage)
+                        .containsExactly("cleanup unavailable"));
+    }
+
+    @Test
+    @DisplayName("声明或检测 MIME 为通配符时拒绝上传")
+    void rejectsWildcardMediaTypes() {
+        var blobs = new InMemoryBlobStore();
+        var drafts = new RecordingDraftGateway();
+        var service = service(blobs, drafts, UploadInspection.safe(MediaType.ALL));
+
+        assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.ALL, pdfBytes())))
+                .isInstanceOf(UploadRejectedException.class)
+                .hasMessageContaining("MIME");
+        var detectedWildcard = service(blobs, drafts, UploadInspection.safe(MediaType.parseMediaType("application/*")));
+        assertThatThrownBy(() -> detectedWildcard.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes())))
+                .isInstanceOf(UploadRejectedException.class)
+                .hasMessageContaining("MIME");
         assertThat(blobs.values).isEmpty();
-        assertThat(blobs.compensations).isEqualTo(1);
     }
 
     private static void assertRejectedWithoutBlob(UploadCommand command, UploadInspection inspection) {
@@ -133,7 +167,8 @@ class UploadServiceTest {
 
     private static final class InMemoryBlobStore implements BlobStore {
         private final Map<String, byte[]> values = new HashMap<>();
-        private int compensations;
+        private int cleanupCandidates;
+        private boolean failCleanup;
 
         @Override
         public StoredBlob putIfAbsent(
@@ -148,11 +183,11 @@ class UploadServiceTest {
         }
 
         @Override
-        public void deleteIfUnreferenced(StoredBlob blob) {
-            if (blob.created()) {
-                values.remove(blob.sha256());
-                compensations++;
+        public void scheduleCleanup(StoredBlob blob) {
+            if (failCleanup) {
+                throw new IllegalStateException("cleanup unavailable");
             }
+            cleanupCandidates++;
         }
     }
 }

@@ -44,7 +44,11 @@ public final class UploadService {
                 return drafts.createDraft(new ValidatedUpload(
                         command.spaceId(), command.title(), command.originalFilename(), command.actorId(), blob));
             } catch (RuntimeException exception) {
-                blobStore.deleteIfUnreferenced(blob);
+                try {
+                    blobStore.scheduleCleanup(blob);
+                } catch (RuntimeException cleanupFailure) {
+                    exception.addSuppressed(cleanupFailure);
+                }
                 throw exception;
             }
         } catch (IOException exception) {
