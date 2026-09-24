@@ -15,7 +15,8 @@ public interface KnowledgeWriteAuthorization {
         EDIT_DOCUMENT,
         REVIEW_DOCUMENT,
         PUBLISH_DOCUMENT,
-        ARCHIVE_DOCUMENT
+        ARCHIVE_DOCUMENT,
+        MANAGE_ACL
     }
 
     static KnowledgeWriteAuthorization allowAll() {

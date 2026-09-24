@@ -3,6 +3,8 @@ package com.yunjihai.rag.acceptance;
 import com.yunjihai.rag.access.AccessDecisionService;
 import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.access.AccessSnapshot;
+import com.yunjihai.rag.access.AclCommandRepository;
+import com.yunjihai.rag.access.AclService;
 import com.yunjihai.rag.access.EffectivePrincipalSet;
 import com.yunjihai.rag.access.PrincipalMembershipSnapshot;
 import com.yunjihai.rag.access.PrincipalRef;
@@ -83,6 +85,9 @@ class FoundationAcceptanceTest {
     void uploadedPdfMustBeReviewedBeforePublicationAndRemainsAuditableAfterArchive() {
         var fixture = new Fixture(temporaryDirectory);
         var space = fixture.spaces.createSpace("交付方案库", AUTHORIZED_USER, NOW);
+        var authorizedPrincipal = new PrincipalRef(PrincipalType.USER, AUTHORIZED_USER);
+        fixture.aclService.grantSpace(
+                AUTHORIZED_USER, space.id(), authorizedPrincipal, null, NOW);
 
         var version = fixture.uploads.accept(new UploadCommand(
                 space.id(),
@@ -92,6 +97,13 @@ class FoundationAcceptanceTest {
                 REPRESENTATIVE_PDF.length,
                 new ByteArrayInputStream(REPRESENTATIVE_PDF),
                 AUTHORIZED_USER));
+        fixture.aclService.grantDocument(
+                AUTHORIZED_USER,
+                space.id(),
+                version.documentId(),
+                authorizedPrincipal,
+                null,
+                NOW);
         fixture.contents.putSource(version, "客户方案.pdf", REPRESENTATIVE_PDF);
 
         fixture.jobs.enqueue(new IngestionRequest(
@@ -128,8 +140,9 @@ class FoundationAcceptanceTest {
                 AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)).bytes())
                 .isEqualTo(REPRESENTATIVE_PDF);
 
-        assertThat(fixture.documentService.listAuthorizedDocuments(
-                UNAUTHORIZED_USER, space.id(), NOW.plusSeconds(2))).isEmpty();
+        assertThatThrownBy(() -> fixture.documentService.listAuthorizedDocuments(
+                UNAUTHORIZED_USER, space.id(), NOW.plusSeconds(2)))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
         assertThatThrownBy(() -> fixture.controller.getDocument(
                 UNAUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
@@ -138,12 +151,32 @@ class FoundationAcceptanceTest {
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
         assertThat(fixture.controller.notFound().getStatusCode().value()).isEqualTo(404);
 
+        fixture.aclService.revokeDocument(
+                AUTHORIZED_USER,
+                space.id(),
+                version.documentId(),
+                authorizedPrincipal,
+                NOW.plusSeconds(2));
+        assertThat(fixture.documentService.listAuthorizedDocuments(
+                AUTHORIZED_USER, space.id(), NOW.plusSeconds(2))).isEmpty();
+        assertThatThrownBy(() -> fixture.controller.getDocument(
+                AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
+        fixture.aclService.grantDocument(
+                AUTHORIZED_USER,
+                space.id(),
+                version.documentId(),
+                authorizedPrincipal,
+                null,
+                NOW.plusSeconds(2));
+
         fixture.documentService.archive(version.documentId(), AUTHORIZED_USER, NOW.plusSeconds(3));
 
         assertThat(fixture.documentService.listAuthorizedDocuments(
                 AUTHORIZED_USER, space.id(), NOW.plusSeconds(4))).isEmpty();
-        assertThat(fixture.documentService.listAuthorizedDocuments(
-                UNAUTHORIZED_USER, space.id(), NOW.plusSeconds(4))).isEmpty();
+        assertThatThrownBy(() -> fixture.documentService.listAuthorizedDocuments(
+                UNAUTHORIZED_USER, space.id(), NOW.plusSeconds(4)))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
         assertThatThrownBy(() -> fixture.controller.getDocument(
                 AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(4)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
@@ -155,6 +188,7 @@ class FoundationAcceptanceTest {
                         AuditAction.PUBLISH,
                         AuditAction.VIEW,
                         AuditAction.DOWNLOAD,
+                        AuditAction.ACL_CHANGE,
                         AuditAction.ARCHIVE));
     }
 
@@ -162,12 +196,20 @@ class FoundationAcceptanceTest {
         private final MemoryDocumentRepository documents = new MemoryDocumentRepository();
         private final MemoryBlobStore blobs = new MemoryBlobStore();
         private final MemoryContentStore contents = new MemoryContentStore();
+        private final MemoryAclRepository acl = new MemoryAclRepository();
         private final MemoryIngestionJobRepository ingestionJobs = new MemoryIngestionJobRepository();
         private final List<AuditEvent> auditEvents = new ArrayList<>();
         private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
         private final AuditService audit = new AuditService(auditEvents::add, clock);
+        private final KnowledgeWriteAuthorization writeAuthorization =
+                (actorId, spaceId, documentId, action) -> {
+                    if (!AUTHORIZED_USER.equals(actorId)) {
+                        throw new AccessDeniedAsNotFoundException();
+                    }
+                };
         private final DocumentService documentService;
         private final KnowledgeSpaceService spaces;
+        private final AclService aclService;
         private final UploadService uploads;
         private final IngestionJobService jobs;
         private final KnowledgeController controller;
@@ -176,15 +218,23 @@ class FoundationAcceptanceTest {
             var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
             var access = new AccessDecisionService(
                     new EffectivePrincipalSet(userId -> membership),
-                    (spaceId, documentId, principals, at) -> accessSnapshot(documentId, principals));
+                    (spaceId, documentId, principals, at) ->
+                            accessSnapshot(spaceId, documentId, principals, at));
             documentService = new DocumentService(
                     documents,
                     access,
                     contents,
-                    (userId, spaceId, at) -> documents.publishedFor(userId, spaceId),
-                    KnowledgeWriteAuthorization.allowAll(),
+                    (userId, spaceId, at) -> documents.publishedFor(spaceId),
+                    (userId, spaceId, at) -> {
+                        var principal = new PrincipalRef(PrincipalType.USER, userId);
+                        if (!acl.isWithinSpaceScope(spaceId, principal, at)) {
+                            throw new AccessDeniedAsNotFoundException();
+                        }
+                    },
+                    writeAuthorization,
                     audit);
-            spaces = new KnowledgeSpaceService(space -> { }, KnowledgeWriteAuthorization.allowAll());
+            spaces = new KnowledgeSpaceService(space -> { }, writeAuthorization);
+            aclService = new AclService(acl, writeAuthorization, audit);
             var policy = UploadPolicy.defaults();
             uploads = new UploadService(
                     policy,
@@ -203,10 +253,8 @@ class FoundationAcceptanceTest {
             controller = new KnowledgeController(spaces, documentService);
         }
 
-        private Optional<AccessSnapshot> accessSnapshot(UUID documentId, Set<PrincipalRef> principals) {
-            if (!principals.contains(new PrincipalRef(PrincipalType.USER, AUTHORIZED_USER))) {
-                return Optional.empty();
-            }
+        private Optional<AccessSnapshot> accessSnapshot(
+                UUID spaceId, UUID documentId, Set<PrincipalRef> principals, Instant at) {
             var document = documents.findById(documentId).orElse(null);
             var publicationState = document == null
                     ? PublicationState.DRAFT
@@ -215,7 +263,8 @@ class FoundationAcceptanceTest {
                     : document.currentPublishedVersionId().isPresent()
                     ? PublicationState.PUBLISHED
                     : PublicationState.IN_REVIEW;
-            return Optional.of(new AccessSnapshot(true, true, true, publicationState, null));
+            return Optional.of(acl.snapshot(
+                    spaceId, documentId, principals, publicationState, at));
         }
 
         private CanonicalDocumentV1 parsedResult(UUID jobId) {
@@ -250,6 +299,16 @@ class FoundationAcceptanceTest {
         }
 
         @Override
+        public Optional<DocumentAggregate> findActiveBySpaceAndSourceBlob(
+                UUID spaceId, String sourceBlobId) {
+            return values.values().stream()
+                    .filter(document -> document.spaceId().equals(spaceId))
+                    .filter(document -> !document.archived())
+                    .filter(document -> document.latestVersion().sourceBlobId().equals(sourceBlobId))
+                    .findFirst();
+        }
+
+        @Override
         public void replace(DocumentAggregate document, long expectedRevision) {
             values.compute(document.id(), (id, current) -> {
                 if (current == null || current.revision() != expectedRevision) {
@@ -259,15 +318,90 @@ class FoundationAcceptanceTest {
             });
         }
 
-        private List<DocumentAggregate> publishedFor(UUID userId, UUID spaceId) {
-            if (!AUTHORIZED_USER.equals(userId)) {
-                return List.of();
-            }
+        private List<DocumentAggregate> publishedFor(UUID spaceId) {
             return values.values().stream()
                     .filter(document -> document.spaceId().equals(spaceId))
                     .filter(document -> !document.archived())
                     .filter(document -> document.currentPublishedVersionId().isPresent())
                     .toList();
+        }
+    }
+
+    private static final class MemoryAclRepository implements AclCommandRepository {
+        private final Set<SpaceGrant> spaces = new java.util.HashSet<>();
+        private final Set<DocumentGrant> documents = new java.util.HashSet<>();
+        private final Set<UUID> restrictedDocuments = new java.util.HashSet<>();
+
+        @Override
+        public boolean isWithinSpaceScope(UUID spaceId, PrincipalRef principal, Instant at) {
+            return spaces.stream().anyMatch(grant -> grant.spaceId.equals(spaceId)
+                    && grant.principal.equals(principal)
+                    && grant.activeAt(at));
+        }
+
+        @Override
+        public void grantSpace(UUID spaceId, PrincipalRef principal, Instant validUntil, Instant at) {
+            spaces.removeIf(grant -> grant.spaceId.equals(spaceId)
+                    && grant.principal.equals(principal));
+            spaces.add(new SpaceGrant(spaceId, principal, validUntil));
+        }
+
+        @Override
+        public void grantDocument(
+                UUID spaceId,
+                UUID documentId,
+                PrincipalRef principal,
+                Instant validUntil,
+                Instant at) {
+            restrictedDocuments.add(documentId);
+            documents.removeIf(grant -> grant.documentId.equals(documentId)
+                    && grant.principal.equals(principal));
+            documents.add(new DocumentGrant(spaceId, documentId, principal, validUntil));
+        }
+
+        @Override
+        public void revokeSpace(UUID spaceId, PrincipalRef principal, Instant at) {
+            spaces.removeIf(grant -> grant.spaceId.equals(spaceId)
+                    && grant.principal.equals(principal));
+        }
+
+        @Override
+        public void revokeDocument(
+                UUID spaceId, UUID documentId, PrincipalRef principal, Instant at) {
+            documents.removeIf(grant -> grant.spaceId.equals(spaceId)
+                    && grant.documentId.equals(documentId)
+                    && grant.principal.equals(principal));
+        }
+
+        private AccessSnapshot snapshot(
+                UUID spaceId,
+                UUID documentId,
+                Set<PrincipalRef> principals,
+                PublicationState publicationState,
+                Instant at) {
+            var spaceGranted = principals.stream()
+                    .anyMatch(principal -> isWithinSpaceScope(spaceId, principal, at));
+            var restricted = restrictedDocuments.contains(documentId);
+            var documentGranted = documents.stream()
+                    .anyMatch(grant -> grant.spaceId.equals(spaceId)
+                            && grant.documentId.equals(documentId)
+                            && principals.contains(grant.principal)
+                            && grant.activeAt(at));
+            return new AccessSnapshot(
+                    spaceGranted, restricted, documentGranted, publicationState, null);
+        }
+
+        private record SpaceGrant(UUID spaceId, PrincipalRef principal, Instant validUntil) {
+            private boolean activeAt(Instant at) {
+                return validUntil == null || at.isBefore(validUntil);
+            }
+        }
+
+        private record DocumentGrant(
+                UUID spaceId, UUID documentId, PrincipalRef principal, Instant validUntil) {
+            private boolean activeAt(Instant at) {
+                return validUntil == null || at.isBefore(validUntil);
+            }
         }
     }
 
@@ -355,6 +489,16 @@ class FoundationAcceptanceTest {
         @Override
         public void complete(UUID jobId, UUID leaseToken, Instant at) {
             transition(jobId, leaseToken, IngestionState.SUCCEEDED);
+        }
+
+        @Override
+        public void retry(
+                UUID jobId,
+                UUID leaseToken,
+                ParserError error,
+                Instant nextAttemptAt,
+                Instant at) {
+            transition(jobId, leaseToken, IngestionState.RETRY_WAIT);
         }
 
         @Override

@@ -1,5 +1,7 @@
 package com.yunjihai.rag.knowledge;
 
+import com.yunjihai.rag.common.UuidV7;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -35,7 +37,7 @@ public record DocumentAggregate(
             UUID actorId,
             Instant at) {
         return new DocumentAggregate(
-                UUID.randomUUID(), spaceId, title,
+                UuidV7.generate(at), spaceId, title,
                 List.of(DocumentVersion.draft(1, sourceBlobId, actorId, at)),
                 null, false, 0);
     }

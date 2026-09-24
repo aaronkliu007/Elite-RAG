@@ -5,6 +5,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -36,15 +38,6 @@ public class KnowledgeController {
     @PostMapping
     public KnowledgeSpace createSpace(Authentication authentication, @RequestBody CreateSpaceRequest request) {
         return spaces.createSpace(request.name(), userId(authentication), Instant.now());
-    }
-
-    @PostMapping("/{spaceId}/documents")
-    public DocumentView createDraft(
-            Authentication authentication,
-            @PathVariable UUID spaceId,
-            @RequestBody CreateDraftRequest request) {
-        return DocumentView.management(documents.createDraft(
-                spaceId, request.title(), request.sourceBlobId(), userId(authentication), Instant.now()));
     }
 
     @GetMapping("/{spaceId}/documents")
@@ -101,8 +94,13 @@ public class KnowledgeController {
     }
 
     @ExceptionHandler({AccessDeniedAsNotFoundException.class, KnowledgeNotFoundException.class})
-    public ResponseEntity<Void> notFound() {
-        return ResponseEntity.notFound().build();
+    public ResponseEntity<ProblemDetail> notFound() {
+        var problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.NOT_FOUND, "资源不存在或无权访问");
+        problem.setTitle("资源不存在");
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
     }
 
     private static ResponseEntity<byte[]> response(DocumentContent content, boolean attachment) {
@@ -130,6 +128,4 @@ public class KnowledgeController {
     public record CreateSpaceRequest(String name) {
     }
 
-    public record CreateDraftRequest(String title, String sourceBlobId) {
-    }
 }

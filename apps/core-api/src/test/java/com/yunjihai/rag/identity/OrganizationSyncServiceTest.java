@@ -67,6 +67,38 @@ class OrganizationSyncServiceTest {
         assertThat(organizationStore.lastSnapshot).isNull();
     }
 
+    @Test
+    @DisplayName("任意长度的部门父级环都会使整个快照失效")
+    void rejectsDepartmentCyclesBeforeReconciliation() {
+        var organizationStore = new RecordingOrganizationStore(Set.of());
+        var service = new OrganizationSyncService(
+                organizationStore,
+                new SessionRevocationService(new InMemorySessionVersionStore()));
+        var twoNodeCycle = new OrganizationSnapshot(
+                List.of(
+                        new ExternalDepartment("a", "b", "甲部门"),
+                        new ExternalDepartment("b", "a", "乙部门")),
+                List.of(),
+                Instant.now(),
+                true);
+        var longCycle = new OrganizationSnapshot(
+                List.of(
+                        new ExternalDepartment("a", "b", "甲部门"),
+                        new ExternalDepartment("b", "c", "乙部门"),
+                        new ExternalDepartment("c", "a", "丙部门")),
+                List.of(),
+                Instant.now(),
+                true);
+
+        assertThatThrownBy(() -> service.synchronize(twoNodeCycle))
+                .isInstanceOf(InvalidOrganizationSnapshotException.class)
+                .hasMessageContaining("环");
+        assertThatThrownBy(() -> service.synchronize(longCycle))
+                .isInstanceOf(InvalidOrganizationSnapshotException.class)
+                .hasMessageContaining("环");
+        assertThat(organizationStore.lastSnapshot).isNull();
+    }
+
     private static final class RecordingOrganizationStore implements OrganizationReconciliationPort {
         private final Set<String> disabledUserIds;
         private OrganizationSnapshot lastSnapshot;

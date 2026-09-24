@@ -1,5 +1,7 @@
 package com.yunjihai.rag.knowledge;
 
+import com.yunjihai.rag.common.UuidV7;
+
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -28,7 +30,7 @@ public record DocumentVersion(
 
     static DocumentVersion draft(int versionNumber, String sourceBlobId, UUID actorId, Instant at) {
         return new DocumentVersion(
-                UUID.randomUUID(), versionNumber, sourceBlobId, DocumentStatus.DRAFT,
+                UuidV7.generate(at), versionNumber, sourceBlobId, DocumentStatus.DRAFT,
                 ParseStatus.PENDING, actorId, at, actorId, at);
     }
 

@@ -8,7 +8,11 @@ import com.yunjihai.rag.access.PrincipalMembershipSnapshot;
 import com.yunjihai.rag.access.PublicationState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
+import org.springframework.web.bind.annotation.PostMapping;
 
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -38,6 +42,12 @@ class KnowledgeAuthorizationTest {
         assertThatThrownBy(() -> fixture.controller.downloadSource(USER_ID, fixture.documentId, NOW))
                 .isExactlyInstanceOf(AccessDeniedAsNotFoundException.class);
         assertThat(fixture.contentGateway.readCount).isZero();
+        assertThat(fixture.controller.notFound())
+                .satisfies(response -> {
+                    assertThat(response.getHeaders().getContentType())
+                            .isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
+                    assertThat(response.getBody()).isInstanceOf(ProblemDetail.class);
+                });
     }
 
     @Test
@@ -60,6 +70,44 @@ class KnowledgeAuthorizationTest {
         assertThat(parsed.bytes()).containsExactly(1, 2, 3);
         assertThat(source.bytes()).containsExactly(4, 5, 6);
         assertThat(fixture.contentGateway.readCount).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("外部控制器不得接受客户端提供的 Blob 标识直接创建草稿")
+    void doesNotExposeRawBlobDraftEndpoint() {
+        assertThat(Arrays.stream(KnowledgeController.class.getDeclaredMethods())
+                .map(method -> method.getAnnotation(PostMapping.class))
+                .filter(java.util.Objects::nonNull)
+                .flatMap(annotation -> Arrays.stream(annotation.value())))
+                .doesNotContain("/{spaceId}/documents");
+    }
+
+    @Test
+    @DisplayName("列表先校验空间权限且不会泄漏仓储误返的草稿")
+    void listRequiresSpaceAccessAndRechecksEveryProjection() {
+        var repository = new DocumentLifecycleTest.InMemoryDocumentRepository();
+        var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
+        var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> membership),
+                (spaceId, documentId, refs, at) -> Optional.of(
+                        new AccessSnapshot(true, false, false, PublicationState.DRAFT, null)));
+        var draft = DocumentAggregate.create(SPACE_ID, "未发布草稿", "blob-secret", USER_ID, NOW);
+        repository.insert(draft);
+        KnowledgeSpaceReadAuthorization spaceRead = (userId, spaceId, at) -> {
+            if (!USER_ID.equals(userId)) {
+                throw new AccessDeniedAsNotFoundException();
+            }
+        };
+        var service = new DocumentService(
+                repository,
+                access,
+                DocumentContentGateway.unavailable(),
+                (userId, spaceId, at) -> List.of(draft),
+                spaceRead,
+                KnowledgeWriteAuthorization.allowAll());
+
+        assertThat(service.listAuthorizedDocuments(USER_ID, SPACE_ID, NOW)).isEmpty();
+        assertThatThrownBy(() -> service.listAuthorizedDocuments(UUID.randomUUID(), SPACE_ID, NOW))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
     }
 
     private static Fixture fixture(boolean granted) {

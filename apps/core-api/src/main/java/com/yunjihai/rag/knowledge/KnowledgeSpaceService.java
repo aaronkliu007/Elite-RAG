@@ -1,5 +1,6 @@
 package com.yunjihai.rag.knowledge;
 
+import com.yunjihai.rag.common.UuidV7;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -24,7 +25,7 @@ public class KnowledgeSpaceService {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("知识空间名称不能为空");
         }
-        var space = new KnowledgeSpace(UUID.randomUUID(), name.strip(), actorId, at);
+        var space = new KnowledgeSpace(UuidV7.generate(at), name.strip(), actorId, at);
         repository.insert(space);
         return space;
     }

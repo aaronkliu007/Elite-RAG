@@ -53,7 +53,7 @@ jobs:
           working-directory: workers/document-parser
           enable-cache: true
       - name: 同步锁定环境
-        run: uv sync --project workers/document-parser --frozen
+        run: uv sync --project workers/document-parser --extra parsing --frozen
       - name: 运行 Python 检查
         run: |
           uv run --project workers/document-parser pytest -W error

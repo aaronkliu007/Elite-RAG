@@ -21,6 +21,7 @@ public class DocumentService {
     private final AccessDecisionService access;
     private final DocumentContentGateway content;
     private final AuthorizedDocumentQuery authorizedQuery;
+    private final KnowledgeSpaceReadAuthorization spaceReadAuthorization;
     private final KnowledgeWriteAuthorization writeAuthorization;
     private final AuditSink audit;
 
@@ -30,7 +31,8 @@ public class DocumentService {
             DocumentContentGateway content,
             AuthorizedDocumentQuery authorizedQuery,
             KnowledgeWriteAuthorization writeAuthorization) {
-        this(repository, access, content, authorizedQuery, writeAuthorization, AuditSink.noop());
+        this(repository, access, content, authorizedQuery,
+                KnowledgeSpaceReadAuthorization.denyAll(), writeAuthorization, AuditSink.noop());
     }
 
     public DocumentService(
@@ -40,10 +42,34 @@ public class DocumentService {
             AuthorizedDocumentQuery authorizedQuery,
             KnowledgeWriteAuthorization writeAuthorization,
             AuditSink audit) {
+        this(repository, access, content, authorizedQuery,
+                KnowledgeSpaceReadAuthorization.denyAll(), writeAuthorization, audit);
+    }
+
+    public DocumentService(
+            DocumentRepository repository,
+            AccessDecisionService access,
+            DocumentContentGateway content,
+            AuthorizedDocumentQuery authorizedQuery,
+            KnowledgeSpaceReadAuthorization spaceReadAuthorization,
+            KnowledgeWriteAuthorization writeAuthorization) {
+        this(repository, access, content, authorizedQuery,
+                spaceReadAuthorization, writeAuthorization, AuditSink.noop());
+    }
+
+    public DocumentService(
+            DocumentRepository repository,
+            AccessDecisionService access,
+            DocumentContentGateway content,
+            AuthorizedDocumentQuery authorizedQuery,
+            KnowledgeSpaceReadAuthorization spaceReadAuthorization,
+            KnowledgeWriteAuthorization writeAuthorization,
+            AuditSink audit) {
         this.repository = Objects.requireNonNull(repository);
         this.access = Objects.requireNonNull(access);
         this.content = Objects.requireNonNull(content);
         this.authorizedQuery = Objects.requireNonNull(authorizedQuery);
+        this.spaceReadAuthorization = Objects.requireNonNull(spaceReadAuthorization);
         this.writeAuthorization = Objects.requireNonNull(writeAuthorization);
         this.audit = Objects.requireNonNull(audit);
     }
@@ -55,6 +81,18 @@ public class DocumentService {
         var document = DocumentAggregate.create(spaceId, title, sourceBlobId, actorId, at);
         repository.insert(document);
         return document;
+    }
+
+    @Transactional
+    public DocumentAggregate createOrReuseDraft(
+            UUID spaceId, String title, String sourceBlobId, UUID actorId, Instant at) {
+        writeAuthorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.CREATE_DOCUMENT);
+        return repository.findActiveBySpaceAndSourceBlob(spaceId, sourceBlobId)
+                .orElseGet(() -> {
+                    var document = DocumentAggregate.create(spaceId, title, sourceBlobId, actorId, at);
+                    repository.insert(document);
+                    return document;
+                });
     }
 
     @Transactional
@@ -118,7 +156,17 @@ public class DocumentService {
 
     @Transactional(readOnly = true)
     public List<DocumentAggregate> listAuthorizedDocuments(UUID userId, UUID spaceId, Instant at) {
-        return List.copyOf(authorizedQuery.listAuthorized(userId, spaceId, at));
+        spaceReadAuthorization.requireRead(userId, spaceId, at);
+        return authorizedQuery.listAuthorized(userId, spaceId, at).stream()
+                .filter(document -> document.spaceId().equals(spaceId))
+                .filter(document -> !document.archived())
+                .filter(document -> document.currentPublishedVersionId().isPresent())
+                .filter(document -> document.currentPublishedVersionId()
+                        .map(document::version)
+                        .map(version -> version.status() == DocumentStatus.PUBLISHED)
+                        .orElse(false))
+                .filter(document -> access.canRead(userId, spaceId, document.id(), at))
+                .toList();
     }
 
     @Transactional

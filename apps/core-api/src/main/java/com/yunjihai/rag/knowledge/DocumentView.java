@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
+
 public record DocumentView(
         UUID id,
         UUID spaceId,
@@ -18,11 +20,18 @@ public record DocumentView(
     }
 
     public static DocumentView published(DocumentAggregate document) {
+        if (document.archived() || document.currentPublishedVersionId().isEmpty()) {
+            throw new AccessDeniedAsNotFoundException();
+        }
         var published = document.currentPublishedVersionId()
                 .map(document::version)
+                .filter(version -> version.status() == DocumentStatus.PUBLISHED)
                 .stream()
                 .map(VersionView::from)
                 .toList();
+        if (published.isEmpty()) {
+            throw new AccessDeniedAsNotFoundException();
+        }
         return view(document, published);
     }
 

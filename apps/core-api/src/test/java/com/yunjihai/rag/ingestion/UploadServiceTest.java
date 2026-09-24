@@ -1,5 +1,16 @@
 package com.yunjihai.rag.ingestion;
 
+import com.yunjihai.rag.access.AccessDecisionService;
+import com.yunjihai.rag.access.AccessSnapshot;
+import com.yunjihai.rag.access.EffectivePrincipalSet;
+import com.yunjihai.rag.access.PrincipalMembershipSnapshot;
+import com.yunjihai.rag.access.PublicationState;
+import com.yunjihai.rag.knowledge.ConcurrentDocumentUpdateException;
+import com.yunjihai.rag.knowledge.DocumentAggregate;
+import com.yunjihai.rag.knowledge.DocumentContentGateway;
+import com.yunjihai.rag.knowledge.DocumentRepository;
+import com.yunjihai.rag.knowledge.DocumentService;
+import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -7,8 +18,14 @@ import org.springframework.http.MediaType;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -20,18 +37,31 @@ class UploadServiceTest {
     private static final UUID ACTOR_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
 
     @Test
-    @DisplayName("相同字节只保存一个不可变 Blob，但分别创建文档版本")
+    @DisplayName("相同空间重复上传相同字节复用 Blob 和活跃文档版本")
     void deduplicatesBySha256() {
         var blobs = new InMemoryBlobStore();
-        var drafts = new RecordingDraftGateway();
+        var repository = new MemoryDocumentRepository();
+        var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
+        var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> membership),
+                (spaceId, documentId, refs, at) -> Optional.of(
+                        new AccessSnapshot(true, false, false, PublicationState.PUBLISHED, null)));
+        var documents = new DocumentService(
+                repository,
+                access,
+                DocumentContentGateway.unavailable(),
+                (userId, spaceId, at) -> List.of(),
+                KnowledgeWriteAuthorization.allowAll());
+        var drafts = new DocumentServiceDraftGateway(
+                documents,
+                Clock.fixed(Instant.parse("2026-09-24T08:00:00Z"), ZoneOffset.UTC));
         var service = service(blobs, drafts, UploadInspection.safe(MediaType.APPLICATION_PDF));
 
         var first = service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
         var second = service.accept(command("b.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
 
-        assertThat(first).isNotEqualTo(second);
+        assertThat(first).isEqualTo(second);
         assertThat(blobs.values).hasSize(1);
-        assertThat(drafts.created).isEqualTo(2);
+        assertThat(repository.values).hasSize(1);
     }
 
     @Test
@@ -188,6 +218,40 @@ class UploadServiceTest {
                 throw new IllegalStateException("cleanup unavailable");
             }
             cleanupCandidates++;
+        }
+    }
+
+    private static final class MemoryDocumentRepository implements DocumentRepository {
+        private final Map<UUID, DocumentAggregate> values = new HashMap<>();
+
+        @Override
+        public void insert(DocumentAggregate document) {
+            values.put(document.id(), document);
+        }
+
+        @Override
+        public Optional<DocumentAggregate> findById(UUID documentId) {
+            return Optional.ofNullable(values.get(documentId));
+        }
+
+        @Override
+        public Optional<DocumentAggregate> findActiveBySpaceAndSourceBlob(
+                UUID spaceId, String sourceBlobId) {
+            return values.values().stream()
+                    .filter(document -> document.spaceId().equals(spaceId))
+                    .filter(document -> !document.archived())
+                    .filter(document -> document.latestVersion().sourceBlobId().equals(sourceBlobId))
+                    .findFirst();
+        }
+
+        @Override
+        public void replace(DocumentAggregate document, long expectedRevision) {
+            values.compute(document.id(), (id, current) -> {
+                if (current == null || current.revision() != expectedRevision) {
+                    throw new ConcurrentDocumentUpdateException();
+                }
+                return document;
+            });
         }
     }
 }

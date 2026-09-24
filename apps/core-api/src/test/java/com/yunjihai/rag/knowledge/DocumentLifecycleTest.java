@@ -117,6 +117,16 @@ class DocumentLifecycleTest {
         }
 
         @Override
+        public Optional<DocumentAggregate> findActiveBySpaceAndSourceBlob(
+                UUID spaceId, String sourceBlobId) {
+            return values.values().stream()
+                    .filter(document -> document.spaceId().equals(spaceId))
+                    .filter(document -> !document.archived())
+                    .filter(document -> document.latestVersion().sourceBlobId().equals(sourceBlobId))
+                    .findFirst();
+        }
+
+        @Override
         public void replace(DocumentAggregate document, long expectedRevision) {
             values.compute(document.id(), (id, current) -> {
                 if (current == null || current.revision() != expectedRevision) {

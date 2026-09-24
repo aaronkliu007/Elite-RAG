@@ -148,6 +148,52 @@ class IngestionJobServiceTest {
     }
 
     @Test
+    void retryableFailureDoesNotBecomeAnImmediateTerminalFailure() {
+        var fixture = new Fixture();
+        fixture.jobs.enqueue(fixture.request);
+        var worker = new IngestionWorker(
+                fixture.jobs,
+                lease -> new CanonicalDocumentV1(
+                        "canonical-document-v1",
+                        lease.jobId(),
+                        ParserStatus.FAILED,
+                        null,
+                        List.of(new ParserError(
+                                ParserErrorCode.TIMEOUT, "解析超时", true))));
+
+        assertThat(worker.runOnce("worker-a")).isTrue();
+
+        var document = fixture.documents.findById(fixture.document.id()).orElseThrow();
+        assertThat(document.latestVersion().parseStatus()).isEqualTo(ParseStatus.PENDING);
+        assertThat(fixture.repository.onlyState()).isEqualTo(IngestionState.RETRY_WAIT);
+        assertThat(fixture.repository.claimNext(
+                "worker-b", NOW.plusSeconds(29), NOW.plusSeconds(59))).isEmpty();
+        assertThat(fixture.repository.claimNext(
+                "worker-b", NOW.plusSeconds(30), NOW.plusSeconds(60)).orElseThrow().attempt())
+                .isEqualTo(2);
+    }
+
+    @Test
+    void retryableFailureBecomesTerminalAfterConfiguredAttemptLimit() {
+        var fixture = new Fixture();
+        fixture.jobs.enqueue(fixture.request);
+        var error = new ParserError(ParserErrorCode.TIMEOUT, "解析超时", true);
+
+        var first = fixture.jobs.claimNext("worker-a").orElseThrow();
+        fixture.jobs.fail(first, error);
+        var second = fixture.repository.claimNext(
+                "worker-b", NOW.plusSeconds(30), NOW.plusSeconds(60)).orElseThrow();
+        fixture.jobs.fail(second, error);
+        var third = fixture.repository.claimNext(
+                "worker-c", NOW.plusSeconds(60), NOW.plusSeconds(90)).orElseThrow();
+        fixture.jobs.fail(third, error);
+
+        var document = fixture.documents.findById(fixture.document.id()).orElseThrow();
+        assertThat(document.latestVersion().parseStatus()).isEqualTo(ParseStatus.FAILED);
+        assertThat(fixture.repository.onlyState()).isEqualTo(IngestionState.FAILED);
+    }
+
+    @Test
     void workerDoesNotMaskTransactionalCompletionFailureWithSecondFailAttempt() {
         var fixture = new Fixture(event -> {
             throw new IllegalStateException("audit unavailable");
@@ -240,6 +286,16 @@ class IngestionJobServiceTest {
         }
 
         @Override
+        public Optional<DocumentAggregate> findActiveBySpaceAndSourceBlob(
+                UUID spaceId, String sourceBlobId) {
+            return values.values().stream()
+                    .filter(document -> document.spaceId().equals(spaceId))
+                    .filter(document -> !document.archived())
+                    .filter(document -> document.latestVersion().sourceBlobId().equals(sourceBlobId))
+                    .findFirst();
+        }
+
+        @Override
         public void replace(DocumentAggregate document, long expectedRevision) {
             values.compute(document.id(), (id, current) -> {
                 if (current == null || current.revision() != expectedRevision) {
@@ -264,13 +320,15 @@ class IngestionJobServiceTest {
 
         @Override
         public void enqueue(UUID jobId, IngestionRequest request, Instant at) {
-            values.put(jobId, new Entry(request, IngestionState.QUEUED, 0, null, null));
+            values.put(jobId, new Entry(request, IngestionState.QUEUED, 0, null, null, at));
         }
 
         @Override
         public Optional<IngestionLease> claimNext(String workerId, Instant now, Instant leaseUntil) {
             return values.entrySet().stream()
                     .filter(entry -> entry.getValue().state == IngestionState.QUEUED
+                            || entry.getValue().state == IngestionState.RETRY_WAIT
+                            && !entry.getValue().nextAttemptAt.isAfter(now)
                             || entry.getValue().state == IngestionState.LEASED
                             && !entry.getValue().leaseUntil.isAfter(now))
                     .findFirst()
@@ -279,7 +337,7 @@ class IngestionJobServiceTest {
                         var current = entry.getValue();
                         var attempt = current.attempts + 1;
                         entry.setValue(new Entry(
-                                current.request, IngestionState.LEASED, attempt, token, leaseUntil));
+                                current.request, IngestionState.LEASED, attempt, token, leaseUntil, null));
                         return new IngestionLease(
                                 entry.getKey(), token, attempt, workerId, leaseUntil, current.request);
                     });
@@ -291,18 +349,40 @@ class IngestionJobServiceTest {
         }
 
         @Override
+        public void retry(
+                UUID jobId,
+                UUID leaseToken,
+                ParserError error,
+                Instant nextAttemptAt,
+                Instant at) {
+            var current = requireLease(jobId, leaseToken);
+            values.put(jobId, new Entry(
+                    current.request,
+                    IngestionState.RETRY_WAIT,
+                    current.attempts,
+                    null,
+                    null,
+                    nextAttemptAt));
+        }
+
+        @Override
         public void fail(UUID jobId, UUID leaseToken, ParserError error, Instant at) {
             transition(jobId, leaseToken, IngestionState.FAILED);
         }
 
         private void transition(UUID jobId, UUID leaseToken, IngestionState state) {
+            var current = requireLease(jobId, leaseToken);
+            values.put(jobId, new Entry(
+                    current.request, state, current.attempts, null, null, null));
+        }
+
+        private Entry requireLease(UUID jobId, UUID leaseToken) {
             var current = values.get(jobId);
             if (current == null || current.state != IngestionState.LEASED
                     || !leaseToken.equals(current.leaseToken)) {
                 throw new IllegalStateException("租约已失效");
             }
-            values.put(jobId, new Entry(
-                    current.request, state, current.attempts, null, null));
+            return current;
         }
 
         private IngestionState state(UUID jobId) {
@@ -318,7 +398,8 @@ class IngestionJobServiceTest {
                 IngestionState state,
                 int attempts,
                 UUID leaseToken,
-                Instant leaseUntil) {
+                Instant leaseUntil,
+                Instant nextAttemptAt) {
         }
     }
 }

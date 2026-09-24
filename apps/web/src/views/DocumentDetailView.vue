@@ -92,7 +92,6 @@ onMounted(load)
       />
       <AclScopePanel
         :permission-scope="document.permissionScope"
-        :can-manage-acl="document.permissions.canManageAcl"
       />
       <p
         v-if="publishing"

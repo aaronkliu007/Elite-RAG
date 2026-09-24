@@ -1,5 +1,6 @@
 package com.yunjihai.rag.audit;
 
+import com.yunjihai.rag.common.UuidV7;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
@@ -43,15 +44,16 @@ public class AuditService implements AuditSink {
             throw new IllegalArgumentException("审计资源类型无效");
         }
         var metadata = validateMetadata(command.metadata());
+        var occurredAt = Instant.now(clock);
         var event = new AuditEvent(
-                UUID.randomUUID(),
+                UuidV7.generate(occurredAt),
                 command.actorId(),
                 command.action(),
                 command.resourceType(),
                 command.resourceId(),
                 command.outcome(),
                 metadata,
-                Instant.now(clock));
+                occurredAt);
         store.append(event);
         return event;
     }

@@ -16,5 +16,12 @@ public interface IngestionJobRepository {
 
     void complete(UUID jobId, UUID leaseToken, Instant at);
 
+    void retry(
+            UUID jobId,
+            UUID leaseToken,
+            ParserError error,
+            Instant nextAttemptAt,
+            Instant at);
+
     void fail(UUID jobId, UUID leaseToken, ParserError error, Instant at);
 }

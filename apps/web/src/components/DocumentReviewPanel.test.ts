@@ -61,12 +61,10 @@ describe('文档审核发布门禁', () => {
     expect(wrapper.emitted('publish')).toHaveLength(1)
   })
 
-  it('编辑和权限入口只服从服务端权限位', () => {
+  it('未接入行为的编辑和权限入口不会显示为空操作', () => {
     const wrapper = mount(DocumentReviewPanel, {
       props: {
-        document: document({
-          permissions: { canEdit: false, canPublish: true, canManageAcl: false },
-        }),
+        document: document(),
       },
     })
 

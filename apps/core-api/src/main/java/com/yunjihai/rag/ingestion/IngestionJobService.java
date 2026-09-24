@@ -4,6 +4,7 @@ import com.yunjihai.rag.audit.AuditAction;
 import com.yunjihai.rag.audit.AuditCommand;
 import com.yunjihai.rag.audit.AuditOutcome;
 import com.yunjihai.rag.audit.AuditService;
+import com.yunjihai.rag.common.UuidV7;
 import com.yunjihai.rag.knowledge.DocumentService;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +25,8 @@ public class IngestionJobService {
     private final AuditService audit;
     private final Clock clock;
     private final Duration leaseDuration;
+    private final int maxAttempts;
+    private final Duration retryBaseDelay;
 
     public IngestionJobService(
             IngestionJobRepository repository,
@@ -32,22 +35,39 @@ public class IngestionJobService {
             AuditService audit,
             Clock clock,
             Duration leaseDuration) {
+        this(repository, parsedDocuments, documents, audit, clock, leaseDuration, 3, Duration.ofSeconds(30));
+    }
+
+    public IngestionJobService(
+            IngestionJobRepository repository,
+            ParsedDocumentStore parsedDocuments,
+            DocumentService documents,
+            AuditService audit,
+            Clock clock,
+            Duration leaseDuration,
+            int maxAttempts,
+            Duration retryBaseDelay) {
         this.repository = Objects.requireNonNull(repository);
         this.parsedDocuments = Objects.requireNonNull(parsedDocuments);
         this.documents = Objects.requireNonNull(documents);
         this.audit = Objects.requireNonNull(audit);
         this.clock = Objects.requireNonNull(clock);
         this.leaseDuration = Objects.requireNonNull(leaseDuration);
-        if (leaseDuration.isZero() || leaseDuration.isNegative()) {
-            throw new IllegalArgumentException("入库租约时长必须大于零");
+        this.maxAttempts = maxAttempts;
+        this.retryBaseDelay = Objects.requireNonNull(retryBaseDelay);
+        if (leaseDuration.isZero() || leaseDuration.isNegative()
+                || retryBaseDelay.isZero() || retryBaseDelay.isNegative()
+                || maxAttempts < 1 || maxAttempts > 10) {
+            throw new IllegalArgumentException("入库租约、重试次数或退避时长无效");
         }
     }
 
     @Transactional
     public UUID enqueue(IngestionRequest request) {
         Objects.requireNonNull(request);
-        var jobId = UUID.randomUUID();
-        repository.enqueue(jobId, request, Instant.now(clock));
+        var now = Instant.now(clock);
+        var jobId = UuidV7.generate(now);
+        repository.enqueue(jobId, request, now);
         return jobId;
     }
 
@@ -89,11 +109,26 @@ public class IngestionJobService {
         var now = Instant.now(clock);
         requireActiveLease(lease, now);
         Objects.requireNonNull(error);
+        if (error.retryable() && lease.attempt() < maxAttempts) {
+            var multiplier = 1L << Math.min(lease.attempt() - 1, 8);
+            repository.retry(
+                    lease.jobId(),
+                    lease.leaseToken(),
+                    error,
+                    now.plus(retryBaseDelay.multipliedBy(multiplier)),
+                    now);
+            recordParseFailure(lease, error);
+            return;
+        }
         documents.markParsingFailed(
                 lease.request().documentVersion().documentId(),
                 lease.request().documentVersion().versionId(),
                 now);
         repository.fail(lease.jobId(), lease.leaseToken(), error, now);
+        recordParseFailure(lease, error);
+    }
+
+    private void recordParseFailure(IngestionLease lease, ParserError error) {
         audit.record(new AuditCommand(
                 lease.request().actorId(),
                 AuditAction.PARSE,

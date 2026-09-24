@@ -20,7 +20,7 @@ public record IngestionRequest(
         }
         new ParserJob(
                 "parser-job-v1",
-                UUID.randomUUID(),
+                documentVersion.versionId(),
                 filename,
                 mediaType,
                 sizeBytes,

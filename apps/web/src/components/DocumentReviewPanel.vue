@@ -43,20 +43,6 @@ const parseLabels: Record<ParseStatus, string> = {
         aria-label="文档操作"
       >
         <button
-          v-if="document.permissions.canEdit"
-          class="button button-secondary"
-          type="button"
-        >
-          编辑元数据
-        </button>
-        <button
-          v-if="document.permissions.canManageAcl"
-          class="button button-secondary"
-          type="button"
-        >
-          管理权限
-        </button>
-        <button
           class="button button-primary"
           data-testid="publish-button"
           type="button"
@@ -307,8 +293,7 @@ h2 {
   background: var(--color-primary-strong);
 }
 
-.button-primary:focus-visible,
-.button-secondary:focus-visible {
+.button-primary:focus-visible {
   outline: 3px solid var(--color-focus);
   outline-offset: 2px;
 }
@@ -320,17 +305,6 @@ h2 {
   -webkit-text-fill-color: #5e6b79;
   cursor: not-allowed;
   opacity: 1;
-}
-
-.button-secondary {
-  border-color: var(--color-border);
-  color: var(--color-ink);
-  background: #fff;
-}
-
-.button-secondary:hover {
-  border-color: var(--color-accent);
-  color: var(--color-accent);
 }
 
 .status-grid {

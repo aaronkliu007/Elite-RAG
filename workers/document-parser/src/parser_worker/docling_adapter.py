@@ -55,13 +55,20 @@ class DoclingConverter:
         try:
             module = importlib.import_module("docling.document_converter")
             document_converter: Any = module.DocumentConverter
+            base_models = importlib.import_module("docling.datamodel.base_models")
+            pdf_backend = importlib.import_module("docling.backend.pypdfium2_backend")
         except ImportError as exception:
             raise ParserFailure(
                 ErrorCode.CONVERSION_FAILED, "解析引擎尚未安装", True
             ) from exception
 
         try:
-            converted = document_converter().convert(str(path))
+            format_options = {
+                base_models.InputFormat.PDF: module.PdfFormatOption(
+                    backend=pdf_backend.PyPdfiumDocumentBackend
+                )
+            }
+            converted = document_converter(format_options=format_options).convert(str(path))
             exported: dict[str, Any] = converted.document.export_to_dict()
             nodes = DoclingConverter._map_nodes(exported)
             page_count = DoclingConverter._page_count(exported, nodes)
@@ -118,22 +125,15 @@ class DoclingConverter:
             )
             cells = None
             if kind == "TABLE":
-                cells = [
-                    TableCell(
-                        row=int(cell.get("row", 0)),
-                        column=int(cell.get("column", 0)),
-                        rowSpan=int(cell.get("row_span", 1)),
-                        columnSpan=int(cell.get("column_span", 1)),
-                        text=str(cell.get("text", "")),
-                    )
-                    for cell in item.get("table_cells", [])
-                    if isinstance(cell, dict)
-                ]
+                cells = _table_cells(item)
+            text = str(item.get("text", ""))
+            if kind == "TABLE" and not text and cells:
+                text = "\n".join(cell.text for cell in cells if cell.text)
             nodes.append(
                 CanonicalNode(
                     nodeId=str(item.get("self_ref", f"node-{index + 1}")),
                     kind=cast(NodeKind, kind),
-                    text=str(item.get("text", "")),
+                    text=text,
                     page=_page(item),
                     tableCells=cells,
                     confidence=_confidence(item),
@@ -168,3 +168,27 @@ def _page(item: dict[str, Any]) -> int | None:
 def _confidence(item: dict[str, Any]) -> float | None:
     value = item.get("confidence")
     return float(value) if isinstance(value, int | float) else None
+
+
+def _table_cells(item: dict[str, Any]) -> list[TableCell]:
+    data = item.get("data")
+    raw_cells = data.get("table_cells", []) if isinstance(data, dict) else []
+    return [
+        TableCell(
+            row=_integer(cell, "start_row_offset_idx", "row", default=0),
+            column=_integer(cell, "start_col_offset_idx", "column", default=0),
+            rowSpan=_integer(cell, "row_span", default=1),
+            columnSpan=_integer(cell, "col_span", "column_span", default=1),
+            text=str(cell.get("text", "")),
+        )
+        for cell in raw_cells
+        if isinstance(cell, dict)
+    ]
+
+
+def _integer(cell: dict[str, Any], *names: str, default: int) -> int:
+    for name in names:
+        value = cell.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return default
