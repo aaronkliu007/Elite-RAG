@@ -1,4 +1,5 @@
 import { mount } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { describe, expect, it } from 'vitest'
 
 import App from './App.vue'
@@ -10,7 +11,7 @@ describe('应用骨架', () => {
     await router.isReady()
     const wrapper = mount(App, {
       global: {
-        plugins: [router],
+        plugins: [createPinia(), router],
       },
     })
 

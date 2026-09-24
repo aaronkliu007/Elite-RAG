@@ -26,6 +26,7 @@ export default [
     },
     rules: {
       ...typescriptPlugin.configs.recommended.rules,
+      'no-undef': 'off',
       'vue/multi-word-component-names': 'off',
     },
   },
