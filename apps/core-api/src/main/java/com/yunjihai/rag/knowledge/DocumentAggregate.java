@@ -79,6 +79,24 @@ public record DocumentAggregate(
         return replaceVersion(current.withParseStatus(ParseStatus.SUCCEEDED, at), publishedVersionId, false);
     }
 
+    DocumentAggregate completeParsing(UUID versionId, UUID actorId, Instant at) {
+        var current = mutableLatest(versionId);
+        if (current.status() != DocumentStatus.DRAFT) {
+            throw new DocumentLifecycleException("只有草稿可以完成解析并进入评审");
+        }
+        var completed = current.withParseStatus(ParseStatus.SUCCEEDED, at)
+                .withStatus(DocumentStatus.IN_REVIEW, actorId, at);
+        return replaceVersion(completed, publishedVersionId, false);
+    }
+
+    DocumentAggregate markParsingFailed(UUID versionId, Instant at) {
+        var current = mutableLatest(versionId);
+        if (current.status() != DocumentStatus.DRAFT) {
+            throw new DocumentLifecycleException("只有草稿可以记录解析失败");
+        }
+        return replaceVersion(current.withParseStatus(ParseStatus.FAILED, at), publishedVersionId, false);
+    }
+
     DocumentAggregate publish(UUID versionId, UUID actorId, Instant at) {
         var current = mutableLatest(versionId);
         if (current.status() != DocumentStatus.IN_REVIEW) {

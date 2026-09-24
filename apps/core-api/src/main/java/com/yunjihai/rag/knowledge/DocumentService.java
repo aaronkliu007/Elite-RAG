@@ -58,6 +58,17 @@ public class DocumentService {
     }
 
     @Transactional
+    public DocumentAggregate completeParsing(
+            UUID documentId, UUID versionId, UUID actorId, Instant at) {
+        return mutate(documentId, document -> document.completeParsing(versionId, actorId, at));
+    }
+
+    @Transactional
+    public DocumentAggregate markParsingFailed(UUID documentId, UUID versionId, Instant at) {
+        return mutate(documentId, document -> document.markParsingFailed(versionId, at));
+    }
+
+    @Transactional
     public DocumentAggregate publish(UUID documentId, UUID versionId, UUID actorId, Instant at) {
         return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
                 document -> document.publish(versionId, actorId, at));
