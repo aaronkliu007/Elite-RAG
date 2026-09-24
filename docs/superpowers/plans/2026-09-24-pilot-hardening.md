@@ -30,7 +30,7 @@
 
 ---
 
-### 任务 1：RAG 安全与提示注入防护
+### Task 1｜任务 1：RAG 安全与提示注入防护
 
 **文件：** 创建 `UntrustedContentScanner`、`PromptBoundaryBuilder`、`GeneratedContentSanitizer`、攻击样本、安全测试和应急手册。
 
@@ -46,7 +46,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/security apps/core-api/src/
 git commit -m "security: harden untrusted RAG content"
 ```
 
-### 任务 2：容错与安全降级
+### Task 2｜任务 2：容错与安全降级
 
 **文件：** 创建 `DependencyPolicy`、`FaultInjectionTest`、Toxiproxy 配置和外部依赖故障手册。
 
@@ -61,7 +61,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/resilience apps/core-api/sr
 git commit -m "feat: add safe dependency degradation"
 ```
 
-### 任务 3：追踪、指标、成本与脱敏日志
+### Task 3｜任务 3：追踪、指标、成本与脱敏日志
 
 **文件：** 创建 `CorrelationIdFilter`、`CostMeter`、`TelemetryRedactionTest`、Prometheus/告警配置和手册。
 
@@ -77,7 +77,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/observability apps/core-api
 git commit -m "feat: add redacted end-to-end telemetry"
 ```
 
-### 任务 4：备份、恢复与跨存储对账
+### Task 4｜任务 4：备份、恢复与跨存储对账
 
 **文件：** 创建 `backup.ps1`、`restore.ps1`、`reconcile-stores.ps1`、`StoreReconciliationService`、测试和备份恢复手册。
 
@@ -87,7 +87,7 @@ git commit -m "feat: add redacted end-to-end telemetry"
 - [ ] **第 4 步：缺源 Blob 立即阻断文档，孤儿 Blob 隔离，索引重建，ACL 以 PostgreSQL 修复**
 - [ ] **第 5 步：做实际计时恢复演练，证明 RPO/RTO，附签字报告并提交**
 
-### 任务 5：负载、并发与预算保护
+### Task 5｜任务 5：负载、并发与预算保护
 
 **文件：** 创建 `pilot-load.js`、合成样本、`AdmissionController`、测试和容量手册。
 
@@ -97,7 +97,7 @@ git commit -m "feat: add redacted end-to-end telemetry"
 - [ ] **第 4 步：门槛为搜索 `p(95)<3000`、除预期 429 外失败率 `<1%`、越权响应 0；只针对实测瓶颈调优**
 - [ ] **第 5 步：提交脚本、假设、P50/P95/P99、饱和点和最终限额**
 
-### 任务 6：应用安全与供应链门槛
+### Task 6｜任务 6：应用安全与供应链门槛
 
 **文件：** 创建 ZAP 规则/上下文、`security-gate.ps1`、安全测试手册，更新 CI。
 
@@ -111,7 +111,7 @@ git add security scripts/security-gate.ps1 docs/runbooks/security-testing.md .gi
 git commit -m "security: gate pilot releases"
 ```
 
-### 任务 7：试点分析、验收报告与发布决策
+### Task 7｜任务 7：试点分析、验收报告与发布决策
 
 **文件：** 创建 `PilotMetricsService`、测试、基线/周复盘/验收模板和 `pilot-acceptance.ps1`。
 

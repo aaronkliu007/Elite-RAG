@@ -29,7 +29,7 @@
 
 ---
 
-### 任务 1：检索领域契约
+### Task 1｜任务 1：检索领域契约
 
 **文件：** 创建 `RetrievalQuery`、`Candidate`、`Evidence`、`EvidencePack`、`RetrievalService` 及契约测试。
 
@@ -52,7 +52,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/retrieval apps/core-api/src
 git commit -m "feat: define trusted retrieval contracts"
 ```
 
-### 任务 2：切分与投影 Outbox
+### Task 2｜任务 2：切分与投影 Outbox
 
 **文件：** 创建 `V002__retrieval_projection.sql`、`ChunkingService`、`ProjectionOutbox`、`ProjectionEventHandler` 及测试。
 
@@ -69,7 +69,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/retrieval/index apps/core-a
 git commit -m "feat: create deterministic retrieval projection"
 ```
 
-### 任务 3：OpenSearch 索引、投影器与重建
+### Task 3｜任务 3：OpenSearch 索引、投影器与重建
 
 **文件：** 创建 `infra/opensearch/chunks-v1.json`、`hybrid-search-pipeline-v1.json`、`OpenSearchProjector`、`RebuildIndexService` 及 Testcontainers 测试；更新 Compose。
 
@@ -86,7 +86,7 @@ git add infra/opensearch infra/compose apps/core-api/src/main/java/com/yunjihai/
 git commit -m "feat: project published chunks into OpenSearch"
 ```
 
-### 任务 4：混合召回与可降级行为
+### Task 4｜任务 4：混合召回与可降级行为
 
 **文件：** 创建 `LexicalRetriever`、`VectorRetriever`、`HybridRecallService`、`EmbeddingPort` 及测试。
 
@@ -101,7 +101,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/retrieval/search apps/core-
 git commit -m "feat: add permission-filtered hybrid recall"
 ```
 
-### 任务 5：重排、多样性和 PostgreSQL 二次授权
+### Task 5｜任务 5：重排、多样性和 PostgreSQL 二次授权
 
 **文件：** 创建 `RerankerPort`、`EvidenceSelectionService`、`TrustedRetrievalService` 及测试。
 
@@ -116,7 +116,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/retrieval apps/core-api/src
 git commit -m "feat: select diverse reauthorized evidence"
 ```
 
-### 任务 6：引用 API 与来源查看器
+### Task 6｜任务 6：引用 API 与来源查看器
 
 **文件：** 创建 `RetrievalController`、`CitationController`、`retrieval.ts`、`EvidenceList.vue`、`SourceLocatorViewer.vue` 及 API/UI 测试。
 
@@ -134,7 +134,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/retrieval/api apps/core-api
 git commit -m "feat: expose traceable source citations"
 ```
 
-### 任务 7：版本化离线评估与发布门槛
+### Task 7｜任务 7：版本化离线评估与发布门槛
 
 **文件：** 创建 `evaluation/retrieval/golden-v1.jsonl`、说明、`RetrievalEvaluationTest`、`RetrievalMetrics`、`run-retrieval-eval.ps1` 和运维手册。
 

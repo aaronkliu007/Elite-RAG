@@ -29,7 +29,7 @@
 
 ---
 
-### 任务 1：方案、模板与版本 Schema
+### Task 1｜任务 1：方案、模板与版本 Schema
 
 **文件：** 创建 `V003__solution_workbench.sql`、`Solution`、`SolutionVersion`、`SolutionSection`、`SolutionTemplate` 及聚合测试。
 
@@ -45,7 +45,7 @@ git add apps/core-api/src/main/resources/db/migration apps/core-api/src/main/jav
 git commit -m "feat: add versioned solution aggregate"
 ```
 
-### 任务 2：供应商中立模型网关与提示词注册表
+### Task 2｜任务 2：供应商中立模型网关与提示词注册表
 
 **文件：** 创建 `ModelGateway`、`ModelRequest`、`ModelResponse`、`PromptRegistry`，以及需求/大纲/章节/引用核验 v1 提示词和测试。
 
@@ -66,7 +66,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/model apps/core-api/src/mai
 git commit -m "feat: add governed model gateway"
 ```
 
-### 任务 3：需求提取与人工确认
+### Task 3｜任务 3：需求提取与人工确认
 
 **文件：** 创建 `RequirementSet`、`RequirementExtractionService`、`RequirementController`、`RequirementConfirmationView.vue` 及测试。
 
@@ -82,7 +82,7 @@ git add apps/core-api apps/web
 git commit -m "feat: confirm structured customer requirements"
 ```
 
-### 任务 4：模板驱动大纲生成与确认
+### Task 4｜任务 4：模板驱动大纲生成与确认
 
 **文件：** 创建 `Outline`、`OutlineService`、`OutlineController`、`OutlineEditorView.vue` 及测试。
 
@@ -98,7 +98,7 @@ git add apps/core-api apps/web
 git commit -m "feat: add confirmable solution outlines"
 ```
 
-### 任务 5：幂等分章检索与生成
+### Task 5｜任务 5：幂等分章检索与生成
 
 **文件：** 创建 `SectionGenerationService`、`GenerationWorker`、`GenerationState`、`SectionGenerationStatus.vue` 及测试。
 
@@ -114,7 +114,7 @@ git add apps/core-api apps/web
 git commit -m "feat: generate recoverable cited sections"
 ```
 
-### 任务 6：引用核验与全文风险检查
+### Task 6｜任务 6：引用核验与全文风险检查
 
 **文件：** 创建 `CitationVerifier`、`RiskRuleEngine`、`ConsistencyChecker` 及测试。
 
@@ -131,7 +131,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/solution/verification apps/
 git commit -m "feat: verify citations and risky claims"
 ```
 
-### 任务 7：协作编辑、版本比较与冲突安全
+### Task 7｜任务 7：协作编辑、版本比较与冲突安全
 
 **文件：** 创建 `SectionController`、`SectionConcurrencyTest`、`SolutionEditorView.vue`、`SectionEditor.vue`、`VersionDiff.vue` 及 UI 测试。
 
@@ -147,7 +147,7 @@ git add apps/core-api apps/web
 git commit -m "feat: add conflict-safe solution editing"
 ```
 
-### 任务 8：安全 Word 导出
+### Task 8｜任务 8：安全 Word 导出
 
 **文件：** 创建 `docs/adr/0002-word-export-library.md`、`WordExportService`、导出测试和参考方案样本。
 
@@ -162,7 +162,7 @@ git add docs/adr apps/core-api/src/main/java/com/yunjihai/rag/solution/export ap
 git commit -m "feat: export verified solutions to Word"
 ```
 
-### 任务 9：反馈、端到端验收与阶段门槛
+### Task 9｜任务 9：反馈、端到端验收与阶段门槛
 
 **文件：** 创建 `FeedbackService`、`SolutionWorkbenchAcceptanceTest`、Playwright 流程、`evaluation/generation/golden-v1.jsonl` 和手册。
 

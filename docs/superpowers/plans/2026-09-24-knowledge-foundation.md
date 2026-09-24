@@ -30,7 +30,7 @@
 
 ---
 
-### 任务 0：试点章程与数据准入
+### Task 0｜任务 0：试点章程与数据准入
 
 **文件：**
 - 创建：`docs/pilot/charter.md`
@@ -66,7 +66,7 @@ git commit -m "docs: establish RAG pilot baseline and data gate"
 
 如业务负责人、基线、可信资料清单或供应商决策任一缺失，必须停止。
 
-### 任务 1：仓库与构建骨架
+### Task 1｜任务 1：仓库与构建骨架
 
 **文件：** 创建根 `pom.xml`、Maven Wrapper、`apps/core-api`、`apps/web`、`workers/document-parser`、`pnpm-workspace.yaml` 和 `.github/workflows/verify.yml`。
 
@@ -95,7 +95,7 @@ git add pom.xml .mvn mvnw mvnw.cmd apps workers pnpm-workspace.yaml .github
 git commit -m "build: scaffold enterprise RAG workspace"
 ```
 
-### 任务 2：本地基础设施与数据库基线
+### Task 2｜任务 2：本地基础设施与数据库基线
 
 **文件：** 创建 `infra/compose/compose.yaml`、应用配置、`V001__foundation.sql` 和 `PostgresIntegrationTest.java`。
 
@@ -113,7 +113,7 @@ git add infra/compose apps/core-api/src/main/resources apps/core-api/src/test
 git commit -m "feat: add foundation data infrastructure"
 ```
 
-### 任务 3：主体与 ACL 领域
+### Task 3｜任务 3：主体与 ACL 领域
 
 **文件：** 创建 `PrincipalRef`、`EffectivePrincipalSet`、`AccessDecisionService` 及对应测试。
 
@@ -135,7 +135,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/access apps/core-api/src/te
 git commit -m "feat: enforce default-deny knowledge ACL"
 ```
 
-### 任务 4：身份边界与钉钉组织同步
+### Task 4｜任务 4：身份边界与钉钉组织同步
 
 **文件：** 创建 `DingTalkClient`、`DingTalkIdentityAdapter`、`OrganizationSyncService`、`SessionRevocationService` 及 WireMock/安全测试。
 
@@ -159,7 +159,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/identity apps/core-api/src/
 git commit -m "feat: synchronize DingTalk identity and membership"
 ```
 
-### 任务 5：知识空间与不可变文档生命周期
+### Task 5｜任务 5：知识空间与不可变文档生命周期
 
 **文件：** 创建 `KnowledgeSpaceService`、`DocumentService`、`DocumentStatus`、`KnowledgeController` 及生命周期测试。
 
@@ -176,7 +176,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/knowledge apps/core-api/src
 git commit -m "feat: add immutable knowledge lifecycle"
 ```
 
-### 任务 6：安全上传、Blob 去重与对象存储
+### Task 6｜任务 6：安全上传、Blob 去重与对象存储
 
 **文件：** 创建 `UploadPolicy`、`BlobStore`、`MinioBlobStore`、`UploadService` 及对应测试。
 
@@ -198,7 +198,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/ingestion apps/core-api/src
 git commit -m "feat: store validated immutable document blobs"
 ```
 
-### 任务 7：统一解析契约与无状态 Worker
+### Task 7｜任务 7：统一解析契约与无状态 Worker
 
 **文件：** 创建 `parser-job-v1.schema.json`、`canonical-document-v1.schema.json`、FastAPI/Docling 适配器、样本文件、Java `ParserClient` 及双端契约测试。
 
@@ -217,7 +217,7 @@ git add contracts/parser workers/document-parser apps/core-api/src/main/java/com
 git commit -m "feat: add versioned document parser contract"
 ```
 
-### 任务 8：可恢复入库编排与审计
+### Task 8｜任务 8：可恢复入库编排与审计
 
 **文件：** 创建 `IngestionJobService`、`IngestionWorker`、`IngestionState`、`AuditService` 及崩溃恢复/审计测试。
 
@@ -235,7 +235,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/ingestion apps/core-api/src
 git commit -m "feat: orchestrate recoverable document ingestion"
 ```
 
-### 任务 9：知识管理 Web 流程
+### Task 9｜任务 9：知识管理 Web 流程
 
 **文件：** 创建前端路由、API、会话 Store、知识空间、上传、审核、ACL 组件及 Vitest/Playwright 测试。
 
@@ -252,7 +252,7 @@ git add apps/web
 git commit -m "feat: add knowledge publishing workflow"
 ```
 
-### 任务 10：底座验收与运维手册
+### Task 10｜任务 10：底座验收与运维手册
 
 **文件：** 创建 `FoundationAcceptanceTest.java`、`docs/runbooks/knowledge-foundation.md`、`docs/adr/0001-java-business-python-parser-boundary.md`，更新 `README.md`。
 
