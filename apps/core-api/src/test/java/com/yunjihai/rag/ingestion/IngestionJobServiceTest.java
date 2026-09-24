@@ -14,6 +14,7 @@ import com.yunjihai.rag.knowledge.DocumentContentGateway;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.DocumentStatus;
+import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import com.yunjihai.rag.knowledge.ParseStatus;
 import org.junit.jupiter.api.Test;
@@ -194,6 +195,25 @@ class IngestionJobServiceTest {
     }
 
     @Test
+    void repeatedlyExpiredLeasesBecomeTerminalAfterConfiguredAttemptLimit() {
+        var clock = new MutableClock(NOW);
+        var fixture = new Fixture(clock);
+        fixture.jobs.enqueue(fixture.request);
+
+        assertThat(fixture.jobs.claimNext("worker-a").orElseThrow().attempt()).isEqualTo(1);
+        clock.advance(Duration.ofSeconds(31));
+        assertThat(fixture.jobs.claimNext("worker-b").orElseThrow().attempt()).isEqualTo(2);
+        clock.advance(Duration.ofSeconds(31));
+        assertThat(fixture.jobs.claimNext("worker-c").orElseThrow().attempt()).isEqualTo(3);
+        clock.advance(Duration.ofSeconds(31));
+
+        assertThat(fixture.jobs.claimNext("worker-d")).isEmpty();
+        assertThat(fixture.repository.onlyState()).isEqualTo(IngestionState.FAILED);
+        assertThat(fixture.documents.findById(fixture.document.id()).orElseThrow()
+                .latestVersion().parseStatus()).isEqualTo(ParseStatus.FAILED);
+    }
+
+    @Test
     void workerDoesNotMaskTransactionalCompletionFailureWithSecondFailAttempt() {
         var fixture = new Fixture(event -> {
             throw new IllegalStateException("audit unavailable");
@@ -218,10 +238,18 @@ class IngestionJobServiceTest {
         private final IngestionJobService jobs;
 
         private Fixture() {
-            this(null);
+            this((AuditEventStore) null);
         }
 
         private Fixture(AuditEventStore eventStore) {
+            this(eventStore, Clock.fixed(NOW, ZoneOffset.UTC));
+        }
+
+        private Fixture(Clock clock) {
+            this(null, clock);
+        }
+
+        private Fixture(AuditEventStore eventStore, Clock clock) {
             var documentService = documentService(documents);
             document = documentService.createDraft(SPACE_ID, "方案", "blob-801", ACTOR_ID, NOW);
             request = new IngestionRequest(
@@ -234,13 +262,13 @@ class IngestionJobServiceTest {
                     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
             var audit = new AuditService(
                     eventStore == null ? auditEvents::add : eventStore,
-                    Clock.fixed(NOW, ZoneOffset.UTC));
+                    clock);
             jobs = new IngestionJobService(
                     repository,
                     parsed,
                     documentService,
                     audit,
-                    Clock.fixed(NOW, ZoneOffset.UTC),
+                    clock,
                     Duration.ofSeconds(30));
         }
 
@@ -256,6 +284,33 @@ class IngestionJobServiceTest {
                             List.of(new CanonicalNode(
                                     "node-1", "PARAGRAPH", "正文", null, 1, null, null, 1.0))),
                     List.of());
+        }
+    }
+
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        private MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        private void advance(Duration duration) {
+            now = now.plus(duration);
+        }
+
+        @Override
+        public java.time.ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
         }
     }
 
@@ -286,12 +341,14 @@ class IngestionJobServiceTest {
         }
 
         @Override
-        public Optional<DocumentAggregate> findActiveBySpaceAndSourceBlob(
+        public Optional<DocumentVersionRef> findActiveVersionBySpaceAndSourceBlob(
                 UUID spaceId, String sourceBlobId) {
             return values.values().stream()
                     .filter(document -> document.spaceId().equals(spaceId))
                     .filter(document -> !document.archived())
-                    .filter(document -> document.latestVersion().sourceBlobId().equals(sourceBlobId))
+                    .flatMap(document -> document.versions().stream()
+                            .filter(version -> version.sourceBlobId().equals(sourceBlobId))
+                            .map(version -> new DocumentVersionRef(document.id(), version.id())))
                     .findFirst();
         }
 

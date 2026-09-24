@@ -10,6 +10,7 @@ import com.yunjihai.rag.knowledge.DocumentAggregate;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentService;
+import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -61,6 +62,40 @@ class UploadServiceTest {
 
         assertThat(first).isEqualTo(second);
         assertThat(blobs.values).hasSize(1);
+        assertThat(repository.values).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("旧版本内容再次上传时复用原版本，即使最新草稿已引用其他 Blob")
+    void deduplicatesAgainstAnyActiveVersionInsteadOfOnlyLatestVersion() {
+        var blobs = new InMemoryBlobStore();
+        var repository = new MemoryDocumentRepository();
+        var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
+        var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> membership),
+                (spaceId, documentId, refs, at) -> Optional.of(
+                        new AccessSnapshot(true, false, false, PublicationState.PUBLISHED, null)));
+        var documents = new DocumentService(
+                repository,
+                access,
+                DocumentContentGateway.unavailable(),
+                (userId, spaceId, at) -> List.of(),
+                KnowledgeWriteAuthorization.allowAll());
+        var drafts = new DocumentServiceDraftGateway(
+                documents,
+                Clock.fixed(Instant.parse("2026-09-24T08:00:00Z"), ZoneOffset.UTC));
+        var service = service(blobs, drafts, UploadInspection.safe(MediaType.APPLICATION_PDF));
+
+        var first = service.accept(command("v1.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
+        var parsedAt = Instant.parse("2026-09-24T08:01:00Z");
+        documents.markParsingSucceeded(first.documentId(), first.versionId(), parsedAt);
+        documents.submitForReview(first.documentId(), first.versionId(), ACTOR_ID, parsedAt.plusSeconds(1));
+        documents.publish(first.documentId(), first.versionId(), ACTOR_ID, parsedAt.plusSeconds(2));
+        documents.createNextDraft(
+                first.documentId(), "blobs/sha256/different", ACTOR_ID, parsedAt.plusSeconds(3));
+
+        var repeated = service.accept(command("v1-again.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
+
+        assertThat(repeated).isEqualTo(first);
         assertThat(repository.values).hasSize(1);
     }
 
@@ -235,12 +270,14 @@ class UploadServiceTest {
         }
 
         @Override
-        public Optional<DocumentAggregate> findActiveBySpaceAndSourceBlob(
+        public Optional<DocumentVersionRef> findActiveVersionBySpaceAndSourceBlob(
                 UUID spaceId, String sourceBlobId) {
             return values.values().stream()
                     .filter(document -> document.spaceId().equals(spaceId))
                     .filter(document -> !document.archived())
-                    .filter(document -> document.latestVersion().sourceBlobId().equals(sourceBlobId))
+                    .flatMap(document -> document.versions().stream()
+                            .filter(version -> version.sourceBlobId().equals(sourceBlobId))
+                            .map(version -> new DocumentVersionRef(document.id(), version.id())))
                     .findFirst();
         }
 

@@ -92,6 +92,46 @@ class DocumentLifecycleTest {
         assertThat(repository.values).isEmpty();
     }
 
+    @Test
+    @DisplayName("发布指针状态异常时不得读取解析内容或下载源文件")
+    void deniesContentWhenPublishedPointerTargetsNonPublishedVersion() {
+        var repository = new InMemoryDocumentRepository();
+        var documentId = UUID.fromString("00000000-0000-0000-0000-000000000040");
+        var versionId = UUID.fromString("00000000-0000-0000-0000-000000000041");
+        var draft = new DocumentVersion(
+                versionId, 1, "blob-v1", DocumentStatus.DRAFT, ParseStatus.SUCCEEDED,
+                ACTOR_ID, NOW, ACTOR_ID, NOW);
+        repository.insert(new DocumentAggregate(
+                documentId, SPACE_ID, "坏数据", List.of(draft), versionId, false, 0));
+        var reads = new int[1];
+        var content = new DocumentContentGateway() {
+            @Override
+            public DocumentContent readParsed(UUID ignoredDocumentId, UUID ignoredVersionId) {
+                reads[0]++;
+                return new DocumentContent("text/markdown", "bad.md", new byte[]{1});
+            }
+
+            @Override
+            public DocumentContent readSource(UUID ignoredDocumentId, UUID ignoredVersionId) {
+                reads[0]++;
+                return new DocumentContent("application/pdf", "bad.pdf", new byte[]{1});
+            }
+        };
+        var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
+        var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> membership),
+                (spaceId, candidateDocumentId, refs, at) -> Optional.of(
+                        new AccessSnapshot(true, true, true, PublicationState.PUBLISHED, null)));
+        var service = new DocumentService(
+                repository, access, content, (userId, spaceId, at) -> List.of(),
+                KnowledgeWriteAuthorization.allowAll());
+
+        assertThatThrownBy(() -> service.getAuthorizedParsedContent(ACTOR_ID, documentId, NOW))
+                .isInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
+        assertThatThrownBy(() -> service.getAuthorizedSource(ACTOR_ID, documentId, NOW))
+                .isInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
+        assertThat(reads[0]).isZero();
+    }
+
     private static DocumentService service(DocumentRepository repository) {
         var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
         var principals = new EffectivePrincipalSet(userId -> membership);
@@ -117,12 +157,14 @@ class DocumentLifecycleTest {
         }
 
         @Override
-        public Optional<DocumentAggregate> findActiveBySpaceAndSourceBlob(
+        public Optional<DocumentVersionRef> findActiveVersionBySpaceAndSourceBlob(
                 UUID spaceId, String sourceBlobId) {
             return values.values().stream()
                     .filter(document -> document.spaceId().equals(spaceId))
                     .filter(document -> !document.archived())
-                    .filter(document -> document.latestVersion().sourceBlobId().equals(sourceBlobId))
+                    .flatMap(document -> document.versions().stream()
+                            .filter(version -> version.sourceBlobId().equals(sourceBlobId))
+                            .map(version -> new DocumentVersionRef(document.id(), version.id())))
                     .findFirst();
         }
 

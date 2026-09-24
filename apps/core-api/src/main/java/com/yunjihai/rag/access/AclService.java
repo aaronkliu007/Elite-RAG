@@ -16,14 +16,17 @@ public class AclService {
 
     private final AclCommandRepository repository;
     private final KnowledgeWriteAuthorization authorization;
+    private final DocumentSpaceLookup documents;
     private final AuditSink audit;
 
     public AclService(
             AclCommandRepository repository,
             KnowledgeWriteAuthorization authorization,
+            DocumentSpaceLookup documents,
             AuditSink audit) {
         this.repository = Objects.requireNonNull(repository);
         this.authorization = Objects.requireNonNull(authorization);
+        this.documents = Objects.requireNonNull(documents);
         this.audit = Objects.requireNonNull(audit);
     }
 
@@ -94,6 +97,9 @@ public class AclService {
         }
         authorization.require(
                 actorId, spaceId, documentId, KnowledgeWriteAuthorization.Action.MANAGE_ACL);
+        if (documentId != null && !documents.belongsTo(spaceId, documentId)) {
+            throw new AccessDeniedAsNotFoundException();
+        }
     }
 
     private void record(

@@ -84,14 +84,14 @@ public class DocumentService {
     }
 
     @Transactional
-    public DocumentAggregate createOrReuseDraft(
+    public DocumentVersionRef createOrReuseDraft(
             UUID spaceId, String title, String sourceBlobId, UUID actorId, Instant at) {
         writeAuthorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.CREATE_DOCUMENT);
-        return repository.findActiveBySpaceAndSourceBlob(spaceId, sourceBlobId)
+        return repository.findActiveVersionBySpaceAndSourceBlob(spaceId, sourceBlobId)
                 .orElseGet(() -> {
                     var document = DocumentAggregate.create(spaceId, title, sourceBlobId, actorId, at);
                     repository.insert(document);
-                    return document;
+                    return new DocumentVersionRef(document.id(), document.latestVersion().id());
                 });
     }
 
@@ -147,7 +147,11 @@ public class DocumentService {
     public DocumentAggregate getAuthorizedDocument(UUID userId, UUID documentId, Instant at) {
         var document = findOrHide(documentId);
         access.requireRead(userId, document.spaceId(), document.id(), at);
-        if (document.archived() || document.currentPublishedVersionId().isEmpty()) {
+        if (document.archived() || document.currentPublishedVersionId().isEmpty()
+                || document.currentPublishedVersionId()
+                .map(document::version)
+                .map(version -> version.status() != DocumentStatus.PUBLISHED)
+                .orElse(true)) {
             throw new AccessDeniedAsNotFoundException();
         }
         record(userId, AuditAction.VIEW, "DOCUMENT", documentId, document);

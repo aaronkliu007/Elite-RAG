@@ -76,15 +76,36 @@ class AclServiceTest {
         assertThat(fixture.events).isEmpty();
     }
 
+    @Test
+    void documentAclRejectsDocumentFromAnotherKnowledgeSpace() {
+        var fixture = new Fixture(KnowledgeWriteAuthorization.allowAll(), false);
+        fixture.repository.grantSpace(SPACE_ID, USER, null, NOW);
+
+        assertThatThrownBy(() -> fixture.service.grantDocument(
+                ACTOR_ID, SPACE_ID, DOCUMENT_ID, USER, null, NOW))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
+        assertThatThrownBy(() -> fixture.service.revokeDocument(
+                ACTOR_ID, SPACE_ID, DOCUMENT_ID, USER, NOW))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
+
+        assertThat(fixture.repository.documentGrants).isEmpty();
+        assertThat(fixture.events).isEmpty();
+    }
+
     private static final class Fixture {
         private final MemoryAclRepository repository = new MemoryAclRepository();
         private final List<AuditEvent> events = new ArrayList<>();
         private final AclService service;
 
         private Fixture(KnowledgeWriteAuthorization authorization) {
+            this(authorization, true);
+        }
+
+        private Fixture(KnowledgeWriteAuthorization authorization, boolean documentBelongsToSpace) {
             service = new AclService(
                     repository,
                     authorization,
+                    (spaceId, documentId) -> documentBelongsToSpace,
                     new AuditService(events::add, Clock.fixed(NOW, ZoneOffset.UTC)));
         }
     }

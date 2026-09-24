@@ -39,6 +39,7 @@ import com.yunjihai.rag.knowledge.DocumentContent;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentService;
+import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.knowledge.DocumentStatus;
 import com.yunjihai.rag.knowledge.KnowledgeController;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceService;
@@ -234,7 +235,13 @@ class FoundationAcceptanceTest {
                     writeAuthorization,
                     audit);
             spaces = new KnowledgeSpaceService(space -> { }, writeAuthorization);
-            aclService = new AclService(acl, writeAuthorization, audit);
+            aclService = new AclService(
+                    acl,
+                    writeAuthorization,
+                    (spaceId, documentId) -> documents.findById(documentId)
+                            .map(document -> document.spaceId().equals(spaceId))
+                            .orElse(false),
+                    audit);
             var policy = UploadPolicy.defaults();
             uploads = new UploadService(
                     policy,
@@ -299,12 +306,14 @@ class FoundationAcceptanceTest {
         }
 
         @Override
-        public Optional<DocumentAggregate> findActiveBySpaceAndSourceBlob(
+        public Optional<DocumentVersionRef> findActiveVersionBySpaceAndSourceBlob(
                 UUID spaceId, String sourceBlobId) {
             return values.values().stream()
                     .filter(document -> document.spaceId().equals(spaceId))
                     .filter(document -> !document.archived())
-                    .filter(document -> document.latestVersion().sourceBlobId().equals(sourceBlobId))
+                    .flatMap(document -> document.versions().stream()
+                            .filter(version -> version.sourceBlobId().equals(sourceBlobId))
+                            .map(version -> new DocumentVersionRef(document.id(), version.id())))
                     .findFirst();
         }
 

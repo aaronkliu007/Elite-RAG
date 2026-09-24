@@ -77,7 +77,15 @@ public class IngestionJobService {
             throw new IllegalArgumentException("Worker 标识不能为空");
         }
         var now = Instant.now(clock);
-        return repository.claimNext(workerId, now, now.plus(leaseDuration));
+        var claimed = repository.claimNext(workerId, now, now.plus(leaseDuration));
+        if (claimed.isPresent() && claimed.orElseThrow().attempt() > maxAttempts) {
+            fail(claimed.orElseThrow(), new ParserError(
+                    ParserErrorCode.TIMEOUT,
+                    "Worker 租约连续过期，已达到尝试上限",
+                    false));
+            return Optional.empty();
+        }
+        return claimed;
     }
 
     @Transactional
