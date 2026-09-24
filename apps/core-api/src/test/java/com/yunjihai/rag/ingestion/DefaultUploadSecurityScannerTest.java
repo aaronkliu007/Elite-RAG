@@ -47,6 +47,113 @@ class DefaultUploadSecurityScannerTest {
     }
 
     @Test
+    void rejectsZipThatOnlyPretendsToBeDocx() throws Exception {
+        var file = Files.createTempFile("fake-", ".docx");
+        try {
+            Files.write(file, zipOf(new Entry("word/fake.txt", "not opc".getBytes(StandardCharsets.UTF_8))));
+            var scanner = new DefaultUploadSecurityScanner(UploadPolicy.defaults(), path -> false);
+
+            var inspection = scanner.inspect(file, "fake.docx", docxMediaType());
+
+            assertThat(inspection.detectedMediaType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void rejectsAmbiguousOoxmlPackage() throws Exception {
+        var file = Files.createTempFile("ambiguous-", ".docx");
+        try {
+            Files.write(file, zipOf(
+                    new Entry("[Content_Types].xml", ambiguousContentTypes().getBytes(StandardCharsets.UTF_8)),
+                    new Entry("_rels/.rels", relationships("word/document.xml").getBytes(StandardCharsets.UTF_8)),
+                    new Entry("word/document.xml", "word".getBytes(StandardCharsets.UTF_8)),
+                    new Entry("xl/workbook.xml", "excel".getBytes(StandardCharsets.UTF_8))));
+            var scanner = new DefaultUploadSecurityScanner(UploadPolicy.defaults(), path -> false);
+
+            var inspection = scanner.inspect(file, "ambiguous.docx", docxMediaType());
+
+            assertThat(inspection.detectedMediaType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void rejectsOpcMetadataThatOnlyContainsExpectedKeywords() throws Exception {
+        var file = Files.createTempFile("keyword-fake-", ".docx");
+        try {
+            Files.write(file, zipOf(
+                    new Entry("[Content_Types].xml", docxMainType().getBytes(StandardCharsets.UTF_8)),
+                    new Entry("_rels/.rels", "officeDocument word/document.xml".getBytes(StandardCharsets.UTF_8)),
+                    new Entry("word/document.xml", "not enough".getBytes(StandardCharsets.UTF_8))));
+            var scanner = new DefaultUploadSecurityScanner(UploadPolicy.defaults(), path -> false);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> scanner.inspect(file, "fake.docx", docxMediaType()))
+                    .isInstanceOf(UploadRejectedException.class)
+                    .hasMessageContaining("安全检查失败");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void detectsNestedArchiveBombWithSharedExpansionBudget() throws Exception {
+        var nested = zipOf(new Entry("payload.txt", new byte[4096]));
+        var file = Files.createTempFile("nested-bomb-", ".docx");
+        try {
+            Files.write(file, validDocx(new Entry("word/embeddings/evil.zip", nested)));
+            var scanner = new DefaultUploadSecurityScanner(
+                    new UploadPolicy(20_000, 100, 2048, 1_000), path -> false);
+
+            var inspection = scanner.inspect(file, "nested.docx", docxMediaType());
+
+            assertThat(inspection.archiveBomb()).isTrue();
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void countsEntriesAcrossNestedArchives() throws Exception {
+        var nested = zipOf(new Entry("one", new byte[]{1}), new Entry("two", new byte[]{2}));
+        var file = Files.createTempFile("nested-entries-", ".docx");
+        try {
+            Files.write(file, validDocx(new Entry("word/embeddings/two.zip", nested)));
+            var scanner = new DefaultUploadSecurityScanner(
+                    new UploadPolicy(20_000, 5, 20_000, 1_000), path -> false);
+
+            var inspection = scanner.inspect(file, "nested.docx", docxMediaType());
+
+            assertThat(inspection.archiveBomb()).isTrue();
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void checksCompressionRatioPerEntryInsteadOfWholePackage() throws Exception {
+        var padding = new byte[8192];
+        new java.util.Random(7).nextBytes(padding);
+        var file = Files.createTempFile("ratio-bomb-", ".docx");
+        try {
+            Files.write(file, validDocx(
+                    new Entry("word/document.xml", new byte[4096]),
+                    new Entry("word/media/padding.bin", padding)));
+            var scanner = new DefaultUploadSecurityScanner(
+                    new UploadPolicy(50_000, 100, 50_000, 10), path -> false);
+
+            var inspection = scanner.inspect(file, "ratio.docx", docxMediaType());
+
+            assertThat(inspection.archiveBomb()).isTrue();
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
     void invokesMalwareScannerAndReportsVerdict() throws Exception {
         var file = Files.createTempFile("image-", ".png");
         try {
@@ -63,20 +170,63 @@ class DefaultUploadSecurityScannerTest {
     }
 
     private static byte[] docxWithDocument(byte[] content) throws Exception {
+        return validDocx(new Entry("word/document.xml", content));
+    }
+
+    private static byte[] validDocx(Entry... additionalEntries) throws Exception {
+        var entries = new java.util.ArrayList<Entry>();
+        entries.add(new Entry("[Content_Types].xml", docxContentTypes().getBytes(StandardCharsets.UTF_8)));
+        entries.add(new Entry("_rels/.rels", relationships("word/document.xml").getBytes(StandardCharsets.UTF_8)));
+        var hasDocument = java.util.Arrays.stream(additionalEntries)
+                .anyMatch(entry -> entry.name().equals("word/document.xml"));
+        if (!hasDocument) {
+            entries.add(new Entry("word/document.xml", "document".getBytes(StandardCharsets.UTF_8)));
+        }
+        entries.addAll(java.util.List.of(additionalEntries));
+        return zipOf(entries.toArray(Entry[]::new));
+    }
+
+    private static byte[] zipOf(Entry... entries) throws Exception {
         var output = new ByteArrayOutputStream();
         try (var zip = new ZipOutputStream(output)) {
-            zip.putNextEntry(new ZipEntry("[Content_Types].xml"));
-            zip.write("types".getBytes(StandardCharsets.UTF_8));
-            zip.closeEntry();
-            zip.putNextEntry(new ZipEntry("word/document.xml"));
-            zip.write(content);
-            zip.closeEntry();
+            for (var entry : entries) {
+                zip.putNextEntry(new ZipEntry(entry.name()));
+                zip.write(entry.content());
+                zip.closeEntry();
+            }
         }
         return output.toByteArray();
+    }
+
+    private static String docxContentTypes() {
+        return "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+                + "<Override PartName=\"/word/document.xml\" ContentType=\"" + docxMainType()
+                + "\"/></Types>";
+    }
+
+    private static String ambiguousContentTypes() {
+        return "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+                + "<Override PartName=\"/word/document.xml\" ContentType=\"" + docxMainType() + "\"/>"
+                + "<Override PartName=\"/xl/workbook.xml\" ContentType=\""
+                + "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/></Types>";
+    }
+
+    private static String relationships(String target) {
+        return "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+                + "<Relationship Id=\"rId1\" Type=\""
+                + "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+                + "\" Target=\"" + target + "\"/></Relationships>";
+    }
+
+    private static String docxMainType() {
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
     }
 
     private static MediaType docxMediaType() {
         return MediaType.parseMediaType(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+    }
+
+    private record Entry(String name, byte[] content) {
     }
 }

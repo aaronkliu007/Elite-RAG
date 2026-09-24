@@ -27,4 +27,20 @@ class SpooledUploadTest {
             Files.deleteIfExists(nonEmptyDirectory);
         }
     }
+
+    @Test
+    void securityExceptionDuringCleanupDoesNotChangeBusinessResult() {
+        var logger = Logger.getLogger(SpooledUpload.class.getName());
+        var previousLevel = logger.getLevel();
+        try {
+            logger.setLevel(Level.OFF);
+            var upload = new SpooledUpload(
+                    java.nio.file.Path.of("quarantine.bin"), 1, "sha",
+                    path -> { throw new SecurityException("denied"); });
+
+            assertThatCode(upload::close).doesNotThrowAnyException();
+        } finally {
+            logger.setLevel(previousLevel);
+        }
+    }
 }
