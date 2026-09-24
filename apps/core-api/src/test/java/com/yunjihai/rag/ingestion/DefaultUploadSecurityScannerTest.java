@@ -100,6 +100,54 @@ class DefaultUploadSecurityScannerTest {
     }
 
     @Test
+    void rejectsWrongOpcNamespaceAndForgedRelationshipType() throws Exception {
+        var wrongNamespace = Files.createTempFile("wrong-namespace-", ".docx");
+        var forgedRelationship = Files.createTempFile("forged-relationship-", ".docx");
+        try {
+            Files.write(wrongNamespace, zipOf(
+                    new Entry("[Content_Types].xml", contentTypes(
+                            "https://attacker.invalid/content-types", docxMainType()).getBytes(StandardCharsets.UTF_8)),
+                    new Entry("_rels/.rels", relationships("word/document.xml").getBytes(StandardCharsets.UTF_8)),
+                    new Entry("word/document.xml", "document".getBytes(StandardCharsets.UTF_8))));
+            Files.write(forgedRelationship, zipOf(
+                    new Entry("[Content_Types].xml", docxContentTypes().getBytes(StandardCharsets.UTF_8)),
+                    new Entry("_rels/.rels", relationships(
+                            "word/document.xml", "https://attacker.invalid/officeDocument")
+                            .getBytes(StandardCharsets.UTF_8)),
+                    new Entry("word/document.xml", "document".getBytes(StandardCharsets.UTF_8))));
+            var scanner = new DefaultUploadSecurityScanner(UploadPolicy.defaults(), path -> false);
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> scanner.inspect(wrongNamespace, "a.docx", docxMediaType()))
+                    .isInstanceOf(UploadRejectedException.class);
+            assertThat(scanner.inspect(forgedRelationship, "b.docx", docxMediaType()).detectedMediaType())
+                    .isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
+        } finally {
+            Files.deleteIfExists(wrongNamespace);
+            Files.deleteIfExists(forgedRelationship);
+        }
+    }
+
+    @Test
+    void rejectsNormalizedDuplicateCriticalEntries() throws Exception {
+        var file = Files.createTempFile("duplicate-opc-", ".docx");
+        try {
+            Files.write(file, zipOf(
+                    new Entry("[Content_Types].xml", docxContentTypes().getBytes(StandardCharsets.UTF_8)),
+                    new Entry("./[Content_Types].xml", docxContentTypes().getBytes(StandardCharsets.UTF_8)),
+                    new Entry("_rels/.rels", relationships("word/document.xml").getBytes(StandardCharsets.UTF_8)),
+                    new Entry("word/document.xml", "document".getBytes(StandardCharsets.UTF_8))));
+            var scanner = new DefaultUploadSecurityScanner(UploadPolicy.defaults(), path -> false);
+
+            var inspection = scanner.inspect(file, "duplicate.docx", docxMediaType());
+
+            assertThat(inspection.detectedMediaType()).isEqualTo(MediaType.APPLICATION_OCTET_STREAM);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
     void detectsNestedArchiveBombWithSharedExpansionBudget() throws Exception {
         var nested = zipOf(new Entry("payload.txt", new byte[4096]));
         var file = Files.createTempFile("nested-bomb-", ".docx");
@@ -107,6 +155,24 @@ class DefaultUploadSecurityScannerTest {
             Files.write(file, validDocx(new Entry("word/embeddings/evil.zip", nested)));
             var scanner = new DefaultUploadSecurityScanner(
                     new UploadPolicy(20_000, 100, 2048, 1_000), path -> false);
+
+            var inspection = scanner.inspect(file, "nested.docx", docxMediaType());
+
+            assertThat(inspection.archiveBomb()).isTrue();
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void countsTrailingBytesAfterNestedZipEndRecord() throws Exception {
+        var nested = zipOf(new Entry("small.txt", "small".getBytes(StandardCharsets.UTF_8)));
+        var nestedWithTrailingBytes = java.util.Arrays.copyOf(nested, nested.length + 8192);
+        var file = Files.createTempFile("nested-trailing-bomb-", ".docx");
+        try {
+            Files.write(file, validDocx(new Entry("word/embeddings/trailing.zip", nestedWithTrailingBytes)));
+            var scanner = new DefaultUploadSecurityScanner(
+                    new UploadPolicy(30_000, 100, 4096, 1_000), path -> false);
 
             var inspection = scanner.inspect(file, "nested.docx", docxMediaType());
 
@@ -199,9 +265,12 @@ class DefaultUploadSecurityScannerTest {
     }
 
     private static String docxContentTypes() {
-        return "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
-                + "<Override PartName=\"/word/document.xml\" ContentType=\"" + docxMainType()
-                + "\"/></Types>";
+        return contentTypes("http://schemas.openxmlformats.org/package/2006/content-types", docxMainType());
+    }
+
+    private static String contentTypes(String namespace, String mainType) {
+        return "<Types xmlns=\"" + namespace + "\">"
+                + "<Override PartName=\"/word/document.xml\" ContentType=\"" + mainType + "\"/></Types>";
     }
 
     private static String ambiguousContentTypes() {
@@ -212,9 +281,14 @@ class DefaultUploadSecurityScannerTest {
     }
 
     private static String relationships(String target) {
+        return relationships(
+                target,
+                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument");
+    }
+
+    private static String relationships(String target, String type) {
         return "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
-                + "<Relationship Id=\"rId1\" Type=\""
-                + "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+                + "<Relationship Id=\"rId1\" Type=\"" + type
                 + "\" Target=\"" + target + "\"/></Relationships>";
     }
 

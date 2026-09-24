@@ -40,6 +40,13 @@ public final class DefaultUploadSecurityScanner implements UploadSecurityScanner
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml";
     private static final String PPTX_MAIN =
             "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml";
+    private static final String CONTENT_TYPES_NAMESPACE =
+            "http://schemas.openxmlformats.org/package/2006/content-types";
+    private static final String RELATIONSHIPS_NAMESPACE =
+            "http://schemas.openxmlformats.org/package/2006/relationships";
+    private static final Set<String> OFFICE_DOCUMENT_RELATIONSHIP_TYPES = Set.of(
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument",
+            "http://purl.oclc.org/ooxml/officeDocument/relationships/officeDocument");
     private static final int MAX_NESTED_ARCHIVE_DEPTH = 3;
     private static final int MAX_OPC_METADATA_BYTES = 1024 * 1024;
     private static final byte[] PDF_ENCRYPT = "/Encrypt".getBytes(StandardCharsets.ISO_8859_1);
@@ -110,7 +117,7 @@ public final class DefaultUploadSecurityScanner implements UploadSecurityScanner
                 budget.addEntry();
                 var name = entry.getName();
                 if (capturePackageMetadata) {
-                    packageInfo.observeEntry(name);
+                    name = packageInfo.observeEntry(name);
                 }
                 var entryExpanded = inspectEntry(
                         zip, depth, budget, packageInfo, capturePackageMetadata, name);
@@ -151,7 +158,13 @@ public final class DefaultUploadSecurityScanner implements UploadSecurityScanner
                     new ByteArrayInputStream(prefix), new NonClosingInputStream(zip));
             var countingSource = new CountingInputStream(nestedSource);
             inspectZip(countingSource, depth + 1, budget, packageInfo, false);
-            budget.addExpanded(Math.max(0, countingSource.count() - prefix.length));
+            var accounted = Math.max(0, countingSource.count() - prefix.length);
+            budget.addExpanded(accounted);
+            var buffer = new byte[8192];
+            int read;
+            while (!budget.bomb && (read = countingSource.read(buffer)) != -1) {
+                budget.addExpanded(read);
+            }
             return countingSource.count();
         }
 
@@ -270,50 +283,70 @@ public final class DefaultUploadSecurityScanner implements UploadSecurityScanner
         private boolean powerPointMainPresent;
         private final Map<String, String> contentTypes = new HashMap<>();
         private final Set<String> officeDocumentTargets = new HashSet<>();
+        private final Set<String> criticalEntries = new HashSet<>();
+        private boolean structureInvalid;
 
-        private void observeEntry(String name) {
+        private String observeEntry(String rawName) {
+            var name = normalizeEntryName(rawName);
+            if (name == null) {
+                structureInvalid = true;
+                return rawName;
+            }
+            if (isCriticalEntry(name) && !criticalEntries.add(name)) {
+                structureInvalid = true;
+            }
             contentTypesPresent |= name.equals("[Content_Types].xml");
             relationshipsPresent |= name.equals("_rels/.rels");
             wordMainPresent |= name.equals("word/document.xml");
             excelMainPresent |= name.equals("xl/workbook.xml");
             powerPointMainPresent |= name.equals("ppt/presentation.xml");
+            return name;
         }
 
         private void observeMetadata(String name, byte[] value) throws IOException {
             var document = parseXml(value);
             if (name.equals("[Content_Types].xml")) {
-                if (!"Types".equals(document.getDocumentElement().getLocalName())) {
+                if (!"Types".equals(document.getDocumentElement().getLocalName())
+                        || !CONTENT_TYPES_NAMESPACE.equals(document.getDocumentElement().getNamespaceURI())) {
                     throw new IOException("OPC Content Types 根节点无效");
                 }
-                var overrides = document.getElementsByTagNameNS("*", "Override");
+                var overrides = document.getElementsByTagNameNS(CONTENT_TYPES_NAMESPACE, "Override");
                 for (var index = 0; index < overrides.getLength(); index++) {
                     var element = overrides.item(index);
                     var attributes = element.getAttributes();
                     var partName = attributes.getNamedItem("PartName");
                     var contentType = attributes.getNamedItem("ContentType");
                     if (partName != null && contentType != null) {
-                        contentTypes.put(partName.getNodeValue(), contentType.getNodeValue());
+                        var previous = contentTypes.putIfAbsent(partName.getNodeValue(), contentType.getNodeValue());
+                        structureInvalid |= previous != null;
                     }
                 }
             } else if (name.equals("_rels/.rels")) {
-                if (!"Relationships".equals(document.getDocumentElement().getLocalName())) {
+                if (!"Relationships".equals(document.getDocumentElement().getLocalName())
+                        || !RELATIONSHIPS_NAMESPACE.equals(document.getDocumentElement().getNamespaceURI())) {
                     throw new IOException("OPC Relationships 根节点无效");
                 }
-                var relationships = document.getElementsByTagNameNS("*", "Relationship");
+                var relationships = document.getElementsByTagNameNS(RELATIONSHIPS_NAMESPACE, "Relationship");
                 for (var index = 0; index < relationships.getLength(); index++) {
                     var element = relationships.item(index);
                     var attributes = element.getAttributes();
                     var type = attributes.getNamedItem("Type");
                     var target = attributes.getNamedItem("Target");
-                    if (type != null && target != null && type.getNodeValue().endsWith("/officeDocument")) {
-                        officeDocumentTargets.add(normalizeTarget(target.getNodeValue()));
+                    if (type != null && target != null
+                            && OFFICE_DOCUMENT_RELATIONSHIP_TYPES.contains(type.getNodeValue())) {
+                        var normalizedTarget = normalizeTarget(target.getNodeValue());
+                        if (normalizedTarget == null || !officeDocumentTargets.isEmpty()) {
+                            structureInvalid = true;
+                        } else {
+                            officeDocumentTargets.add(normalizedTarget);
+                        }
                     }
                 }
             }
         }
 
         private MediaType detectMediaType() {
-            if (!contentTypesPresent || !relationshipsPresent || officeDocumentTargets.isEmpty()) {
+            if (structureInvalid || !contentTypesPresent || !relationshipsPresent || officeDocumentTargets.isEmpty()) {
                 return MediaType.APPLICATION_OCTET_STREAM;
             }
             var presentMainParts = (wordMainPresent ? 1 : 0)
@@ -370,10 +403,43 @@ public final class DefaultUploadSecurityScanner implements UploadSecurityScanner
             }
         }
 
+        private static boolean isCriticalEntry(String name) {
+            return name.equals("[Content_Types].xml")
+                    || name.equals("_rels/.rels")
+                    || name.equals("word/document.xml")
+                    || name.equals("xl/workbook.xml")
+                    || name.equals("ppt/presentation.xml");
+        }
+
+        private static String normalizeEntryName(String name) {
+            if (name == null || name.isBlank() || name.startsWith("/") || name.indexOf('\\') >= 0) {
+                return null;
+            }
+            var normalized = new java.util.ArrayList<String>();
+            for (var segment : name.split("/")) {
+                if (segment.isEmpty() || segment.equals(".")) {
+                    continue;
+                }
+                if (segment.equals("..")) {
+                    return null;
+                }
+                normalized.add(segment);
+            }
+            return String.join("/", normalized);
+        }
+
         private static String normalizeTarget(String target) {
-            var normalized = target.replace('\\', '/');
+            if (target.indexOf('\\') >= 0) {
+                return null;
+            }
+            var normalized = target;
             while (normalized.startsWith("/")) {
                 normalized = normalized.substring(1);
+            }
+            for (var segment : normalized.split("/")) {
+                if (segment.equals("..") || segment.equals(".")) {
+                    return null;
+                }
             }
             return normalized;
         }

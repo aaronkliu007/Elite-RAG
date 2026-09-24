@@ -24,4 +24,37 @@ class StreamingUtf8InspectorTest {
             Files.deleteIfExists(file);
         }
     }
+
+    @Test
+    void handlesMultibyteCharacterAcrossBufferBoundaries() throws Exception {
+        var file = Files.createTempFile("utf8-boundary-", ".md");
+        try {
+            var prefix = "a".repeat(8191);
+            Files.writeString(file, prefix + "知" + "识");
+
+            assertThat(StreamingUtf8Inspector.isText(file)).isTrue();
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    void rejectsTruncatedInvalidAndNullBytes() throws Exception {
+        var truncated = Files.createTempFile("utf8-truncated-", ".md");
+        var invalid = Files.createTempFile("utf8-invalid-", ".md");
+        var nullByte = Files.createTempFile("utf8-null-", ".md");
+        try {
+            Files.write(truncated, new byte[]{'a', (byte) 0xE4, (byte) 0xB8});
+            Files.write(invalid, new byte[]{'a', (byte) 0x80});
+            Files.write(nullByte, new byte[]{'a', 0, 'b'});
+
+            assertThat(StreamingUtf8Inspector.isText(truncated)).isFalse();
+            assertThat(StreamingUtf8Inspector.isText(invalid)).isFalse();
+            assertThat(StreamingUtf8Inspector.isText(nullByte)).isFalse();
+        } finally {
+            Files.deleteIfExists(truncated);
+            Files.deleteIfExists(invalid);
+            Files.deleteIfExists(nullByte);
+        }
+    }
 }
