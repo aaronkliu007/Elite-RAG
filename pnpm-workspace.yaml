@@ -1,0 +1,4 @@
+packages:
+  - apps/web
+minimumReleaseAgeExclude:
+  - eslint-plugin-vue@10.11.1

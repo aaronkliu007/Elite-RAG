@@ -1,0 +1,61 @@
+name: 验证
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  java:
+    name: Java 核心服务
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: 运行 Java 测试
+        run: ./mvnw -B -pl apps/core-api test
+
+  web:
+    name: Vue 管理端
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: 启用 pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.22.0 --activate
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+      - name: 运行前端检查
+        run: |
+          pnpm --dir apps/web test --run
+          pnpm --dir apps/web build
+          pnpm --dir apps/web lint
+
+  python:
+    name: Python 文档解析 Worker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: '0.12.18'
+          python-version: '3.12'
+          working-directory: workers/document-parser
+          enable-cache: true
+      - name: 同步锁定环境
+        run: uv sync --project workers/document-parser --frozen
+      - name: 运行 Python 检查
+        run: |
+          uv run --project workers/document-parser pytest -W error
+          uv run --project workers/document-parser ruff check .
+          uv run --project workers/document-parser mypy workers/document-parser/src
