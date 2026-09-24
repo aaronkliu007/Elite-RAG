@@ -9,6 +9,8 @@ description = "云基华海企业级 RAG 无状态文档解析 Worker"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "fastapi==0.141.1",
+  "jsonschema==4.26.0",
+  "python-multipart==0.0.32",
   "uvicorn[standard]==0.53.0",
 ]
 
