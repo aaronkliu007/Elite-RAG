@@ -17,12 +17,25 @@ public record DocumentView(
         versions = List.copyOf(versions);
     }
 
-    public static DocumentView from(DocumentAggregate document) {
+    public static DocumentView published(DocumentAggregate document) {
+        var published = document.currentPublishedVersionId()
+                .map(document::version)
+                .stream()
+                .map(VersionView::from)
+                .toList();
+        return view(document, published);
+    }
+
+    public static DocumentView management(DocumentAggregate document) {
+        return view(document, document.versions().stream().map(VersionView::from).toList());
+    }
+
+    private static DocumentView view(DocumentAggregate document, List<VersionView> versions) {
         return new DocumentView(
                 document.id(),
                 document.spaceId(),
                 document.title(),
-                document.versions().stream().map(VersionView::from).toList(),
+                versions,
                 document.currentPublishedVersionId(),
                 document.archived());
     }

@@ -16,21 +16,25 @@ public class DocumentService {
     private final AccessDecisionService access;
     private final DocumentContentGateway content;
     private final AuthorizedDocumentQuery authorizedQuery;
+    private final KnowledgeWriteAuthorization writeAuthorization;
 
     public DocumentService(
             DocumentRepository repository,
             AccessDecisionService access,
             DocumentContentGateway content,
-            AuthorizedDocumentQuery authorizedQuery) {
+            AuthorizedDocumentQuery authorizedQuery,
+            KnowledgeWriteAuthorization writeAuthorization) {
         this.repository = Objects.requireNonNull(repository);
         this.access = Objects.requireNonNull(access);
         this.content = Objects.requireNonNull(content);
         this.authorizedQuery = Objects.requireNonNull(authorizedQuery);
+        this.writeAuthorization = Objects.requireNonNull(writeAuthorization);
     }
 
     @Transactional
     public DocumentAggregate createDraft(
             UUID spaceId, String title, String sourceBlobId, UUID actorId, Instant at) {
+        writeAuthorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.CREATE_DOCUMENT);
         var document = DocumentAggregate.create(spaceId, title, sourceBlobId, actorId, at);
         repository.insert(document);
         return document;
@@ -38,12 +42,14 @@ public class DocumentService {
 
     @Transactional
     public DocumentAggregate createNextDraft(UUID documentId, String sourceBlobId, UUID actorId, Instant at) {
-        return mutate(documentId, document -> document.appendDraft(sourceBlobId, actorId, at));
+        return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.EDIT_DOCUMENT,
+                document -> document.appendDraft(sourceBlobId, actorId, at));
     }
 
     @Transactional
     public DocumentAggregate submitForReview(UUID documentId, UUID versionId, UUID actorId, Instant at) {
-        return mutate(documentId, document -> document.submitForReview(versionId, actorId, at));
+        return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.REVIEW_DOCUMENT,
+                document -> document.submitForReview(versionId, actorId, at));
     }
 
     @Transactional
@@ -53,12 +59,14 @@ public class DocumentService {
 
     @Transactional
     public DocumentAggregate publish(UUID documentId, UUID versionId, UUID actorId, Instant at) {
-        return mutate(documentId, document -> document.publish(versionId, actorId, at));
+        return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
+                document -> document.publish(versionId, actorId, at));
     }
 
     @Transactional
     public DocumentAggregate archive(UUID documentId, UUID actorId, Instant at) {
-        return mutate(documentId, document -> document.archive(actorId, at));
+        return mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.ARCHIVE_DOCUMENT,
+                document -> document.archive(actorId, at));
     }
 
     @Transactional(readOnly = true)
@@ -90,6 +98,18 @@ public class DocumentService {
 
     private DocumentAggregate mutate(UUID documentId, UnaryOperator<DocumentAggregate> operation) {
         var current = findOrThrow(documentId);
+        var updated = operation.apply(current);
+        repository.replace(updated, current.revision());
+        return updated;
+    }
+
+    private DocumentAggregate mutateAuthorized(
+            UUID documentId,
+            UUID actorId,
+            KnowledgeWriteAuthorization.Action action,
+            UnaryOperator<DocumentAggregate> operation) {
+        var current = findOrHide(documentId);
+        writeAuthorization.require(actorId, current.spaceId(), current.id(), action);
         var updated = operation.apply(current);
         repository.replace(updated, current.revision());
         return updated;

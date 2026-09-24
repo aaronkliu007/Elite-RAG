@@ -31,6 +31,8 @@ class OrganizationSyncServiceTest {
         assertThat(organizationStore.lastSnapshot).isEqualTo(snapshot);
         assertThatThrownBy(() -> sessions.assertActive(oldSession))
                 .isInstanceOf(DisabledUserSessionException.class);
+        assertThatThrownBy(() -> sessions.issue("u-disabled"))
+                .isInstanceOf(DisabledUserSessionException.class);
     }
 
     @Test

@@ -9,6 +9,7 @@ public final class SessionRevocationService {
     }
 
     public AuthenticatedSession issue(String userExternalId) {
+        requireEnabled(userExternalId);
         return new AuthenticatedSession(userExternalId, store.currentVersion(userExternalId));
     }
 
@@ -16,8 +17,20 @@ public final class SessionRevocationService {
         store.advanceVersion(userExternalId);
     }
 
+    public void disable(String userExternalId) {
+        store.setEnabled(userExternalId, false);
+        store.advanceVersion(userExternalId);
+    }
+
     public void assertActive(AuthenticatedSession session) {
+        requireEnabled(session.userExternalId());
         if (store.currentVersion(session.userExternalId()) != session.version()) {
+            throw new DisabledUserSessionException();
+        }
+    }
+
+    private void requireEnabled(String userExternalId) {
+        if (!store.isEnabled(userExternalId)) {
             throw new DisabledUserSessionException();
         }
     }

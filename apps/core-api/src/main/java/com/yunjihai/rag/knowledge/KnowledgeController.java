@@ -33,11 +33,6 @@ public class KnowledgeController {
         this.documents = documents;
     }
 
-    KnowledgeController(DocumentService documents) {
-        this.spaces = null;
-        this.documents = documents;
-    }
-
     @PostMapping
     public KnowledgeSpace createSpace(Authentication authentication, @RequestBody CreateSpaceRequest request) {
         return spaces.createSpace(request.name(), userId(authentication), Instant.now());
@@ -48,14 +43,14 @@ public class KnowledgeController {
             Authentication authentication,
             @PathVariable UUID spaceId,
             @RequestBody CreateDraftRequest request) {
-        return DocumentView.from(documents.createDraft(
+        return DocumentView.management(documents.createDraft(
                 spaceId, request.title(), request.sourceBlobId(), userId(authentication), Instant.now()));
     }
 
     @GetMapping("/{spaceId}/documents")
     public List<DocumentView> listDocuments(Authentication authentication, @PathVariable UUID spaceId) {
         return documents.listAuthorizedDocuments(userId(authentication), spaceId, Instant.now()).stream()
-                .map(DocumentView::from)
+                .map(DocumentView::published)
                 .toList();
     }
 
@@ -65,7 +60,7 @@ public class KnowledgeController {
     }
 
     public DocumentView getDocument(UUID userId, UUID documentId, Instant at) {
-        return DocumentView.from(documents.getAuthorizedDocument(userId, documentId, at));
+        return DocumentView.published(documents.getAuthorizedDocument(userId, documentId, at));
     }
 
     @GetMapping("/documents/{documentId}/parsed-content")
@@ -89,20 +84,20 @@ public class KnowledgeController {
     @PostMapping("/documents/{documentId}/versions/{versionId}/submit-review")
     public DocumentView submitForReview(
             Authentication authentication, @PathVariable UUID documentId, @PathVariable UUID versionId) {
-        return DocumentView.from(documents.submitForReview(
+        return DocumentView.management(documents.submitForReview(
                 documentId, versionId, userId(authentication), Instant.now()));
     }
 
     @PostMapping("/documents/{documentId}/versions/{versionId}/publish")
     public DocumentView publish(
             Authentication authentication, @PathVariable UUID documentId, @PathVariable UUID versionId) {
-        return DocumentView.from(documents.publish(
+        return DocumentView.management(documents.publish(
                 documentId, versionId, userId(authentication), Instant.now()));
     }
 
     @PostMapping("/documents/{documentId}/archive")
     public DocumentView archive(Authentication authentication, @PathVariable UUID documentId) {
-        return DocumentView.from(documents.archive(documentId, userId(authentication), Instant.now()));
+        return DocumentView.management(documents.archive(documentId, userId(authentication), Instant.now()));
     }
 
     @ExceptionHandler({AccessDeniedAsNotFoundException.class, KnowledgeNotFoundException.class})

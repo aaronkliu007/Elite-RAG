@@ -15,6 +15,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.get;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.options;
+import static com.github.tomakehurst.wiremock.stubbing.Scenario.STARTED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -87,6 +88,26 @@ class DingTalkIdentityAdapterTest {
 
         assertThatThrownBy(() -> adapter(Duration.ofSeconds(1)).listDepartments())
                 .isInstanceOf(IncompleteOrganizationSnapshotException.class);
+    }
+
+    @Test
+    @DisplayName("分页游标重复时立即中止，避免无限循环")
+    void rejectsRepeatedPaginationCursor() {
+        wireMock.stubFor(post("/v1.0/oauth2/accessToken")
+                .willReturn(json("{\"accessToken\":\"app-token\"}")));
+        wireMock.stubFor(get(urlEqualTo("/v1.0/contact/departments?cursor=0&size=100"))
+                .inScenario("cursor-loop")
+                .whenScenarioStateIs(STARTED)
+                .willSetStateTo("repeated")
+                .willReturn(json("{\"items\":[],\"hasMore\":true,\"nextToken\":\"same\"}")));
+        wireMock.stubFor(get(urlEqualTo("/v1.0/contact/departments?cursor=same&size=100"))
+                .inScenario("cursor-loop")
+                .whenScenarioStateIs("repeated")
+                .willReturn(json("{\"items\":[],\"hasMore\":true,\"nextToken\":\"same\"}")));
+
+        assertThatThrownBy(() -> adapter(Duration.ofSeconds(1)).listDepartments())
+                .isInstanceOf(IncompleteOrganizationSnapshotException.class)
+                .hasMessageContaining("游标");
     }
 
     @Test

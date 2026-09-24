@@ -75,13 +75,30 @@ class DocumentLifecycleTest {
         assertThat(document.version(firstVersionId).status()).isEqualTo(DocumentStatus.PUBLISHED);
     }
 
+    @Test
+    @DisplayName("没有空间写权限时不得创建或改变文档")
+    void deniesEveryMutationBeforeRepositoryWrite() {
+        var repository = new InMemoryDocumentRepository();
+        var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
+        var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> membership),
+                (spaceId, documentId, refs, at) -> Optional.empty());
+        var service = new DocumentService(
+                repository, access, DocumentContentGateway.unavailable(),
+                (userId, spaceId, at) -> List.of(), KnowledgeWriteAuthorization.denyAll());
+
+        assertThatThrownBy(() -> service.createDraft(
+                SPACE_ID, "越权文档", "blob", ACTOR_ID, NOW))
+                .isInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
+        assertThat(repository.values).isEmpty();
+    }
+
     private static DocumentService service(DocumentRepository repository) {
         var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
         var principals = new EffectivePrincipalSet(userId -> membership);
         var access = new AccessDecisionService(principals, (spaceId, documentId, refs, at) ->
                 Optional.of(new AccessSnapshot(true, false, false, PublicationState.PUBLISHED, null)));
         return new DocumentService(repository, access, DocumentContentGateway.unavailable(),
-                (userId, spaceId, at) -> List.of());
+                (userId, spaceId, at) -> List.of(), KnowledgeWriteAuthorization.allowAll());
     }
 
     static final class InMemoryDocumentRepository implements DocumentRepository {

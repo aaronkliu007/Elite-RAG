@@ -50,6 +50,10 @@ class KnowledgeAuthorizationTest {
         var source = fixture.controller.downloadSource(USER_ID, fixture.documentId, NOW);
 
         assertThat(view.currentPublishedVersionId()).isPresent();
+        assertThat(view.versions())
+                .singleElement()
+                .extracting(DocumentView.VersionView::status)
+                .isEqualTo(DocumentStatus.PUBLISHED);
         assertThat(Arrays.stream(DocumentView.VersionView.class.getRecordComponents())
                 .map(component -> component.getName()))
                 .doesNotContain("sourceBlobId");
@@ -65,13 +69,17 @@ class KnowledgeAuthorizationTest {
         var access = new AccessDecisionService(principals, (spaceId, documentId, refs, at) ->
                 Optional.of(new AccessSnapshot(granted, false, false, PublicationState.PUBLISHED, null)));
         var content = new RecordingContentGateway();
-        var service = new DocumentService(repository, access, content, (userId, spaceId, at) -> List.of());
+        var service = new DocumentService(
+                repository, access, content, (userId, spaceId, at) -> List.of(),
+                KnowledgeWriteAuthorization.allowAll());
         var document = service.createDraft(SPACE_ID, "已发布制度", "blob-v1", USER_ID, NOW.minusSeconds(10));
         var versionId = document.latestVersion().id();
         service.submitForReview(document.id(), versionId, USER_ID, NOW.minusSeconds(9));
         service.markParsingSucceeded(document.id(), versionId, NOW.minusSeconds(8));
         service.publish(document.id(), versionId, USER_ID, NOW.minusSeconds(7));
-        return new Fixture(new KnowledgeController(service), document.id(), content);
+        service.createNextDraft(document.id(), "blob-v2-secret", USER_ID, NOW.minusSeconds(6));
+        var spaces = new KnowledgeSpaceService(space -> { }, KnowledgeWriteAuthorization.allowAll());
+        return new Fixture(new KnowledgeController(spaces, service), document.id(), content);
     }
 
     private record Fixture(KnowledgeController controller, UUID documentId, RecordingContentGateway contentGateway) {

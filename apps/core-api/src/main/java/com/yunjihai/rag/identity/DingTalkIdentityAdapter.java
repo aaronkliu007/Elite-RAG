@@ -14,6 +14,7 @@ import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,7 +64,9 @@ public final class DingTalkIdentityAdapter implements DingTalkClient {
         var token = applicationAccessToken();
         var result = new ArrayList<ExternalDepartment>();
         var cursor = "0";
-        while (true) {
+        var seenCursors = new HashSet<String>();
+        seenCursors.add(cursor);
+        for (var pageNumber = 0; pageNumber < 1_000; pageNumber++) {
             var page = get("/v1.0/contact/departments?cursor=" + encode(cursor) + "&size=" + PAGE_SIZE, token);
             for (var item : requiredArray(page, "items")) {
                 result.add(new ExternalDepartment(
@@ -75,7 +78,11 @@ public final class DingTalkIdentityAdapter implements DingTalkClient {
             if (cursor == null) {
                 return List.copyOf(result);
             }
+            if (!seenCursors.add(cursor)) {
+                throw new IncompleteOrganizationSnapshotException("钉钉分页游标重复");
+            }
         }
+        throw new IncompleteOrganizationSnapshotException("钉钉组织分页超过安全上限");
     }
 
     @Override
@@ -86,7 +93,9 @@ public final class DingTalkIdentityAdapter implements DingTalkClient {
         var token = applicationAccessToken();
         var result = new ArrayList<ExternalUser>();
         var cursor = "0";
-        while (true) {
+        var seenCursors = new HashSet<String>();
+        seenCursors.add(cursor);
+        for (var pageNumber = 0; pageNumber < 1_000; pageNumber++) {
             var path = "/v1.0/contact/users?departmentId=" + encode(departmentExternalId)
                     + "&cursor=" + encode(cursor) + "&size=" + PAGE_SIZE;
             var page = get(path, token);
@@ -101,7 +110,11 @@ public final class DingTalkIdentityAdapter implements DingTalkClient {
             if (cursor == null) {
                 return List.copyOf(result);
             }
+            if (!seenCursors.add(cursor)) {
+                throw new IncompleteOrganizationSnapshotException("钉钉分页游标重复");
+            }
         }
+        throw new IncompleteOrganizationSnapshotException("钉钉用户分页超过安全上限");
     }
 
     private String applicationAccessToken() {

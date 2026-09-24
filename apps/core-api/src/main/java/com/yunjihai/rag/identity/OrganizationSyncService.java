@@ -21,7 +21,7 @@ public class OrganizationSyncService {
     public void synchronize(OrganizationSnapshot snapshot) {
         validate(snapshot);
         var result = organizationStore.reconcile(snapshot);
-        result.disabledOrRemovedUserIds().forEach(sessions::revokeAll);
+        result.disabledOrRemovedUserIds().forEach(sessions::disable);
     }
 
     private static void validate(OrganizationSnapshot snapshot) {
