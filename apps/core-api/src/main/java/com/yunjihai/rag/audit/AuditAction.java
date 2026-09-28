@@ -8,6 +8,7 @@ public enum AuditAction {
     PUBLISH,
     ARCHIVE,
     ACL_CHANGE,
+    RETRIEVE,
     VIEW,
     DOWNLOAD
 }

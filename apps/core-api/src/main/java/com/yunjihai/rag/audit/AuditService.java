@@ -21,7 +21,16 @@ public class AuditService implements AuditSink {
             "permissionScope",
             "targetPrincipalType",
             "targetPrincipalId",
-            "source");
+            "source",
+            "requestId",
+            "queryHash",
+            "lexicalCount",
+            "vectorCount",
+            "fusedCount",
+            "reauthorizedCount",
+            "selectedCount",
+            "degradationReasons",
+            "durationMs");
 
     private final AuditEventStore store;
     private final Clock clock;

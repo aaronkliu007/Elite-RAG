@@ -66,6 +66,34 @@ class AuditServiceTest {
     }
 
     @Test
+    void acceptsStructuredRetrievalMetadataWithoutBodyFields() {
+        var events = new ArrayList<AuditEvent>();
+        var service = new AuditService(events::add, Clock.fixed(NOW, ZoneOffset.UTC));
+        var metadata = Map.ofEntries(
+                Map.entry("requestId", RESOURCE_ID.toString()),
+                Map.entry("spaceId", RESOURCE_ID.toString()),
+                Map.entry("queryHash", "a".repeat(64)),
+                Map.entry("lexicalCount", "10"),
+                Map.entry("vectorCount", "9"),
+                Map.entry("fusedCount", "12"),
+                Map.entry("reauthorizedCount", "8"),
+                Map.entry("selectedCount", "8"),
+                Map.entry("degradationReasons", "VECTOR_UNAVAILABLE"),
+                Map.entry("durationMs", "42"));
+
+        service.record(new AuditCommand(
+                ACTOR_ID,
+                AuditAction.RETRIEVE,
+                "RETRIEVAL",
+                RESOURCE_ID,
+                AuditOutcome.SUCCEEDED,
+                metadata));
+
+        assertThat(events).singleElement()
+                .satisfies(event -> assertThat(event.metadata()).containsExactlyInAnyOrderEntriesOf(metadata));
+    }
+
+    @Test
     void auditServiceCanBeProxiedAndRunsInsideTransaction() {
         try (var context = new AnnotationConfigApplicationContext(TransactionConfig.class)) {
             var service = context.getBean(AuditService.class);

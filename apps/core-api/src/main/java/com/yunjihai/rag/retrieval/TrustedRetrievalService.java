@@ -1,0 +1,280 @@
+package com.yunjihai.rag.retrieval;
+
+import com.yunjihai.rag.access.PrincipalRef;
+import com.yunjihai.rag.access.PrincipalType;
+import com.yunjihai.rag.audit.AuditAction;
+import com.yunjihai.rag.audit.AuditCommand;
+import com.yunjihai.rag.audit.AuditOutcome;
+import com.yunjihai.rag.audit.AuditSink;
+import com.yunjihai.rag.knowledge.DocumentVersionRef;
+import com.yunjihai.rag.retrieval.domain.DegradationReason;
+import com.yunjihai.rag.retrieval.domain.Evidence;
+import com.yunjihai.rag.retrieval.domain.EvidencePack;
+import com.yunjihai.rag.retrieval.domain.RetrievalContext;
+import com.yunjihai.rag.retrieval.domain.RetrievalFilter;
+import com.yunjihai.rag.retrieval.domain.RetrievalPolicy;
+import com.yunjihai.rag.retrieval.domain.RetrievalQuery;
+import com.yunjihai.rag.retrieval.domain.RetrievalStats;
+import com.yunjihai.rag.retrieval.domain.ScoredCandidate;
+import com.yunjihai.rag.retrieval.search.HybridRecallService;
+import com.yunjihai.rag.retrieval.selection.EvidenceSelectionService;
+import com.yunjihai.rag.retrieval.selection.RerankingService;
+import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.HexFormat;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+public final class TrustedRetrievalService implements RetrievalService {
+
+    private final PrincipalResolverPort principalResolver;
+    private final HybridRecallService recallService;
+    private final RerankingService rerankingService;
+    private final RetrievalAuthorizationPort authorization;
+    private final EvidenceSelectionService selectionService;
+    private final EvidenceIdFactory evidenceIdFactory;
+    private final RetrievalPolicy policy;
+    private final Clock clock;
+    private final AuditSink auditSink;
+
+    public TrustedRetrievalService(
+            PrincipalResolverPort principalResolver,
+            HybridRecallService recallService,
+            RerankingService rerankingService,
+            RetrievalAuthorizationPort authorization,
+            EvidenceSelectionService selectionService,
+            EvidenceIdFactory evidenceIdFactory,
+            RetrievalPolicy policy,
+            Clock clock,
+            AuditSink auditSink) {
+        this.principalResolver = Objects.requireNonNull(principalResolver);
+        this.recallService = Objects.requireNonNull(recallService);
+        this.rerankingService = Objects.requireNonNull(rerankingService);
+        this.authorization = Objects.requireNonNull(authorization);
+        this.selectionService = Objects.requireNonNull(selectionService);
+        this.evidenceIdFactory = Objects.requireNonNull(evidenceIdFactory);
+        this.policy = Objects.requireNonNull(policy);
+        this.clock = Objects.requireNonNull(clock);
+        this.auditSink = Objects.requireNonNull(auditSink);
+    }
+
+    @Override
+    public EvidencePack retrieve(RetrievalQuery query) {
+        Objects.requireNonNull(query, "query must not be null");
+        Instant startedAt = clock.instant();
+        var progress = new Progress();
+        final EvidencePack result;
+        try {
+            result = retrieveTrusted(query, startedAt, progress);
+        } catch (RuntimeException failure) {
+            try {
+                recordAudit(
+                        query,
+                        AuditOutcome.FAILED,
+                        progress.stats(),
+                        progress.reasons,
+                        startedAt,
+                        clock.instant());
+            } catch (RuntimeException auditFailure) {
+                failure.addSuppressed(auditFailure);
+            }
+            throw failure;
+        }
+        recordAudit(
+                query,
+                AuditOutcome.SUCCEEDED,
+                result.stats(),
+                result.degradationReasons(),
+                startedAt,
+                result.completedAt());
+        return result;
+    }
+
+    private EvidencePack retrieveTrusted(
+            RetrievalQuery query,
+            Instant startedAt,
+            Progress progress) {
+        if (query.requestedEvidenceCount() < policy.minEvidenceCount()
+                || query.requestedEvidenceCount() > policy.maxEvidenceCount()) {
+            throw new IllegalArgumentException("requested evidence count is outside policy");
+        }
+        var context = new RetrievalContext(
+                startedAt,
+                resolvePrincipals(query, startedAt));
+        var filter = new RetrievalFilter(
+                query.spaceId(),
+                context.effectivePrincipals(),
+                true,
+                context.startedAt(),
+                query.metadataFilter());
+        var recalled = recallService.recall(query.queryText(), filter);
+        progress.lexicalCount = recalled.lexicalCount();
+        progress.vectorCount = recalled.vectorCount();
+        progress.fusedCount = recalled.candidates().size();
+        progress.reasons.addAll(recalled.degradationReasons());
+        var reranked = rerankingService.rerank(query.queryText(), recalled.candidates());
+        progress.reasons.addAll(reranked.degradationReasons());
+        Instant checkedAt = clock.instant();
+        var requestedVersions = documentVersions(reranked.candidates());
+        var allowedVersions = authorize(query, requestedVersions, checkedAt);
+        var authorizedCandidates = reranked.candidates().stream()
+                .filter(candidate -> allowedVersions.contains(new DocumentVersionRef(
+                        candidate.candidate().documentId(), candidate.candidate().versionId())))
+                .toList();
+        progress.reauthorizedCount = authorizedCandidates.size();
+        var selected = selectionService.select(
+                authorizedCandidates, query.requestedEvidenceCount());
+        progress.selectedCount = selected.size();
+        Instant completedAt = clock.instant();
+        var evidence = toEvidence(selected, completedAt);
+        var stats = progress.stats();
+        return new EvidencePack(
+                query.requestId(),
+                evidence,
+                !progress.reasons.isEmpty(),
+                progress.reasons,
+                stats,
+                completedAt);
+    }
+
+    private Set<PrincipalRef> resolvePrincipals(RetrievalQuery query, Instant startedAt) {
+        final Set<PrincipalRef> resolved;
+        try {
+            var raw = principalResolver.resolve(query.userId(), startedAt);
+            resolved = Set.copyOf(Objects.requireNonNull(raw));
+        } catch (RuntimeException exception) {
+            throw new RetrievalAuthorizationUnavailableException(
+                    "current principals are unavailable");
+        }
+        var userPrincipal = new PrincipalRef(PrincipalType.USER, query.userId());
+        if (resolved.isEmpty() || !resolved.contains(userPrincipal)) {
+            throw new RetrievalAuthorizationUnavailableException(
+                    "current principals are unavailable");
+        }
+        return resolved;
+    }
+
+    private Set<DocumentVersionRef> authorize(
+            RetrievalQuery query,
+            Set<DocumentVersionRef> requestedVersions,
+            Instant checkedAt) {
+        final Set<DocumentVersionRef> allowed;
+        try {
+            var raw = authorization.authorize(
+                    query.userId(), query.spaceId(), requestedVersions, checkedAt);
+            allowed = Set.copyOf(Objects.requireNonNull(raw));
+        } catch (RuntimeException exception) {
+            throw new RetrievalAuthorizationUnavailableException(
+                    "current authorization is unavailable");
+        }
+        if (!requestedVersions.containsAll(allowed)) {
+            throw new RetrievalAuthorizationUnavailableException(
+                    "current authorization is unavailable");
+        }
+        return allowed;
+    }
+
+    private static Set<DocumentVersionRef> documentVersions(List<ScoredCandidate> candidates) {
+        var versions = new LinkedHashSet<DocumentVersionRef>();
+        candidates.forEach(candidate -> versions.add(new DocumentVersionRef(
+                candidate.candidate().documentId(), candidate.candidate().versionId())));
+        return Set.copyOf(versions);
+    }
+
+    private List<Evidence> toEvidence(List<ScoredCandidate> candidates, Instant completedAt) {
+        var evidence = new ArrayList<Evidence>(candidates.size());
+        for (var scored : candidates) {
+            var candidate = scored.candidate();
+            evidence.add(new Evidence(
+                    evidenceIdFactory.next(completedAt),
+                    candidate.documentId(),
+                    candidate.versionId(),
+                    candidate.nodeId(),
+                    candidate.title(),
+                    truncate(candidate.text(), 1200),
+                    scored.score(),
+                    candidate.locator()));
+        }
+        return List.copyOf(evidence);
+    }
+
+    private static String truncate(String value, int maxCodePoints) {
+        int codePoints = value.codePointCount(0, value.length());
+        if (codePoints <= maxCodePoints) {
+            return value;
+        }
+        return value.substring(0, value.offsetByCodePoints(0, maxCodePoints));
+    }
+
+    private void recordAudit(
+            RetrievalQuery query,
+            AuditOutcome outcome,
+            RetrievalStats stats,
+            Set<DegradationReason> reasons,
+            Instant startedAt,
+            Instant finishedAt) {
+        long durationMs = Math.max(0, Duration.between(startedAt, finishedAt).toMillis());
+        var degradationReasons = reasons.stream()
+                .map(Enum::name)
+                .sorted()
+                .toList();
+        var metadata = Map.ofEntries(
+                Map.entry("requestId", query.requestId().toString()),
+                Map.entry("spaceId", query.spaceId().toString()),
+                Map.entry("queryHash", sha256(query.queryText())),
+                Map.entry("lexicalCount", Integer.toString(stats.lexicalCount())),
+                Map.entry("vectorCount", Integer.toString(stats.vectorCount())),
+                Map.entry("fusedCount", Integer.toString(stats.fusedCount())),
+                Map.entry("reauthorizedCount", Integer.toString(stats.reauthorizedCount())),
+                Map.entry("selectedCount", Integer.toString(stats.selectedCount())),
+                Map.entry("degradationReasons", String.join(",", degradationReasons)),
+                Map.entry("durationMs", Long.toString(durationMs)));
+        auditSink.record(new AuditCommand(
+                query.userId(),
+                AuditAction.RETRIEVE,
+                "RETRIEVAL",
+                query.requestId(),
+                outcome,
+                metadata));
+    }
+
+    private static String sha256(String value) {
+        try {
+            var digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 is unavailable");
+        }
+    }
+
+    private static final class Progress {
+        private int lexicalCount;
+        private int vectorCount;
+        private int fusedCount;
+        private int reauthorizedCount;
+        private int selectedCount;
+        private final EnumSet<DegradationReason> reasons =
+                EnumSet.noneOf(DegradationReason.class);
+
+        private RetrievalStats stats() {
+            return new RetrievalStats(
+                    lexicalCount,
+                    vectorCount,
+                    fusedCount,
+                    reauthorizedCount,
+                    selectedCount);
+        }
+    }
+}
