@@ -34,7 +34,7 @@
 
 ---
 
-### 任务 1：需求、大纲和方案聚合契约
+### Task 1 / 任务 1：需求、大纲和方案聚合契约
 
 **文件：**
 
@@ -116,7 +116,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/solution/domain apps/core-a
 git commit -m "feat: add versioned solution aggregate"
 ```
 
-### 任务 2：声明、引用支持性与风险规则
+### Task 2 / 任务 2：声明、引用支持性与风险规则
 
 **文件：**
 
@@ -177,7 +177,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/solution/domain apps/core-a
 git commit -m "feat: verify solution claims and risks"
 ```
 
-### 任务 3：模型契约、章节版本与生成尝试状态机
+### Task 3 / 任务 3：模型契约、章节版本与生成尝试状态机
 
 **文件：**
 
@@ -250,7 +250,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/solution/model apps/core-ap
 git commit -m "feat: define governed solution generation contracts"
 ```
 
-### 任务 4：需求、大纲和人工确认应用服务
+### Task 4 / 任务 4：需求、大纲和人工确认应用服务
 
 **文件：**
 
@@ -325,7 +325,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/solution apps/core-api/src/
 git commit -m "feat: govern solution requirements and outlines"
 ```
 
-### 任务 5：幂等分章检索、生成、核验与采纳
+### Task 5 / 任务 5：幂等分章检索、生成、核验与采纳
 
 **文件：**
 
@@ -417,7 +417,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/solution apps/core-api/src/
 git commit -m "feat: generate idempotent cited solution sections"
 ```
 
-### 任务 6：风险确认、Evidence 复核与不可变定稿
+### Task 6 / 任务 6：风险确认、Evidence 复核与不可变定稿
 
 **文件：**
 
@@ -507,7 +507,7 @@ git add apps/core-api/src/main/java/com/yunjihai/rag/solution apps/core-api/src/
 git commit -m "feat: finalize authorized reviewed solutions"
 ```
 
-### 任务 7：内存纵向验收、运行手册与阶段边界
+### Task 7 / 任务 7：内存纵向验收、运行手册与阶段边界
 
 **文件：**
 
