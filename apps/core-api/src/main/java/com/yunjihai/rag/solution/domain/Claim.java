@@ -17,4 +17,12 @@ public record Claim(
         evidenceIds = Set.copyOf(Objects.requireNonNull(evidenceIds, "evidenceIds"));
         riskTypes = Set.copyOf(Objects.requireNonNull(riskTypes, "riskTypes"));
     }
+
+    @Override
+    public String toString() {
+        return "Claim[claimId=" + claimId
+                + ", factual=" + factual
+                + ", evidenceCount=" + evidenceIds.size()
+                + ", riskTypes=" + riskTypes + "]";
+    }
 }
