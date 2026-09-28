@@ -149,7 +149,19 @@ final class InMemorySolutionWorkbenchScenario {
                 .toList());
         var generation = new SectionGenerationService(
                 solutions, requirements, outlines, sections, attempts,
-                authorization, retrieval, model, verification, GenerationPolicy.defaults());
+                authorization, retrieval, model, verification, GenerationPolicy.defaults(),
+                (key, attemptId, version, succeeded, expectedAttemptRevision) -> {
+                    var current = solutions.findById(key.solutionId()).orElseThrow();
+                    if (!current.currentRequirementVersionId().equals(key.requirementVersionId())
+                            || !current.currentOutlineVersionId().equals(Optional.of(key.outlineVersionId()))
+                            || !Optional.ofNullable(current.adoptedSectionVersionIds().get(key.sectionId()))
+                            .equals(key.baselineSectionVersionId())) {
+                        return false;
+                    }
+                    sections.insertForAttempt(attemptId, version);
+                    attempts.replace(succeeded, expectedAttemptRevision);
+                    return true;
+                }, audit);
 
         var insufficient = generation.generate(command(
                 OPTIONAL_SECTION_ID, id(60), id(61), id(70), "optional-empty", NOW.plusSeconds(4)));
@@ -382,8 +394,11 @@ final class InMemorySolutionWorkbenchScenario {
         }
 
         @Override
-        public GenerationAttempt insertIfAbsent(GenerationAttempt attempt) {
-            return values.computeIfAbsent(attempt.key().clientKey(), ignored -> attempt);
+        public com.yunjihai.rag.solution.generation.GenerationAttemptRegistration register(
+                GenerationAttempt attempt) {
+            var existing = values.putIfAbsent(attempt.key().clientKey(), attempt);
+            return new com.yunjihai.rag.solution.generation.GenerationAttemptRegistration(
+                    existing == null ? attempt : existing, existing == null);
         }
 
         @Override
@@ -399,6 +414,7 @@ final class InMemorySolutionWorkbenchScenario {
 
     private static final class InMemorySectionRepository implements SectionVersionRepository {
         private final Map<UUID, SectionVersion> values = new HashMap<>();
+        private final Map<UUID, SectionVersion> byAttempt = new HashMap<>();
 
         @Override
         public Optional<SectionVersion> findById(UUID id) {
@@ -412,7 +428,12 @@ final class InMemorySolutionWorkbenchScenario {
 
         @Override
         public Optional<SectionVersion> findByAttemptId(UUID attemptId) {
-            return Optional.empty();
+            return Optional.ofNullable(byAttempt.get(attemptId));
+        }
+
+        private void insertForAttempt(UUID attemptId, SectionVersion version) {
+            values.putIfAbsent(version.id(), version);
+            byAttempt.putIfAbsent(attemptId, version);
         }
     }
 

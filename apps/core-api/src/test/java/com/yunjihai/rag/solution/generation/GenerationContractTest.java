@@ -426,8 +426,10 @@ class GenerationContractTest {
         }
 
         @Override
-        public GenerationAttempt insertIfAbsent(GenerationAttempt attempt) {
-            return attempts.computeIfAbsent(attempt.key().clientKey(), ignored -> attempt);
+        public GenerationAttemptRegistration register(GenerationAttempt attempt) {
+            var existing = attempts.putIfAbsent(attempt.key().clientKey(), attempt);
+            return new GenerationAttemptRegistration(
+                    existing == null ? attempt : existing, existing == null);
         }
 
         @Override

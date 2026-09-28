@@ -11,5 +11,6 @@ public interface SectionVersionRepository {
 
     SectionVersion insertIfAbsent(SectionVersion sectionVersion);
 
+    /** Returns the draft checkpoint written for an attempt by the atomic generation commit adapter. */
     Optional<SectionVersion> findByAttemptId(UUID attemptId);
 }

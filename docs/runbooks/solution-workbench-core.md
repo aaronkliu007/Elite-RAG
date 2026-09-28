@@ -63,9 +63,11 @@ PENDING -> RETRIEVING -> GENERATING -> VERIFYING -> SUCCEEDED
 | 需求提案 Prompt | `requirements/v1` |
 | 大纲提案 Prompt | `outline/v1` |
 
-客户端幂等键与方案、需求版本、大纲版本、章节和基线章节共同形成输入指纹。同键同指纹复用同一逻辑 attempt 和成功草稿；同键异指纹返回冲突。检索或模型临时失败在同一 attempt 的检查点恢复，不创建第二笔费用记录。
+客户端幂等键与方案、需求版本、大纲版本、章节和基线章节共同形成输入指纹。`GenerationAttemptStore.register` 必须以数据库唯一约束或等价机制原子返回“本次是否创建”；只有创建者可以执行外部调用。同键同指纹复用同一逻辑 attempt 和成功草稿，同键异指纹返回冲突。检索或模型临时失败在同一 attempt 的检查点恢复，不创建第二笔费用记录；重试重新检索出的 Evidence ID 集合与已记录快照不一致时进入 `EVIDENCE_SNAPSHOT_CHANGED`，不得用新证据继续旧 attempt。
 
-检索、模型和核验等外部调用返回后必须重新读取方案聚合。需求、大纲、确认状态或章节基线已变化时，迟到结果进入 `CANCELLED`，不能保存草稿。
+检索、模型和核验等外部调用返回后必须重新读取方案聚合。需求、大纲、确认状态或章节基线已变化时，迟到结果进入 `CANCELLED`，不能保存草稿。模型用量先进入内存中的核验状态，因此取消记录仍保留已发生的 Token、费用和耗时。
+
+生成成功必须通过 `SectionGenerationCommitPort` 在同一事务中完成最后一次版本围栏校验、按 attempt 绑定草稿、以及 attempt 变更为 `SUCCEEDED`；围栏失败不得留下任何草稿或成功状态。历史 `VERIFYING` 记录可通过 `findByAttemptId` 的草稿检查点恢复为成功；检查点缺失时进入 `VERIFICATION_CHECKPOINT_MISSING`，不能永久卡住。生产适配器还必须用超时扫描器把崩溃后遗留的 `PENDING`、`RETRIEVING`、`GENERATING` 标记为可重试失败。
 
 ## 5. 引用与风险门禁
 
@@ -73,6 +75,7 @@ PENDING -> RETRIEVING -> GENERATING -> VERIFYING -> SUCCEEDED
 - 未知 Evidence ID、重复 Claim ID、引用集合不一致或 null 模型响应进入 `FAILED_MANUAL`；
 - 数字和单位不一致由本地规则直接判为 `UNSUPPORTED`；
 - 语义核验异常、null、缺失、重复或未知返回不会默认通过，而是进入人工确认；
+- 大纲章节声明的风险类型是最低风险集合；模型可以补充但不能删除，事实 Claim 会继承章节风险并进入人工确认；
 - `PARTIAL` 和 `UNSUPPORTED` 不能通过签字变成可采纳；
 - 风险确认保存声明指纹，不记录正文；声明、Evidence、需求、大纲或章节版本变化后旧确认失效；
 - 定稿时 `EvidenceAccessPort` 必须返回与请求完全相同的 ID 集合。子集、未知 ID、null 或异常全部失败关闭。
@@ -88,7 +91,7 @@ PENDING -> RETRIEVING -> GENERATING -> VERIFYING -> SUCCEEDED
 - `CONFIRM_RISK`
 - `FINALIZE`
 
-方案审计动作包括 `SOLUTION_CREATE`、`REQUIREMENTS_CONFIRM`、`OUTLINE_CONFIRM`、`RISK_CONFIRM` 和 `SOLUTION_FINALIZE`。允许记录的内容限于方案/版本/声明/请求/Prompt/模型标识、状态、数量、耗时、Token、费用和内容哈希。
+方案审计动作包括 `SOLUTION_CREATE`、`REQUIREMENTS_CONFIRM`、`OUTLINE_CONFIRM`、`SECTION_GENERATE`、`SECTION_ADOPT`、`RISK_CONFIRM` 和 `SOLUTION_FINALIZE`。权限拒绝、生成结果、采纳成功与失败均需留下脱敏审计。允许记录的内容限于方案/版本/声明/请求/Prompt/模型标识、固定错误码、状态、数量、耗时、Token、费用和内容哈希。
 
 需求正文、章节正文、Claim 正文、Evidence 摘要、风险确认原因、模型原始输出和供应商错误正文不得进入审计元数据。定稿成功审计必须与定稿版本及聚合指针同一事务提交。业务失败审计也失败时，保留原业务异常，并把审计异常追加为 suppressed exception。
 
@@ -101,6 +104,7 @@ PENDING -> RETRIEVING -> GENERATING -> VERIFYING -> SUCCEEDED
 5. 采纳失败：检查核验结果是否包含 `PARTIAL` 或 `UNSUPPORTED`，以及候选版本是否仍属于当前需求和大纲。
 6. 定稿失败：按顺序检查确认状态、必填章节、ADOPTED 版本、风险确认、Evidence 当前权限和 `expectedRevision`。
 7. 审计或原子提交失败：不得手工移动最终指针；检查真实事务适配器并重试完整业务操作。
+8. 活动 attempt 长时间无进展：先由超时扫描器按乐观锁转成 `FAILED_RETRYABLE`，再使用原幂等键恢复；不要并发接管仍处于活动状态的 attempt。
 
 错误码和审计只用于关联排查，不应把正文拼进异常消息或日志。
 

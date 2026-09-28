@@ -1,5 +1,9 @@
 package com.yunjihai.rag.solution.generation;
 
+import com.yunjihai.rag.audit.AuditAction;
+import com.yunjihai.rag.audit.AuditCommand;
+import com.yunjihai.rag.audit.AuditOutcome;
+import com.yunjihai.rag.audit.AuditSink;
 import com.yunjihai.rag.common.UuidV7;
 import com.yunjihai.rag.retrieval.RetrievalService;
 import com.yunjihai.rag.retrieval.domain.Evidence;
@@ -7,6 +11,7 @@ import com.yunjihai.rag.retrieval.domain.RetrievalQuery;
 import com.yunjihai.rag.solution.SolutionAction;
 import com.yunjihai.rag.solution.SolutionAuthorizationPort;
 import com.yunjihai.rag.solution.domain.ConcurrentSolutionUpdateException;
+import com.yunjihai.rag.solution.domain.Claim;
 import com.yunjihai.rag.solution.domain.OutlineNode;
 import com.yunjihai.rag.solution.domain.OutlineVersion;
 import com.yunjihai.rag.solution.domain.RequirementVersion;
@@ -44,6 +49,8 @@ public final class SectionGenerationService {
     private final SolutionModelPort model;
     private final SectionVerificationService verification;
     private final GenerationPolicy policy;
+    private final SectionGenerationCommitPort commit;
+    private final AuditSink audit;
 
     public SectionGenerationService(
             SolutionRepository solutions,
@@ -55,7 +62,9 @@ public final class SectionGenerationService {
             RetrievalService retrieval,
             SolutionModelPort model,
             SectionVerificationService verification,
-            GenerationPolicy policy) {
+            GenerationPolicy policy,
+            SectionGenerationCommitPort commit,
+            AuditSink audit) {
         this.solutions = Objects.requireNonNull(solutions, "solutions");
         this.requirements = Objects.requireNonNull(requirements, "requirements");
         this.outlines = Objects.requireNonNull(outlines, "outlines");
@@ -66,19 +75,42 @@ public final class SectionGenerationService {
         this.model = Objects.requireNonNull(model, "model");
         this.verification = Objects.requireNonNull(verification, "verification");
         this.policy = Objects.requireNonNull(policy, "policy");
+        this.commit = Objects.requireNonNull(commit, "commit");
+        this.audit = Objects.requireNonNull(audit, "audit");
     }
 
     public SectionGenerationResult generate(GenerateSectionCommand command) {
         Objects.requireNonNull(command, "command");
-        authorization.require(
-                command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.ADOPT_SECTION, command.at());
+        try {
+            authorization.require(
+                    command.actorId(), command.spaceId(), command.solutionId(),
+                    SolutionAction.ADOPT_SECTION, command.at());
+        } catch (RuntimeException denied) {
+            recordFailure(command.actorId(), command.solutionId(), AuditAction.SECTION_GENERATE,
+                    command.retrievalRequestId(), command.spaceId(), "AUTHORIZATION_FAILED", denied);
+            throw denied;
+        }
+        try {
+            var result = generateAuthorized(command);
+            if (!isActive(result.attempt().status())) {
+                recordGeneration(command, result.attempt());
+            }
+            return result;
+        } catch (RuntimeException failure) {
+            recordFailure(command.actorId(), command.solutionId(), AuditAction.SECTION_GENERATE,
+                    command.retrievalRequestId(), command.spaceId(), "SECTION_GENERATION_FAILED", failure);
+            throw failure;
+        }
+    }
+
+    private SectionGenerationResult generateAuthorized(GenerateSectionCommand command) {
         var context = loadContext(command);
         var key = new GenerationKey(
                 command.clientKey(), command.solutionId(),
                 context.requirements().id(), context.outline().id(),
                 command.sectionId(), command.baselineSectionVersionId());
-        var attempt = attempts.insertIfAbsent(GenerationAttempt.start(command.attemptId(), key, command.at()));
+        var registration = attempts.register(GenerationAttempt.start(command.attemptId(), key, command.at()));
+        var attempt = registration.attempt();
         attempt.validateRequest(key);
         if (attempt.status() == GenerationStatus.SUCCEEDED) {
             var completedAttemptId = attempt.id();
@@ -92,6 +124,12 @@ public final class SectionGenerationService {
                 || attempt.status() == GenerationStatus.CANCELLED) {
             return new SectionGenerationResult(attempt, Optional.empty());
         }
+        if (!registration.created() && isActive(attempt.status())) {
+            if (attempt.status() == GenerationStatus.VERIFYING) {
+                return recoverVerification(attempt, command);
+            }
+            return new SectionGenerationResult(attempt, Optional.empty());
+        }
         if (attempt.status() == GenerationStatus.FAILED_RETRYABLE) {
             var retried = attempt.retry(command.at());
             saveAttempt(retried, attempt);
@@ -101,9 +139,6 @@ public final class SectionGenerationService {
             var retrieving = attempt.startRetrieval(command.at());
             saveAttempt(retrieving, attempt);
             attempt = retrieving;
-        }
-        if (attempt.status() == GenerationStatus.VERIFYING) {
-            return new SectionGenerationResult(attempt, Optional.empty());
         }
 
         com.yunjihai.rag.retrieval.domain.EvidencePack pack;
@@ -128,9 +163,16 @@ public final class SectionGenerationService {
             return failRetryable(attempt, "RETRIEVAL_INCOMPLETE", command);
         }
 
+        var selectedEvidenceIds = evidenceIds(pack.evidence());
+        if (attempt.status() == GenerationStatus.GENERATING
+                && !attempt.evidenceIds().equals(selectedEvidenceIds)) {
+            var failed = attempt.failManual("EVIDENCE_SNAPSHOT_CHANGED", command.at());
+            saveAttempt(failed, attempt);
+            return new SectionGenerationResult(failed, Optional.empty());
+        }
         if (attempt.status() == GenerationStatus.RETRIEVING) {
             var generating = attempt.recordEvidence(
-                    pack.requestId(), evidenceIds(pack.evidence()), command.at());
+                    pack.requestId(), selectedEvidenceIds, command.at());
             saveAttempt(generating, attempt);
             attempt = generating;
         }
@@ -145,28 +187,27 @@ public final class SectionGenerationService {
         } catch (RuntimeException unavailable) {
             return failRetryable(attempt, "MODEL_UNAVAILABLE", command);
         }
-        if (!isCurrent(key)) {
-            return cancel(attempt, command);
-        }
         if (response == null) {
             var failed = attempt.failManual("INVALID_MODEL_RESPONSE", command.at());
             saveAttempt(failed, attempt);
             return new SectionGenerationResult(failed, Optional.empty());
         }
         var verifying = attempt.startVerification(response.usage(), command.at());
-        saveAttempt(verifying, attempt);
-        attempt = verifying;
+        if (!isCurrent(key)) {
+            return cancel(verifying, attempt, command);
+        }
         SectionVersion version;
         try {
+            var governedClaims = applyOutlineRisks(response.body().claims(), context.section());
             var report = verification.verify(
-                    response.body().claims(), pack.evidence(), command.at().plus(policy.modelTimeout()));
+                    governedClaims, pack.evidence(), command.at().plus(policy.modelTimeout()));
             if (!isCurrent(key)) {
-                return cancel(attempt, command);
+                return cancel(verifying, attempt, command);
             }
             var draft = response.body();
             version = new SectionVersion(
                     command.sectionVersionId(), command.solutionId(), command.sectionId(),
-                    SectionVersionKind.MODEL_DRAFT, draft.markdown(), draft.claims(), draft.evidenceIds(),
+                    SectionVersionKind.MODEL_DRAFT, draft.markdown(), governedClaims, draft.evidenceIds(),
                     context.requirements().id(), context.outline().id(),
                     command.baselineSectionVersionId(), command.baselineSectionVersionId(),
                     Optional.empty(), Optional.of(response.modelId()), command.at(), report);
@@ -175,10 +216,11 @@ public final class SectionGenerationService {
             saveAttempt(failed, attempt);
             return new SectionGenerationResult(failed, Optional.empty());
         }
-        var stored = sections.insertIfAbsent(version);
-        var succeeded = attempt.succeed(stored.id(), command.at());
-        saveAttempt(succeeded, attempt);
-        return new SectionGenerationResult(succeeded, Optional.of(stored));
+        var succeeded = verifying.succeed(version.id(), command.at());
+        if (!commit.commitIfCurrent(key, attempt.id(), version, succeeded, attempt.revision())) {
+            return cancel(verifying, attempt, command);
+        }
+        return new SectionGenerationResult(succeeded, Optional.of(version));
     }
 
     public Solution adoptSection(
@@ -191,6 +233,27 @@ public final class SectionGenerationService {
         Objects.requireNonNull(solutionId, "solutionId");
         Objects.requireNonNull(sectionVersionId, "sectionVersionId");
         Objects.requireNonNull(at, "at");
+        try {
+            var updated = adoptSectionAuthorized(
+                    actorId, solutionId, sectionVersionId, expectedRevision, at);
+            record(actorId, solutionId, AuditAction.SECTION_ADOPT, sectionVersionId,
+                    updated.spaceId(), AuditOutcome.SUCCEEDED, Map.of(
+                            "sectionVersionId", sectionVersionId.toString(),
+                            "status", "SUCCEEDED"));
+            return updated;
+        } catch (RuntimeException failure) {
+            recordFailure(actorId, solutionId, AuditAction.SECTION_ADOPT, sectionVersionId,
+                    null, "SECTION_ADOPTION_FAILED", failure);
+            throw failure;
+        }
+    }
+
+    private Solution adoptSectionAuthorized(
+            UUID actorId,
+            UUID solutionId,
+            UUID sectionVersionId,
+            long expectedRevision,
+            Instant at) {
         var solution = solutions.findById(solutionId)
                 .orElseThrow(() -> new SolutionLifecycleException("SOLUTION_NOT_FOUND"));
         authorization.require(
@@ -255,11 +318,32 @@ public final class SectionGenerationService {
     }
 
     private SectionGenerationResult cancel(
+            GenerationAttempt withLatestResults,
+            GenerationAttempt persisted,
+            GenerateSectionCommand command) {
+        var cancelled = withLatestResults.cancel(command.at());
+        saveAttempt(cancelled, persisted);
+        return new SectionGenerationResult(cancelled, Optional.empty());
+    }
+
+    private SectionGenerationResult cancel(
             GenerationAttempt attempt,
             GenerateSectionCommand command) {
-        var cancelled = attempt.cancel(command.at());
-        saveAttempt(cancelled, attempt);
-        return new SectionGenerationResult(cancelled, Optional.empty());
+        return cancel(attempt, attempt, command);
+    }
+
+    private SectionGenerationResult recoverVerification(
+            GenerationAttempt attempt,
+            GenerateSectionCommand command) {
+        var checkpoint = sections.findByAttemptId(attempt.id());
+        if (checkpoint.isPresent()) {
+            var succeeded = attempt.succeed(checkpoint.orElseThrow().id(), command.at());
+            saveAttempt(succeeded, attempt);
+            return new SectionGenerationResult(succeeded, checkpoint);
+        }
+        var failed = attempt.failManual("VERIFICATION_CHECKPOINT_MISSING", command.at());
+        saveAttempt(failed, attempt);
+        return new SectionGenerationResult(failed, Optional.empty());
     }
 
     private Context loadContext(GenerateSectionCommand command) {
@@ -327,6 +411,77 @@ public final class SectionGenerationService {
 
     private static Set<UUID> evidenceIds(List<Evidence> evidence) {
         return evidence.stream().map(Evidence::evidenceId).collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static List<Claim> applyOutlineRisks(List<Claim> claims, OutlineNode section) {
+        return claims.stream().map(claim -> {
+            if (!claim.factual() || section.riskTypes().isEmpty()) {
+                return claim;
+            }
+            var risks = new java.util.HashSet<>(claim.riskTypes());
+            risks.addAll(section.riskTypes());
+            return new Claim(
+                    claim.claimId(), claim.text(), true, claim.evidenceIds(), Set.copyOf(risks));
+        }).toList();
+    }
+
+    private void recordGeneration(GenerateSectionCommand command, GenerationAttempt attempt) {
+        var outcome = switch (attempt.status()) {
+            case SUCCEEDED, INSUFFICIENT_EVIDENCE -> AuditOutcome.SUCCEEDED;
+            default -> AuditOutcome.FAILED;
+        };
+        var details = new java.util.HashMap<String, String>();
+        details.put("sectionVersionId", command.sectionVersionId().toString());
+        details.put("status", attempt.status().name());
+        attempt.failureCode().ifPresent(code -> details.put("errorCode", code));
+        record(command.actorId(), command.solutionId(), AuditAction.SECTION_GENERATE,
+                command.retrievalRequestId(), command.spaceId(), outcome, details);
+    }
+
+    private void recordFailure(
+            UUID actorId,
+            UUID solutionId,
+            AuditAction action,
+            UUID requestId,
+            UUID spaceId,
+            String errorCode,
+            RuntimeException original) {
+        try {
+            var details = new java.util.HashMap<String, String>();
+            details.put("status", "FAILED");
+            details.put("errorCode", errorCode);
+            record(actorId, solutionId, action, requestId, spaceId,
+                    original instanceof SecurityException ? AuditOutcome.DENIED : AuditOutcome.FAILED,
+                    details);
+        } catch (RuntimeException auditFailure) {
+            original.addSuppressed(auditFailure);
+        }
+    }
+
+    private void record(
+            UUID actorId,
+            UUID solutionId,
+            AuditAction action,
+            UUID requestId,
+            UUID spaceId,
+            AuditOutcome outcome,
+            Map<String, String> details) {
+        var metadata = new java.util.HashMap<String, String>();
+        metadata.put("solutionId", solutionId.toString());
+        metadata.put("requestId", requestId.toString());
+        if (spaceId != null) {
+            metadata.put("spaceId", spaceId.toString());
+        }
+        metadata.putAll(details);
+        audit.record(new AuditCommand(
+                actorId, action, "SOLUTION", solutionId, outcome, Map.copyOf(metadata)));
+    }
+
+    private static boolean isActive(GenerationStatus status) {
+        return status == GenerationStatus.PENDING
+                || status == GenerationStatus.RETRIEVING
+                || status == GenerationStatus.GENERATING
+                || status == GenerationStatus.VERIFYING;
     }
 
     private static String queryText(RequirementVersion requirements, OutlineNode section) {

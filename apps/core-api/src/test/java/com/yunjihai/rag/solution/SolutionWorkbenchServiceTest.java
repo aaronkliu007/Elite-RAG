@@ -59,7 +59,42 @@ class SolutionWorkbenchServiceTest {
                     .isSameAs(denied);
             assertThat(fixture.solutions.findCalls).isZero();
             assertThat(fixture.model.calls).isZero();
+            assertThat(fixture.audit).singleElement().satisfies(event -> {
+                assertThat(event.outcome()).isIn(
+                        com.yunjihai.rag.audit.AuditOutcome.DENIED,
+                        com.yunjihai.rag.audit.AuditOutcome.FAILED);
+                assertThat(event.metadata()).containsEntry("errorCode", "AUTHORIZATION_FAILED");
+                assertThat(event.metadata().values()).noneMatch(value -> value.contains(denied.getMessage()));
+            });
         }
+    }
+
+    @Test
+    void modelFailuresAndInvalidEnumsExposeOnlyStableErrorCodes() {
+        var unavailable = solutionWithInitialRequirements();
+        unavailable.model.failure = new IllegalStateException("provider-secret-token");
+
+        assertThatThrownBy(() -> unavailable.service.proposeRequirements(
+                new SolutionWorkbenchService.ProposeRequirementsCommand(
+                        ACTOR_ID, SPACE_ID, SOLUTION_ID, id(11), "client-requirements-1",
+                        "模型提取", 0, id(90), NOW.plusSeconds(1))))
+                .isInstanceOf(SolutionLifecycleException.class)
+                .hasMessage("MODEL_PROPOSAL_FAILED")
+                .hasNoCause()
+                .satisfies(error -> assertThat(error.getSuppressed()).isEmpty());
+
+        var invalid = solutionWithInitialRequirements();
+        invalid.model.respond(new GeneratedRequirementProposal(List.of(
+                generatedRequirement(id(101), "provider-secret-enum", List.of(source())))));
+
+        assertThatThrownBy(() -> invalid.service.proposeRequirements(
+                new SolutionWorkbenchService.ProposeRequirementsCommand(
+                        ACTOR_ID, SPACE_ID, SOLUTION_ID, id(11), "client-requirements-2",
+                        "模型提取", 0, id(91), NOW.plusSeconds(1))))
+                .isInstanceOf(SolutionLifecycleException.class)
+                .hasMessage("MODEL_PROPOSAL_INVALID")
+                .hasNoCause()
+                .satisfies(error -> assertThat(error.getSuppressed()).isEmpty());
     }
 
     @Test
@@ -192,7 +227,8 @@ class SolutionWorkbenchServiceTest {
                     new SolutionWorkbenchService.ProposeRequirementsCommand(
                             ACTOR_ID, SPACE_ID, SOLUTION_ID, id(11), "client-requirements-1",
                             "模型提取", 0, id(90), NOW.plusSeconds(1))))
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .isInstanceOf(SolutionLifecycleException.class)
+                    .hasMessage("MODEL_PROPOSAL_INVALID");
 
             assertThat(fixture.solutions.findById(SOLUTION_ID).orElseThrow().currentRequirementVersionId())
                     .isEqualTo(id(10));
@@ -255,7 +291,8 @@ class SolutionWorkbenchServiceTest {
                     new SolutionWorkbenchService.ProposeOutlineCommand(
                             ACTOR_ID, SPACE_ID, SOLUTION_ID, id(20), "client-outline-1",
                             1, id(90), NOW.plusSeconds(2))))
-                    .isInstanceOf(IllegalArgumentException.class);
+                    .isInstanceOf(SolutionLifecycleException.class)
+                    .hasMessage("MODEL_PROPOSAL_INVALID");
 
             assertThat(fixture.solutions.findById(SOLUTION_ID).orElseThrow().currentOutlineVersionId())
                     .isEmpty();
@@ -393,6 +430,7 @@ class SolutionWorkbenchServiceTest {
     private static final class RecordingModelPort implements SolutionModelPort {
         private int calls;
         private Object nextBody;
+        private RuntimeException failure;
         private SolutionModelRequest lastRequest;
 
         private void respond(Object body) {
@@ -404,6 +442,9 @@ class SolutionWorkbenchServiceTest {
         public <T> SolutionModelResponse<T> execute(SolutionModelRequest request, Class<T> responseType) {
             calls++;
             lastRequest = request;
+            if (failure != null) {
+                throw failure;
+            }
             if (nextBody == null) {
                 throw new AssertionError("model must not be called");
             }

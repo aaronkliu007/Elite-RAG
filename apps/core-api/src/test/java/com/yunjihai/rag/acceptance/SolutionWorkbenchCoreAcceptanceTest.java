@@ -31,6 +31,6 @@ class SolutionWorkbenchCoreAcceptanceTest {
         assertThat(result.persistedFinalizedSnapshotUnchanged()).isTrue();
         assertThat(result.retrievalCalls()).isEqualTo(3);
         assertThat(result.modelCalls()).isEqualTo(2);
-        assertThat(result.auditCount()).isEqualTo(7);
+        assertThat(result.auditCount()).isEqualTo(12);
     }
 }

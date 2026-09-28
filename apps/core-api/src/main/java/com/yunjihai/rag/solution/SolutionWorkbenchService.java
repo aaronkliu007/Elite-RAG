@@ -60,8 +60,9 @@ public final class SolutionWorkbenchService {
 
     public Solution createSolution(CreateSolutionCommand command) {
         Objects.requireNonNull(command, "command");
-        authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.EDIT_REQUIREMENTS, command.at());
+        authorize(command.actorId(), command.spaceId(), command.solutionId(),
+                SolutionAction.EDIT_REQUIREMENTS, AuditAction.SOLUTION_CREATE,
+                command.requestId(), command.at());
         var solution = Solution.create(
                 command.solutionId(), command.spaceId(), command.actorId(), command.requirements(), command.at());
         requirements.insert(command.requirements());
@@ -75,8 +76,9 @@ public final class SolutionWorkbenchService {
 
     public Solution reviseRequirements(ReviseRequirementsCommand command) {
         Objects.requireNonNull(command, "command");
-        authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.EDIT_REQUIREMENTS, command.at());
+        authorize(command.actorId(), command.spaceId(), command.solutionId(),
+                SolutionAction.EDIT_REQUIREMENTS, AuditAction.EDIT,
+                command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         var updated = current.reviseRequirements(command.requirements(), command.expectedRevision());
         requirements.insert(command.requirements());
@@ -90,8 +92,9 @@ public final class SolutionWorkbenchService {
 
     public Solution proposeRequirements(ProposeRequirementsCommand command) {
         Objects.requireNonNull(command, "command");
-        authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.EDIT_REQUIREMENTS, command.at());
+        authorize(command.actorId(), command.spaceId(), command.solutionId(),
+                SolutionAction.EDIT_REQUIREMENTS, AuditAction.EDIT,
+                command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         requireRevision(current, command.expectedRevision());
         var previous = requirements.findById(current.currentRequirementVersionId())
@@ -106,17 +109,28 @@ public final class SolutionWorkbenchService {
                 List.of("分类必须有效", "已知事实必须包含来源"),
                 List.of(),
                 command.at().plusSeconds(60));
-        var response = model.execute(request, GeneratedRequirementProposal.class);
-        var items = response.body().items().stream()
-                .map(SolutionWorkbenchService::toRequirementItem)
-                .toList();
-        var version = new RequirementVersion(
-                command.requirementVersionId(),
-                previous.number() + 1,
-                items,
-                command.actorId(),
-                command.at(),
-                command.changeReason());
+        final com.yunjihai.rag.solution.model.SolutionModelResponse<GeneratedRequirementProposal> response;
+        try {
+            response = model.execute(request, GeneratedRequirementProposal.class);
+        } catch (RuntimeException unavailable) {
+            throw new SolutionLifecycleException("MODEL_PROPOSAL_FAILED");
+        }
+        final List<RequirementItem> items;
+        final RequirementVersion version;
+        try {
+            items = Objects.requireNonNull(response, "response").body().items().stream()
+                    .map(SolutionWorkbenchService::toRequirementItem)
+                    .toList();
+            version = new RequirementVersion(
+                    command.requirementVersionId(),
+                    previous.number() + 1,
+                    items,
+                    command.actorId(),
+                    command.at(),
+                    command.changeReason());
+        } catch (RuntimeException invalid) {
+            throw new SolutionLifecycleException("MODEL_PROPOSAL_INVALID");
+        }
         var updated = current.reviseRequirements(version, command.expectedRevision());
         requirements.insert(version);
         solutions.replace(updated, command.expectedRevision());
@@ -129,8 +143,9 @@ public final class SolutionWorkbenchService {
 
     public Solution confirmRequirements(ConfirmRequirementsCommand command) {
         Objects.requireNonNull(command, "command");
-        authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.CONFIRM_REQUIREMENTS, command.at());
+        authorize(command.actorId(), command.spaceId(), command.solutionId(),
+                SolutionAction.CONFIRM_REQUIREMENTS, AuditAction.REQUIREMENTS_CONFIRM,
+                command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         if (!current.currentRequirementVersionId().equals(command.targetRequirementVersionId())) {
             throw new SolutionLifecycleException("REQUIREMENT_VERSION_NOT_CURRENT");
@@ -146,8 +161,9 @@ public final class SolutionWorkbenchService {
 
     public Solution reviseOutline(ReviseOutlineCommand command) {
         Objects.requireNonNull(command, "command");
-        authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.CONFIRM_OUTLINE, command.at());
+        authorize(command.actorId(), command.spaceId(), command.solutionId(),
+                SolutionAction.CONFIRM_OUTLINE, AuditAction.EDIT,
+                command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         var updated = current.reviseOutline(command.outline(), command.expectedRevision());
         outlines.insert(command.outline());
@@ -161,8 +177,9 @@ public final class SolutionWorkbenchService {
 
     public Solution proposeOutline(ProposeOutlineCommand command) {
         Objects.requireNonNull(command, "command");
-        authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.CONFIRM_OUTLINE, command.at());
+        authorize(command.actorId(), command.spaceId(), command.solutionId(),
+                SolutionAction.CONFIRM_OUTLINE, AuditAction.EDIT,
+                command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         requireRevision(current, command.expectedRevision());
         if (current.requirementConfirmation().isEmpty()
@@ -187,12 +204,23 @@ public final class SolutionWorkbenchService {
                 List.of("至少一个必填章节", "章节顺序连续", "层级为1到4"),
                 List.of(),
                 command.at().plusSeconds(60));
-        var response = model.execute(request, GeneratedOutlineProposal.class);
-        var nodes = response.body().nodes().stream()
-                .map(SolutionWorkbenchService::toOutlineNode)
-                .toList();
-        var version = new OutlineVersion(
-                command.outlineVersionId(), nextNumber, nodes, command.actorId(), command.at());
+        final com.yunjihai.rag.solution.model.SolutionModelResponse<GeneratedOutlineProposal> response;
+        try {
+            response = model.execute(request, GeneratedOutlineProposal.class);
+        } catch (RuntimeException unavailable) {
+            throw new SolutionLifecycleException("MODEL_PROPOSAL_FAILED");
+        }
+        final List<OutlineNode> nodes;
+        final OutlineVersion version;
+        try {
+            nodes = Objects.requireNonNull(response, "response").body().nodes().stream()
+                    .map(SolutionWorkbenchService::toOutlineNode)
+                    .toList();
+            version = new OutlineVersion(
+                    command.outlineVersionId(), nextNumber, nodes, command.actorId(), command.at());
+        } catch (RuntimeException invalid) {
+            throw new SolutionLifecycleException("MODEL_PROPOSAL_INVALID");
+        }
         var updated = current.reviseOutline(version, command.expectedRevision());
         outlines.insert(version);
         solutions.replace(updated, command.expectedRevision());
@@ -205,8 +233,9 @@ public final class SolutionWorkbenchService {
 
     public Solution confirmOutline(ConfirmOutlineCommand command) {
         Objects.requireNonNull(command, "command");
-        authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.CONFIRM_OUTLINE, command.at());
+        authorize(command.actorId(), command.spaceId(), command.solutionId(),
+                SolutionAction.CONFIRM_OUTLINE, AuditAction.OUTLINE_CONFIRM,
+                command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         if (current.currentOutlineVersionId().isEmpty()
                 || !current.currentOutlineVersionId().orElseThrow().equals(command.targetOutlineVersionId())) {
@@ -261,6 +290,30 @@ public final class SolutionWorkbenchService {
         }
     }
 
+    private void authorize(
+            UUID actorId,
+            UUID spaceId,
+            UUID solutionId,
+            SolutionAction action,
+            AuditAction auditAction,
+            UUID requestId,
+            Instant at) {
+        try {
+            authorization.require(actorId, spaceId, solutionId, action, at);
+        } catch (RuntimeException failure) {
+            try {
+                recordOutcome(actorId, solutionId, auditAction, requestId, spaceId,
+                        failure instanceof SecurityException
+                                ? com.yunjihai.rag.audit.AuditOutcome.DENIED
+                                : com.yunjihai.rag.audit.AuditOutcome.FAILED,
+                        Map.of("status", "FAILED", "errorCode", "AUTHORIZATION_FAILED"));
+            } catch (RuntimeException auditFailure) {
+                failure.addSuppressed(auditFailure);
+            }
+            throw failure;
+        }
+    }
+
     private static Map<String, String> modelMetadata(
             String versionIdKey,
             UUID versionId,
@@ -292,6 +345,18 @@ public final class SolutionWorkbenchService {
             UUID requestId,
             UUID spaceId,
             Map<String, String> details) {
+        recordOutcome(actorId, solutionId, action, requestId, spaceId,
+                AuditOutcome.SUCCEEDED, details);
+    }
+
+    private void recordOutcome(
+            UUID actorId,
+            UUID solutionId,
+            AuditAction action,
+            UUID requestId,
+            UUID spaceId,
+            AuditOutcome outcome,
+            Map<String, String> details) {
         var metadata = new HashMap<String, String>();
         metadata.put("requestId", requestId.toString());
         metadata.put("spaceId", spaceId.toString());
@@ -302,7 +367,7 @@ public final class SolutionWorkbenchService {
                 action,
                 "SOLUTION",
                 solutionId,
-                AuditOutcome.SUCCEEDED,
+                outcome,
                 Map.copyOf(metadata)));
     }
 
