@@ -30,7 +30,20 @@ public class AuditService implements AuditSink {
             "reauthorizedCount",
             "selectedCount",
             "degradationReasons",
-            "durationMs");
+            "durationMs",
+            "solutionId",
+            "requirementVersionId",
+            "outlineVersionId",
+            "promptName",
+            "promptVersion",
+            "modelId",
+            "versionNumber",
+            "status",
+            "itemCount",
+            "sectionCount",
+            "inputTokens",
+            "outputTokens",
+            "costMicros");
 
     private final AuditEventStore store;
     private final Clock clock;

@@ -107,7 +107,7 @@ class GenerationContractTest {
     @SuppressWarnings({"rawtypes", "unchecked"})
     @Test
     void modelResponseRejectsBodyThatDoesNotMatchDeclaredType() {
-        var outline = new GeneratedOutlineProposal(List.of(outlineNode()));
+        var outline = new GeneratedOutlineProposal(List.of(generatedOutlineNode()));
 
         assertThatThrownBy(() -> new SolutionModelResponse(
                 GeneratedSectionDraft.class,
@@ -119,8 +119,8 @@ class GenerationContractTest {
 
     @Test
     void proposalContractsOwnCollectionsAndModelPortReturnsTheRequestedType() {
-        var requirements = new ArrayList<>(List.of(requirement()));
-        var nodes = new ArrayList<>(List.of(outlineNode()));
+        var requirements = new ArrayList<>(List.of(generatedRequirement()));
+        var nodes = new ArrayList<>(List.of(generatedOutlineNode()));
         var requirementProposal = new GeneratedRequirementProposal(requirements);
         var outlineProposal = new GeneratedOutlineProposal(nodes);
         requirements.clear();
@@ -144,8 +144,8 @@ class GenerationContractTest {
 
         var response = port.execute(request, GeneratedOutlineProposal.class);
 
-        assertThat(requirementProposal.items()).containsExactly(requirement());
-        assertThat(outlineProposal.nodes()).containsExactly(outlineNode());
+        assertThat(requirementProposal.items()).containsExactly(generatedRequirement());
+        assertThat(outlineProposal.nodes()).containsExactly(generatedOutlineNode());
         assertThat(response.body()).isSameAs(outlineProposal);
         assertThatThrownBy(() -> requirementProposal.items().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
@@ -154,8 +154,9 @@ class GenerationContractTest {
     @Test
     void generatedProposalsAndClaimsDoNotLeakBodiesThroughToString() {
         var requirementProposal = new GeneratedRequirementProposal(
-                List.of(requirement("SECRET_PROPOSAL_REQUIREMENT_91a2")));
-        var outlineProposal = new GeneratedOutlineProposal(List.of(new OutlineNode(
+                List.of(new GeneratedRequirementProposal.Item(
+                        id(10), "GOAL", "SECRET_PROPOSAL_REQUIREMENT_91a2", List.of(requirementSource()))));
+        var outlineProposal = new GeneratedOutlineProposal(List.of(new GeneratedOutlineProposal.Node(
                 id(42), "SECRET_OUTLINE_TITLE_1b2c", 1, 1, true,
                 "SECRET_OUTLINE_OBJECTIVE_3d4e", "SECRET_RETRIEVAL_HINT_5f6a", Set.of())));
         var claim = new Claim(
@@ -354,9 +355,24 @@ class GenerationContractTest {
                 id(10),
                 RequirementCategory.GOAL,
                 text,
-                List.of(new RequirementSource(
-                        new DocumentVersionRef(id(20), id(21)),
-                        new MarkdownLocator(List.of("客户需求"), "node-1"))));
+                List.of(requirementSource()));
+    }
+
+    private static RequirementSource requirementSource() {
+        return new RequirementSource(
+                new DocumentVersionRef(id(20), id(21)),
+                new MarkdownLocator(List.of("客户需求"), "node-1"));
+    }
+
+    private static GeneratedRequirementProposal.Item generatedRequirement() {
+        return new GeneratedRequirementProposal.Item(
+                id(10), "GOAL", "客户要求支持100名用户", List.of(requirementSource()));
+    }
+
+    private static GeneratedOutlineProposal.Node generatedOutlineNode() {
+        return new GeneratedOutlineProposal.Node(
+                id(42), "总体方案", 1, 1, true,
+                "描述总体架构", "检索总体架构", Set.of("PERFORMANCE_OR_SLA"));
     }
 
     private static OutlineNode outlineNode() {

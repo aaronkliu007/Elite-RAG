@@ -94,6 +94,41 @@ class AuditServiceTest {
     }
 
     @Test
+    void acceptsSanitizedSolutionGovernanceMetadataAndActions() {
+        var events = new ArrayList<AuditEvent>();
+        var service = new AuditService(events::add, Clock.fixed(NOW, ZoneOffset.UTC));
+        var metadata = Map.ofEntries(
+                Map.entry("requestId", RESOURCE_ID.toString()),
+                Map.entry("spaceId", RESOURCE_ID.toString()),
+                Map.entry("solutionId", RESOURCE_ID.toString()),
+                Map.entry("requirementVersionId", RESOURCE_ID.toString()),
+                Map.entry("outlineVersionId", RESOURCE_ID.toString()),
+                Map.entry("promptName", "requirements"),
+                Map.entry("promptVersion", "v1"),
+                Map.entry("modelId", "logical-model-v1"),
+                Map.entry("versionNumber", "2"),
+                Map.entry("status", "SUCCEEDED"),
+                Map.entry("itemCount", "3"),
+                Map.entry("sectionCount", "5"),
+                Map.entry("durationMs", "42"),
+                Map.entry("inputTokens", "100"),
+                Map.entry("outputTokens", "50"),
+                Map.entry("costMicros", "1234"));
+
+        for (var action : new AuditAction[] {
+                AuditAction.SOLUTION_CREATE,
+                AuditAction.REQUIREMENTS_CONFIRM,
+                AuditAction.OUTLINE_CONFIRM}) {
+            service.record(new AuditCommand(
+                    ACTOR_ID, action, "SOLUTION", RESOURCE_ID,
+                    AuditOutcome.SUCCEEDED, metadata));
+        }
+
+        assertThat(events).hasSize(3).allSatisfy(event ->
+                assertThat(event.metadata()).containsExactlyInAnyOrderEntriesOf(metadata));
+    }
+
+    @Test
     void auditServiceCanBeProxiedAndRunsInsideTransaction() {
         try (var context = new AnnotationConfigApplicationContext(TransactionConfig.class)) {
             var service = context.getBean(AuditService.class);

@@ -10,5 +10,8 @@ public enum AuditAction {
     ACL_CHANGE,
     RETRIEVE,
     VIEW,
-    DOWNLOAD
+    DOWNLOAD,
+    SOLUTION_CREATE,
+    REQUIREMENTS_CONFIRM,
+    OUTLINE_CONFIRM
 }
