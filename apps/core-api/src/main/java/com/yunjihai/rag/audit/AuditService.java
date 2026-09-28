@@ -43,7 +43,13 @@ public class AuditService implements AuditSink {
             "sectionCount",
             "inputTokens",
             "outputTokens",
-            "costMicros");
+            "costMicros",
+            "sectionVersionId",
+            "claimId",
+            "finalVersionId",
+            "riskCount",
+            "evidenceCount",
+            "contentHash");
 
     private final AuditEventStore store;
     private final Clock clock;

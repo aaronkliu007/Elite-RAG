@@ -129,6 +129,33 @@ class AuditServiceTest {
     }
 
     @Test
+    void acceptsSanitizedRiskAndFinalizationMetadata() {
+        var events = new ArrayList<AuditEvent>();
+        var service = new AuditService(events::add, Clock.fixed(NOW, ZoneOffset.UTC));
+        var metadata = Map.ofEntries(
+                Map.entry("solutionId", RESOURCE_ID.toString()),
+                Map.entry("sectionVersionId", RESOURCE_ID.toString()),
+                Map.entry("claimId", RESOURCE_ID.toString()),
+                Map.entry("finalVersionId", RESOURCE_ID.toString()),
+                Map.entry("versionNumber", "1"),
+                Map.entry("sectionCount", "3"),
+                Map.entry("riskCount", "2"),
+                Map.entry("evidenceCount", "8"),
+                Map.entry("contentHash", "a".repeat(64)),
+                Map.entry("status", "SUCCEEDED"));
+
+        service.record(new AuditCommand(
+                ACTOR_ID, AuditAction.RISK_CONFIRM, "SOLUTION", RESOURCE_ID,
+                AuditOutcome.SUCCEEDED, metadata));
+        service.record(new AuditCommand(
+                ACTOR_ID, AuditAction.SOLUTION_FINALIZE, "SOLUTION", RESOURCE_ID,
+                AuditOutcome.SUCCEEDED, metadata));
+
+        assertThat(events).hasSize(2).allSatisfy(event ->
+                assertThat(event.metadata()).containsExactlyInAnyOrderEntriesOf(metadata));
+    }
+
+    @Test
     void auditServiceCanBeProxiedAndRunsInsideTransaction() {
         try (var context = new AnnotationConfigApplicationContext(TransactionConfig.class)) {
             var service = context.getBean(AuditService.class);
