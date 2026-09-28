@@ -131,6 +131,20 @@ class RerankingServiceTest {
         }
     }
 
+    @Test
+    void fallsBackWhenTheExecutorRejectsSubmission() {
+        var input = scoredCandidates(10);
+        var executor = Executors.newSingleThreadExecutor();
+        executor.shutdownNow();
+
+        var result = new RerankingService(
+                (query, candidates) -> scoresFor(candidates),
+                executor,
+                RetrievalPolicy.defaults()).rerank("容量保护", input);
+
+        assertFallback(result, input);
+    }
+
     private static void assertFallback(RerankResult result, List<ScoredCandidate> expected) {
         assertThat(result.candidates()).containsExactlyElementsOf(expected);
         assertThat(result.degradationReasons())

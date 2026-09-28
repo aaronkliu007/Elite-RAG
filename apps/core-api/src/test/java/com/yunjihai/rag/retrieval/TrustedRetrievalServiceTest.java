@@ -27,6 +27,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.HashSet;
@@ -221,6 +222,76 @@ class TrustedRetrievalServiceTest {
             assertThat(empty.evidence()).isEmpty();
             assertThat(empty.stats().reauthorizedCount()).isZero();
             assertThat(denied.idCalls).hasValue(0);
+        }
+    }
+
+    @Test
+    void reauthorizesAgainstMutableAuthorityAfterRecallStateChanges() {
+        var healthy = candidate(71, 171, RecallSource.LEXICAL, 1, "健康证据");
+        var revoked = candidate(72, 172, RecallSource.LEXICAL, 2, "撤权证据");
+        var replaced = candidate(73, 173, RecallSource.LEXICAL, 3, "换版证据");
+        var archived = candidate(74, 174, RecallSource.LEXICAL, 4, "归档证据");
+        var expired = candidate(75, 175, RecallSource.LEXICAL, 5, "过期证据");
+        var membershipRemoved = candidate(76, 176, RecallSource.LEXICAL, 6, "成员移除证据");
+        var candidates = List.of(
+                healthy, revoked, replaced, archived, expired, membershipRemoved);
+        var start = Instant.parse("2026-09-28T05:30:00Z");
+        var checked = start.plusSeconds(5);
+        var completed = checked.plusSeconds(1);
+        var roleId = uuid(177);
+        var authority = new MutableAuthority(
+                USER_ID, SPACE_ID, roleId, start, candidates, expired, membershipRemoved);
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var policy = RetrievalPolicy.defaults();
+            var recall = new HybridRecallService(
+                    (query, filter, limit) -> candidates,
+                    (query, filter, limit) -> List.of(),
+                    executor,
+                    policy);
+            var reranking = new RerankingService(
+                    (query, values) -> {
+                        authority.changeAfterRecall(
+                                revoked, replaced, archived, membershipRemoved);
+                        return values.stream()
+                                .map(value -> new RerankScore(
+                                        value.candidate().candidateId(), value.score()))
+                                .toList();
+                    },
+                    executor,
+                    policy);
+            var service = new TrustedRetrievalService(
+                    (userId, at) -> Set.of(
+                            new PrincipalRef(PrincipalType.USER, userId),
+                            new PrincipalRef(PrincipalType.ROLE, roleId)),
+                    recall,
+                    reranking,
+                    authority::authorize,
+                    new EvidenceSelectionService(policy),
+                    at -> uuid(9400),
+                    policy,
+                    new SequenceClock(List.of(start, checked, completed)),
+                    command -> null);
+
+            var result = service.retrieve(query());
+
+            assertThat(authority.authorizationCalls()).isEqualTo(1);
+            assertThat(authority.lastUserId()).isEqualTo(USER_ID);
+            assertThat(authority.lastSpaceId()).isEqualTo(SPACE_ID);
+            assertThat(authority.lastCheckedAt()).isEqualTo(checked);
+            assertThat(result.evidence())
+                    .extracting(evidence -> evidence.documentId())
+                    .containsExactly(healthy.documentId());
+            assertThat(result.evidence())
+                    .extracting(evidence -> evidence.documentId())
+                    .doesNotContain(
+                            revoked.documentId(),
+                            replaced.documentId(),
+                            archived.documentId(),
+                            expired.documentId(),
+                            membershipRemoved.documentId());
+        } finally {
+            executor.shutdownNow();
         }
     }
 
@@ -521,6 +592,126 @@ class TrustedRetrievalServiceTest {
 
     private static UUID uuid(int suffix) {
         return UUID.fromString("00000000-0000-0000-0000-%012d".formatted(suffix));
+    }
+
+    private static final class MutableAuthority {
+        private final UUID expectedUserId;
+        private final UUID expectedSpaceId;
+        private final UUID roleId;
+        private final Map<UUID, MutableDocument> documents = new HashMap<>();
+        private final AtomicInteger calls = new AtomicInteger();
+        private final AtomicReference<UUID> lastUserId = new AtomicReference<>();
+        private final AtomicReference<UUID> lastSpaceId = new AtomicReference<>();
+        private final AtomicReference<Instant> lastCheckedAt = new AtomicReference<>();
+        private boolean roleMembershipActive = true;
+
+        private MutableAuthority(
+                UUID expectedUserId,
+                UUID expectedSpaceId,
+                UUID roleId,
+                Instant recallStartedAt,
+                List<Candidate> candidates,
+                Candidate expired,
+                Candidate membershipOnly) {
+            this.expectedUserId = expectedUserId;
+            this.expectedSpaceId = expectedSpaceId;
+            this.roleId = roleId;
+            for (var candidate : candidates) {
+                var readers = new HashSet<PrincipalRef>();
+                readers.add(candidate.equals(membershipOnly)
+                        ? new PrincipalRef(PrincipalType.ROLE, roleId)
+                        : new PrincipalRef(PrincipalType.USER, expectedUserId));
+                documents.put(candidate.documentId(), new MutableDocument(
+                        expectedSpaceId,
+                        candidate.versionId(),
+                        false,
+                        candidate.equals(expired) ? recallStartedAt.plusSeconds(2) : null,
+                        readers));
+            }
+        }
+
+        private void changeAfterRecall(
+                Candidate revoked,
+                Candidate replaced,
+                Candidate archived,
+                Candidate membershipOnly) {
+            documents.get(revoked.documentId()).readers.clear();
+            documents.get(replaced.documentId()).currentVersionId = uuid(9998);
+            documents.get(archived.documentId()).archived = true;
+            if (!documents.containsKey(membershipOnly.documentId())) {
+                throw new IllegalStateException("membership document is missing");
+            }
+            roleMembershipActive = false;
+        }
+
+        private Set<DocumentVersionRef> authorize(
+                UUID userId,
+                UUID spaceId,
+                Set<DocumentVersionRef> requested,
+                Instant checkedAt) {
+            calls.incrementAndGet();
+            lastUserId.set(userId);
+            lastSpaceId.set(spaceId);
+            lastCheckedAt.set(checkedAt);
+            if (!expectedUserId.equals(userId) || !expectedSpaceId.equals(spaceId)) {
+                return Set.of();
+            }
+            var principals = new HashSet<PrincipalRef>();
+            principals.add(new PrincipalRef(PrincipalType.USER, userId));
+            if (roleMembershipActive) {
+                principals.add(new PrincipalRef(PrincipalType.ROLE, roleId));
+            }
+            var allowed = new LinkedHashSet<DocumentVersionRef>();
+            for (var reference : requested) {
+                var document = documents.get(reference.documentId());
+                if (document != null
+                        && expectedSpaceId.equals(document.spaceId)
+                        && reference.versionId().equals(document.currentVersionId)
+                        && !document.archived
+                        && (document.expiresAt == null || checkedAt.isBefore(document.expiresAt))
+                        && document.readers.stream().anyMatch(principals::contains)) {
+                    allowed.add(reference);
+                }
+            }
+            return Set.copyOf(allowed);
+        }
+
+        private int authorizationCalls() {
+            return calls.get();
+        }
+
+        private UUID lastUserId() {
+            return lastUserId.get();
+        }
+
+        private UUID lastSpaceId() {
+            return lastSpaceId.get();
+        }
+
+        private Instant lastCheckedAt() {
+            return lastCheckedAt.get();
+        }
+    }
+
+    private static final class MutableDocument {
+        private final UUID spaceId;
+        private UUID currentVersionId;
+        private boolean archived;
+        private final Instant expiresAt;
+        private final Set<PrincipalRef> readers;
+
+        private MutableDocument(
+                UUID spaceId,
+                UUID currentVersionId,
+                boolean archived,
+                Instant expiresAt,
+                Set<PrincipalRef> readers) {
+            this.spaceId = spaceId;
+            this.currentVersionId = currentVersionId;
+            this.archived = archived;
+            this.expiresAt = expiresAt;
+            this.readers = readers;
+        }
     }
 
     private static final class AuthorizationHarness implements AutoCloseable {

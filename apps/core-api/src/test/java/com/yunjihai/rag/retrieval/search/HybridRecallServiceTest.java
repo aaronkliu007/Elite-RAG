@@ -18,7 +18,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Executors;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -313,6 +315,75 @@ class HybridRecallServiceTest {
         }
     }
 
+    @Test
+    void treatsRejectedSubmissionsAsUnavailableBranchesAndManagesAcceptedWork()
+            throws InterruptedException {
+        try (var rejectLexical = new RejectingExecutor(Set.of(1))) {
+            var result = new HybridRecallService(
+                    (query, filter, limit) -> List.of(candidate(
+                            LEXICAL_ID, 21, RecallSource.LEXICAL, 1, "全文正文")),
+                    (query, filter, limit) -> List.of(candidate(
+                            VECTOR_ID, 22, RecallSource.VECTOR, 1, "向量正文")),
+                    rejectLexical,
+                    RetrievalPolicy.defaults()).recall("拒绝全文", filter());
+
+            assertThat(result.candidates())
+                    .extracting(scored -> scored.candidate().candidateId())
+                    .containsExactly(VECTOR_ID);
+            assertThat(result.degradationReasons())
+                    .containsExactly(DegradationReason.LEXICAL_UNAVAILABLE);
+        }
+
+        try (var rejectVector = new RejectingExecutor(Set.of(2))) {
+            var result = new HybridRecallService(
+                    (query, filter, limit) -> List.of(candidate(
+                            LEXICAL_ID, 21, RecallSource.LEXICAL, 1, "全文正文")),
+                    (query, filter, limit) -> List.of(candidate(
+                            VECTOR_ID, 22, RecallSource.VECTOR, 1, "向量正文")),
+                    rejectVector,
+                    RetrievalPolicy.defaults()).recall("拒绝向量", filter());
+
+            assertThat(result.candidates())
+                    .extracting(scored -> scored.candidate().candidateId())
+                    .containsExactly(LEXICAL_ID);
+            assertThat(result.degradationReasons())
+                    .containsExactly(DegradationReason.VECTOR_UNAVAILABLE);
+        }
+
+        try (var rejectBoth = new RejectingExecutor(Set.of(1, 2))) {
+            var service = new HybridRecallService(
+                    (query, filter, limit) -> List.of(),
+                    (query, filter, limit) -> List.of(),
+                    rejectBoth,
+                    RetrievalPolicy.defaults());
+
+            assertThatThrownBy(() -> service.recall("双路拒绝", filter()))
+                    .isInstanceOf(RetrievalUnavailableException.class);
+        }
+
+        var started = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var interrupted = new CountDownLatch(1);
+        try (var rejectSecond = new RejectingExecutor(Set.of(2))) {
+            var service = new HybridRecallService(
+                    (query, filter, limit) -> {
+                        started.countDown();
+                        awaitInterruptibly(release, interrupted);
+                        return List.of();
+                    },
+                    (query, filter, limit) -> List.of(),
+                    rejectSecond,
+                    policy(Duration.ofMillis(80)));
+
+            assertThatThrownBy(() -> service.recall("拒绝后取消", filter()))
+                    .isInstanceOf(RetrievalUnavailableException.class);
+            assertThat(started.getCount()).isZero();
+            assertThat(interrupted.await(1, TimeUnit.SECONDS)).isTrue();
+        } finally {
+            release.countDown();
+        }
+    }
+
     private static RetrievalFilter filter() {
         return new RetrievalFilter(
                 SPACE_ID,
@@ -371,5 +442,55 @@ class HybridRecallServiceTest {
 
     private static UUID uuid(int suffix) {
         return UUID.fromString("00000000-0000-0000-0000-%012d".formatted(suffix));
+    }
+
+    private static final class RejectingExecutor extends AbstractExecutorService {
+        private final java.util.concurrent.ExecutorService delegate =
+                Executors.newFixedThreadPool(2);
+        private final Set<Integer> rejectedCalls;
+        private final AtomicInteger submissions = new AtomicInteger();
+
+        private RejectingExecutor(Set<Integer> rejectedCalls) {
+            this.rejectedCalls = Set.copyOf(rejectedCalls);
+        }
+
+        @Override
+        public void execute(Runnable command) {
+            if (rejectedCalls.contains(submissions.incrementAndGet())) {
+                throw new RejectedExecutionException("capacity protected");
+            }
+            delegate.execute(command);
+        }
+
+        @Override
+        public void shutdown() {
+            delegate.shutdown();
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            return delegate.shutdownNow();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return delegate.isShutdown();
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return delegate.isTerminated();
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit)
+                throws InterruptedException {
+            return delegate.awaitTermination(timeout, unit);
+        }
+
+        @Override
+        public void close() {
+            shutdownNow();
+        }
     }
 }

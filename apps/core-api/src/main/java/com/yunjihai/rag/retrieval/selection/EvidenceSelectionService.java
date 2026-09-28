@@ -66,10 +66,11 @@ public final class EvidenceSelectionService {
                 .toLowerCase(Locale.ROOT);
         var result = new StringBuilder(normalized.length());
         boolean previousWasWhitespace = true;
-        for (int offset = 0; offset < normalized.length();) {
-            int codePoint = normalized.codePointAt(offset);
-            offset += Character.charCount(codePoint);
-            if (isPunctuation(codePoint)) {
+        var codePoints = normalized.codePoints().toArray();
+        for (int index = 0; index < codePoints.length; index++) {
+            int codePoint = codePoints[index];
+            if (isPunctuation(codePoint)
+                    && !isSemanticNumericPunctuation(codePoints, index)) {
                 continue;
             }
             if (Character.isWhitespace(codePoint) || Character.isSpaceChar(codePoint)) {
@@ -86,6 +87,23 @@ public final class EvidenceSelectionService {
             result.setLength(result.length() - 1);
         }
         return result.toString();
+    }
+
+    private static boolean isSemanticNumericPunctuation(int[] codePoints, int index) {
+        boolean previousIsDigit = index > 0 && Character.isDigit(codePoints[index - 1]);
+        boolean nextIsDigit = index + 1 < codePoints.length
+                && Character.isDigit(codePoints[index + 1]);
+        if (previousIsDigit && nextIsDigit) {
+            return true;
+        }
+        int codePoint = codePoints[index];
+        boolean numericSign = codePoint == '-' || codePoint == '\u2010'
+                || codePoint == '\u2011' || codePoint == '\u2212';
+        boolean startsNumericToken = index == 0
+                || Character.isWhitespace(codePoints[index - 1])
+                || Character.isSpaceChar(codePoints[index - 1])
+                || isPunctuation(codePoints[index - 1]);
+        return numericSign && nextIsDigit && startsNumericToken;
     }
 
     private static boolean isPunctuation(int codePoint) {

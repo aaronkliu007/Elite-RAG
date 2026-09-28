@@ -38,6 +38,18 @@ class EvidenceSelectionServiceTest {
     }
 
     @Test
+    void keepsSemanticNumericPunctuationWhileRemovingLayoutPunctuation() {
+        var decimalAmount = scored(6, 106, "报价1.0万元");
+        var layoutVariant = scored(7, 107, "报价：1.0万元！");
+        var tenfoldAmount = scored(8, 108, "报价10万元");
+
+        var selected = new EvidenceSelectionService(RetrievalPolicy.defaults()).select(
+                List.of(decimalAmount, layoutVariant, tenfoldAmount), 8);
+
+        assertThat(selected).containsExactly(decimalAmount, tenfoldAmount);
+    }
+
+    @Test
     void enforcesPerDocumentCapBeforeMovingToTheNextCandidate() {
         var sameDocument = uuid(500);
         var first = scored(10, sameDocument, "甲甲甲甲");

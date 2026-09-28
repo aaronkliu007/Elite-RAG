@@ -14,6 +14,8 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -39,7 +41,12 @@ public final class RerankingService {
         if (limited.isEmpty()) {
             return new RerankResult(List.of(), Set.of());
         }
-        var future = executor.submit(() -> reranker.rerank(queryText, limited));
+        final Future<List<RerankScore>> future;
+        try {
+            future = executor.submit(() -> reranker.rerank(queryText, limited));
+        } catch (RejectedExecutionException exception) {
+            return fallback(limited);
+        }
         final List<RerankScore> scores;
         try {
             scores = future.get(policy.rerankTimeout().toNanos(), TimeUnit.NANOSECONDS);

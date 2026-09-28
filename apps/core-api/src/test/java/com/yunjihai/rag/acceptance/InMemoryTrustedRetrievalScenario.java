@@ -21,6 +21,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -99,6 +101,12 @@ final class InMemoryTrustedRetrievalScenario implements AutoCloseable {
     private RetrievalService service(boolean lexicalFailed, boolean vectorFailed) {
         var policy = RetrievalPolicy.defaults();
         var idSequence = new AtomicInteger();
+        var revokedAfterRecall = new HashSet<UUID>();
+        var currentPublishedVersions = new HashMap<UUID, UUID>();
+        lexicalCandidates.forEach(candidate -> currentPublishedVersions.put(
+                candidate.documentId(), candidate.versionId()));
+        vectorCandidates.forEach(candidate -> currentPublishedVersions.put(
+                candidate.documentId(), candidate.versionId()));
         var recall = new HybridRecallService(
                 (query, filter, limit) -> {
                     if (lexicalFailed) {
@@ -115,10 +123,14 @@ final class InMemoryTrustedRetrievalScenario implements AutoCloseable {
                 executor,
                 policy);
         var reranking = new RerankingService(
-                (query, candidates) -> candidates.stream()
-                        .map(candidate -> new RerankScore(
-                                candidate.candidate().candidateId(), candidate.score()))
-                        .toList(),
+                (query, candidates) -> {
+                    revokedAfterRecall.add(revokedDocumentId);
+                    currentPublishedVersions.put(replacedDocumentId, uuid(8888));
+                    return candidates.stream()
+                            .map(candidate -> new RerankScore(
+                                    candidate.candidate().candidateId(), candidate.score()))
+                            .toList();
+                },
                 executor,
                 policy);
         return new TrustedRetrievalService(
@@ -126,8 +138,11 @@ final class InMemoryTrustedRetrievalScenario implements AutoCloseable {
                 recall,
                 reranking,
                 (userId, spaceId, requested, checkedAt) -> requested.stream()
-                        .filter(reference -> !reference.documentId().equals(revokedDocumentId))
-                        .filter(reference -> !reference.documentId().equals(replacedDocumentId))
+                        .filter(reference -> userId.equals(USER_ID))
+                        .filter(reference -> spaceId.equals(SPACE_ID))
+                        .filter(reference -> !revokedAfterRecall.contains(reference.documentId()))
+                        .filter(reference -> reference.versionId().equals(
+                                currentPublishedVersions.get(reference.documentId())))
                         .collect(Collectors.toUnmodifiableSet()),
                 new EvidenceSelectionService(policy),
                 at -> uuid(9000 + idSequence.getAndIncrement()),

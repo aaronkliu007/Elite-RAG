@@ -14,9 +14,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -42,9 +44,9 @@ public final class HybridRecallService {
         Objects.requireNonNull(queryText, "queryText must not be null");
         Objects.requireNonNull(filter, "filter must not be null");
         long deadline = System.nanoTime() + policy.recallTimeout().toNanos();
-        Future<List<Candidate>> lexicalFuture = executor.submit(() ->
+        Future<List<Candidate>> lexicalFuture = submit(() ->
                 lexicalRetriever.retrieve(queryText, filter, policy.lexicalLimit()));
-        Future<List<Candidate>> vectorFuture = executor.submit(() ->
+        Future<List<Candidate>> vectorFuture = submit(() ->
                 vectorRetriever.retrieve(queryText, filter, policy.vectorLimit()));
 
         var lexical = await(
@@ -73,6 +75,9 @@ public final class HybridRecallService {
             long deadline,
             RecallSource expectedSource,
             int limit) {
+        if (future == null) {
+            return BranchResult.unavailable();
+        }
         try {
             long remaining = Math.max(0, deadline - System.nanoTime());
             var candidates = future.get(remaining, TimeUnit.NANOSECONDS);
@@ -84,6 +89,14 @@ public final class HybridRecallService {
         } catch (ExecutionException | TimeoutException | InvalidRecallResultException exception) {
             future.cancel(true);
             return BranchResult.unavailable();
+        }
+    }
+
+    private Future<List<Candidate>> submit(Callable<List<Candidate>> task) {
+        try {
+            return executor.submit(task);
+        } catch (RejectedExecutionException exception) {
+            return null;
         }
     }
 
