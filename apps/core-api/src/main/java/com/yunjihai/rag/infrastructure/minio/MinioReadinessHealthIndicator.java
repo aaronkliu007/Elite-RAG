@@ -33,7 +33,7 @@ public final class MinioReadinessHealthIndicator implements HealthIndicator {
         boolean deleted = false;
         try {
             client.putObject(PutObjectArgs.builder().bucket(bucket).object(key)
-                    .stream(new ByteArrayInputStream(PROBE_BODY), PROBE_BODY.length, -1)
+                    .stream(new ByteArrayInputStream(PROBE_BODY), (long) PROBE_BODY.length, -1L)
                     .contentType("application/octet-stream")
                     .build());
             created = true;

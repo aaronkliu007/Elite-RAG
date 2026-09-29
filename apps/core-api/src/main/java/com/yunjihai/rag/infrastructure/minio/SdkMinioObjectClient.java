@@ -30,7 +30,7 @@ public final class SdkMinioObjectClient implements MinioObjectClient {
         var args = PutObjectArgs.builder()
                 .bucket(bucket)
                 .object(key)
-                .stream(stream, length, -1)
+                .stream(stream, length, -1L)
                 .contentType(contentType)
                 .headers(Map.of("If-None-Match", "*"))
                 .userMetadata(Map.of("sha256", digest))
@@ -60,7 +60,7 @@ public final class SdkMinioObjectClient implements MinioObjectClient {
             String bucket, String key, long length, String contentType, String digest) {
         try {
             var existing = client.statObject(StatObjectArgs.builder().bucket(bucket).object(key).build());
-            String storedDigest = existing.userMetadata().get("sha256");
+            String storedDigest = existing.userMetadata().getFirst("sha256");
             if (existing.size() != length || !contentType.equals(existing.contentType())
                     || !digest.equals(storedDigest)) {
                 throw conflict();

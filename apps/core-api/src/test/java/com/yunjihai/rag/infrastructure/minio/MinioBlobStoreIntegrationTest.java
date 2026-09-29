@@ -85,7 +85,7 @@ class MinioBlobStoreIntegrationTest {
             assertThat(stored.readAllBytes()).isEqualTo(PAYLOAD);
         }
         var metadata = admin.statObject(StatObjectArgs.builder().bucket(BUCKET).object(KEY).build());
-        assertThat(metadata.userMetadata()).containsEntry("sha256", SHA256);
+        assertThat(metadata.userMetadata().getFirst("sha256")).isEqualTo(SHA256);
         assertThat(metadata.contentType()).isEqualTo(MediaType.APPLICATION_PDF_VALUE);
     }
 
@@ -127,12 +127,12 @@ class MinioBlobStoreIntegrationTest {
 
         String missingSha = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
         admin.putObject(PutObjectArgs.builder().bucket(BUCKET).object(key(missingSha))
-                .stream(stream(new byte[]{1}), 1, -1).contentType("application/pdf").build());
+                .stream(stream(new byte[]{1}), 1L, -1L).contentType("application/pdf").build());
         assertConflict(() -> objects.putIfAbsent(BUCKET, key(missingSha), stream(new byte[]{1}), 1, "application/pdf"));
 
         String wrongSha = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
         admin.putObject(PutObjectArgs.builder().bucket(BUCKET).object(key(wrongSha))
-                .stream(stream(new byte[]{1}), 1, -1).contentType("application/pdf")
+                .stream(stream(new byte[]{1}), 1L, -1L).contentType("application/pdf")
                 .userMetadata(java.util.Map.of("sha256", "f".repeat(64))).build());
         assertConflict(() -> objects.putIfAbsent(BUCKET, key(wrongSha), stream(new byte[]{1}), 1, "application/pdf"));
     }
@@ -141,7 +141,7 @@ class MinioBlobStoreIntegrationTest {
     void readinessUsesDedicatedRandomProbeAndReportsNormalMissingAndReadOnlyBuckets() throws Exception {
         String businessKey = "sha256/ff/" + "f".repeat(64);
         admin.putObject(PutObjectArgs.builder().bucket(BUCKET).object(businessKey)
-                .stream(stream(new byte[]{9}), 1, -1).contentType("application/octet-stream").build());
+                .stream(stream(new byte[]{9}), 1L, -1L).contentType("application/octet-stream").build());
 
         var healthy = new MinioReadinessHealthIndicator(admin, BUCKET).health();
         var missing = new MinioReadinessHealthIndicator(admin, MISSING_BUCKET).health();
