@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 固定工作目录为 `E:\git\_repo\Elite-RAG`。
+- 固定工作目录为 `E:\git_repo\Elite-RAG`。
 - 数据留在内网；本批不调用云模型，不接入真实客户资料。
 - Java 21 / Spring Boot 是业务事实和事务边界的唯一所有者。
 - PostgreSQL 是权威数据源；MinIO 只保存不可变原始文件。
