@@ -12,6 +12,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MinioBlobStoreTest {
 
@@ -75,6 +76,49 @@ class MinioBlobStoreTest {
         assertThat(client.objects).hasSize(1);
     }
 
+    @Test
+    @DisplayName("响应丢失时保守登记补偿候选并保持写入失败")
+    void uncertainWriteRegistersCleanupCandidateBeforeRethrowing() {
+        String hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        var cleanup = new RecordingCleanup();
+        var failure = new IllegalStateException("MINIO_OBJECT_WRITE_UNCERTAIN", null);
+        var store = new MinioBlobStore("rag-blobs", (bucket, key, stream, length, type) -> {
+            throw failure;
+        }, cleanup);
+
+        assertThatThrownBy(() -> store.putIfAbsent(
+                hash, new ByteArrayInputStream(new byte[]{1}), 1, MediaType.APPLICATION_PDF))
+                .isSameAs(failure)
+                .hasNoCause();
+        assertThat(cleanup.recorded).isEqualTo(1);
+        assertThat(cleanup.last).isEqualTo(new OrphanBlobCandidate(
+                "rag-blobs", hash, "sha256/ab/" + hash));
+    }
+
+    @Test
+    @DisplayName("补偿登记自身失败时仅附加固定安全异常")
+    void recorderFailureCannotLeakItsCauseFromUncertainWrite() {
+        String hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+        var uncertain = new IllegalStateException("MINIO_OBJECT_WRITE_UNCERTAIN", null);
+        var secretFailure = new IllegalStateException("jdbc://secret-host?password=secret");
+        var store = new MinioBlobStore("rag-blobs", (bucket, key, stream, length, type) -> {
+            throw uncertain;
+        }, candidate -> {
+            throw secretFailure;
+        });
+
+        assertThatThrownBy(() -> store.putIfAbsent(
+                hash, new ByteArrayInputStream(new byte[]{1}), 1, MediaType.APPLICATION_PDF))
+                .isSameAs(uncertain)
+                .hasNoCause()
+                .satisfies(error -> assertThat(error.getSuppressed())
+                        .singleElement()
+                        .satisfies(suppressed -> {
+                            assertThat(suppressed).hasMessage("BLOB_CLEANUP_RECORD_FAILED").hasNoCause();
+                            assertThat(suppressed.getMessage()).doesNotContain("secret");
+                        }));
+    }
+
     private static final class RecordingMinioClient implements MinioObjectClient {
         private final Map<String, byte[]> objects = new ConcurrentHashMap<>();
 
@@ -91,10 +135,12 @@ class MinioBlobStoreTest {
 
     private static final class RecordingCleanup implements OrphanBlobRecorder {
         private int recorded;
+        private OrphanBlobCandidate last;
 
         @Override
         public void record(OrphanBlobCandidate candidate) {
             recorded++;
+            last = candidate;
         }
     }
 }

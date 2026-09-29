@@ -4,6 +4,7 @@ import com.yunjihai.rag.ingestion.MinioBlobStore;
 import io.minio.GetObjectArgs;
 import io.minio.ListObjectsArgs;
 import io.minio.MakeBucketArgs;
+import io.minio.MinioAsyncClient;
 import io.minio.MinioClient;
 import io.minio.PutObjectArgs;
 import io.minio.SetBucketPolicyArgs;
@@ -17,14 +18,19 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
@@ -32,7 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MinioBlobStoreIntegrationTest {
-    private static final String IMAGE = "ghcr.io/l33tlamer/minio-backup@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e";
+    private static final String IMAGE = "quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3";
+    private static final Path LICENSE = Path.of("E:\\git_secrets\\Elite-RAG\\minio.license");
     private static final String ROOT_USER = "task7-root-user";
     private static final String ROOT_PASSWORD = "task7-root-password-only";
     private static final String BUCKET = "task7-documents";
@@ -45,16 +52,20 @@ class MinioBlobStoreIntegrationTest {
     private static final GenericContainer<?> MINIO = new GenericContainer<>(DockerImageName.parse(IMAGE))
             .withEnv("MINIO_ROOT_USER", ROOT_USER)
             .withEnv("MINIO_ROOT_PASSWORD", ROOT_PASSWORD)
-            .withCommand("server", "/data", "--console-address", ":9001")
+            .withFileSystemBind(LICENSE.toString(), "/minio.license", BindMode.READ_ONLY)
+            .withCommand("server", "/data", "--console-address", ":9001", "--license", "/minio.license")
             .withExposedPorts(9000)
             .waitingFor(Wait.forHttp("/minio/health/ready").forPort(9000)
                     .withStartupTimeout(Duration.ofMinutes(2)));
 
     private static MinioClient admin;
+    private static MinioAsyncClient objectSdk;
     private static SdkMinioObjectClient objects;
 
     @BeforeAll
     static void startMinio() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                Files.isRegularFile(LICENSE), "仓库外 AIStor license 不存在，跳过官方 AIStor 协议测试");
         MINIO.start();
         admin = MinioClient.builder().endpoint(MINIO.getHost(), MINIO.getMappedPort(9000), false)
                 .credentials(ROOT_USER, ROOT_PASSWORD).build();
@@ -62,13 +73,15 @@ class MinioBlobStoreIntegrationTest {
         admin.makeBucket(MakeBucketArgs.builder().bucket(READ_ONLY_BUCKET).build());
         admin.setBucketPolicy(SetBucketPolicyArgs.builder().bucket(READ_ONLY_BUCKET)
                 .config(readOnlyPolicy(READ_ONLY_BUCKET)).build());
-        objects = new SdkMinioObjectClient(admin);
+        objectSdk = newAsyncClient();
+        objects = new SdkMinioObjectClient(objectSdk);
     }
 
     @AfterAll
     static void stopMinio() throws Exception {
         if (admin != null) admin.close();
-        MINIO.stop();
+        if (objectSdk != null) objectSdk.close();
+        if (MINIO.isRunning()) MINIO.stop();
     }
 
     @Test
@@ -91,26 +104,36 @@ class MinioBlobStoreIntegrationTest {
 
     @Test
     void twoIndependentWritersAtomicallyCreateExactlyOnce() throws Exception {
-        String sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        String key = "sha256/aa/" + sha;
-        byte[] bytes = "same-content".getBytes(StandardCharsets.UTF_8);
-        var gate = new CountDownLatch(1);
-        try (var executor = Executors.newFixedThreadPool(2)) {
+        byte[] firstBytes = new byte[8 * 1024 * 1024];
+        byte[] secondBytes = new byte[8 * 1024 * 1024];
+        java.util.Arrays.fill(firstBytes, (byte) 0x5a);
+        java.util.Arrays.fill(secondBytes, (byte) 0x6b);
+        String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(firstBytes));
+        String key = key(sha);
+        var gate = new CyclicBarrier(2);
+        var firstSdk = newAsyncClient();
+        var secondSdk = newAsyncClient();
+        var firstObjects = new SdkMinioObjectClient(firstSdk);
+        var secondObjects = new SdkMinioObjectClient(secondSdk);
+        try (firstSdk; secondSdk; var executor = Executors.newFixedThreadPool(2)) {
             var first = executor.submit(() -> {
-                gate.await();
-                return objects.putIfAbsent(BUCKET, key, stream(bytes), bytes.length, "text/plain");
+                gate.await(10, TimeUnit.SECONDS);
+                return firstObjects.putIfAbsent(
+                        BUCKET, key, stream(firstBytes), firstBytes.length, "application/octet-stream");
             });
             var second = executor.submit(() -> {
-                gate.await();
-                return objects.putIfAbsent(BUCKET, key, stream(bytes), bytes.length, "text/plain");
+                gate.await(10, TimeUnit.SECONDS);
+                return secondObjects.putIfAbsent(
+                        BUCKET, key, stream(secondBytes), secondBytes.length, "application/octet-stream");
             });
-            gate.countDown();
 
-            assertThat(List.of(first.get(10, TimeUnit.SECONDS), second.get(10, TimeUnit.SECONDS)))
+            boolean firstCreated = first.get(30, TimeUnit.SECONDS);
+            boolean secondCreated = second.get(30, TimeUnit.SECONDS);
+            assertThat(List.of(firstCreated, secondCreated))
                     .containsExactlyInAnyOrder(true, false);
-        }
-        try (var stored = admin.getObject(GetObjectArgs.builder().bucket(BUCKET).object(key).build())) {
-            assertThat(stored.readAllBytes()).isEqualTo(bytes);
+            try (var stored = admin.getObject(GetObjectArgs.builder().bucket(BUCKET).object(key).build())) {
+                assertThat(stored.readAllBytes()).isEqualTo(firstCreated ? firstBytes : secondBytes);
+            }
         }
     }
 
@@ -199,6 +222,11 @@ class MinioBlobStoreIntegrationTest {
 
     private static ByteArrayInputStream stream(byte[] bytes) {
         return new ByteArrayInputStream(bytes);
+    }
+
+    private static MinioAsyncClient newAsyncClient() {
+        return MinioAsyncClient.builder().endpoint(MINIO.getHost(), MINIO.getMappedPort(9000), false)
+                .credentials(ROOT_USER, ROOT_PASSWORD).build();
     }
 
     private static String key(String sha256) {

@@ -27,8 +27,19 @@ public final class MinioBlobStore implements BlobStore {
             throw new IllegalArgumentException("SHA-256 无效");
         }
         var key = "sha256/" + sha256.substring(0, 2) + "/" + sha256;
-        var created = client.putIfAbsent(bucket, key, stream, length, mediaType.toString());
-        return new StoredBlob(sha256, key, length, mediaType, created);
+        try {
+            var created = client.putIfAbsent(bucket, key, stream, length, mediaType.toString());
+            return new StoredBlob(sha256, key, length, mediaType, created);
+        } catch (IllegalStateException failure) {
+            if (isUncertainWrite(failure)) {
+                try {
+                    orphanRecorder.record(new OrphanBlobCandidate(bucket, sha256, key));
+                } catch (RuntimeException ignored) {
+                    failure.addSuppressed(new IllegalStateException("BLOB_CLEANUP_RECORD_FAILED", null));
+                }
+            }
+            throw failure;
+        }
     }
 
     @Override
@@ -36,5 +47,9 @@ public final class MinioBlobStore implements BlobStore {
         if (blob.created()) {
             orphanRecorder.record(new OrphanBlobCandidate(bucket, blob.sha256(), blob.objectKey()));
         }
+    }
+
+    private static boolean isUncertainWrite(IllegalStateException failure) {
+        return failure.getCause() == null && "MINIO_OBJECT_WRITE_UNCERTAIN".equals(failure.getMessage());
     }
 }

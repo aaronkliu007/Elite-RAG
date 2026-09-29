@@ -29,14 +29,14 @@ public final class MinioReadinessHealthIndicator implements HealthIndicator {
     @Override
     public Health health() {
         String key = PROBE_PREFIX + UUID.randomUUID();
-        boolean created = false;
+        boolean putAttempted = false;
         boolean deleted = false;
         try {
+            putAttempted = true;
             client.putObject(PutObjectArgs.builder().bucket(bucket).object(key)
                     .stream(new ByteArrayInputStream(PROBE_BODY), (long) PROBE_BODY.length, -1L)
                     .contentType("application/octet-stream")
                     .build());
-            created = true;
             try (var value = client.getObject(GetObjectArgs.builder().bucket(bucket).object(key).build())) {
                 if (!Arrays.equals(PROBE_BODY, value.readAllBytes())) return down();
             }
@@ -46,7 +46,7 @@ public final class MinioReadinessHealthIndicator implements HealthIndicator {
         } catch (Exception failure) {
             return down();
         } finally {
-            if (created && !deleted) {
+            if (putAttempted) {
                 try {
                     client.removeObject(RemoveObjectArgs.builder().bucket(bucket).object(key).build());
                 } catch (Exception ignored) {

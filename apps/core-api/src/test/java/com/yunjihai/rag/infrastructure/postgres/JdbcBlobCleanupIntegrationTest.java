@@ -16,6 +16,8 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JdbcBlobCleanupIntegrationTest {
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
@@ -65,18 +67,57 @@ class JdbcBlobCleanupIntegrationTest {
     }
 
     @Test
-    void candidateRegistrationIsIdempotentAndNeverOverwritesOriginalDigest() {
+    void candidateRegistrationIsIdempotentForTheSameDigest() {
         var candidate = new OrphanBlobCandidate("rag-documents", SHA, KEY);
 
         recorder.record(candidate);
         recorder.record(candidate);
-        recorder.record(new OrphanBlobCandidate("rag-documents", "2".repeat(64), KEY));
 
         assertEquals(1L, count("blob_cleanup_candidate"));
         assertEquals(SHA, ownerJdbc.sql("SELECT sha256 FROM blob_cleanup_candidate")
                 .query(String.class).single());
         assertEquals("PENDING", ownerJdbc.sql("SELECT status FROM blob_cleanup_candidate")
                 .query(String.class).single());
+    }
+
+    @Test
+    void sameDigestReplayReactivatesEveryTerminalCandidateState() {
+        var candidate = new OrphanBlobCandidate("rag-documents", SHA, KEY);
+        recorder.record(candidate);
+
+        for (String status : java.util.List.of("DELETED", "FAILED", "DEFERRED")) {
+            ownerJdbc.sql("UPDATE blob_cleanup_candidate SET status = :status, last_checked_at = now()")
+                    .param("status", status).update();
+
+            recorder.record(candidate);
+
+            var row = ownerJdbc.sql("SELECT status, last_checked_at FROM blob_cleanup_candidate")
+                    .query((result, rowNumber) -> new Object[]{
+                            result.getString("status"), result.getObject("last_checked_at")})
+                    .single();
+            assertThat(row[0]).as(status).isEqualTo("PENDING");
+            assertThat(row[1]).as(status).isNull();
+        }
+    }
+
+    @Test
+    void sameObjectKeyWithDifferentDigestFailsWithoutChangingOriginal() {
+        var original = new OrphanBlobCandidate("rag-documents", SHA, KEY);
+        recorder.record(original);
+        UUID originalId = ownerJdbc.sql("SELECT id FROM blob_cleanup_candidate")
+                .query(UUID.class).single();
+
+        assertThatThrownBy(() -> recorder.record(
+                new OrphanBlobCandidate("rag-documents", "2".repeat(64), KEY)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("BLOB_CLEANUP_CONFLICT")
+                .hasNoCause();
+
+        assertThat(ownerJdbc.sql("SELECT id FROM blob_cleanup_candidate").query(UUID.class).single())
+                .isEqualTo(originalId);
+        assertThat(ownerJdbc.sql("SELECT sha256 FROM blob_cleanup_candidate").query(String.class).single())
+                .isEqualTo(SHA);
+        assertThat(count("blob_cleanup_candidate")).isEqualTo(1);
     }
 
     @Test
