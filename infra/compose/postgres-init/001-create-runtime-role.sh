@@ -1,4 +1,5 @@
 #!/bin/sh
+# PostgreSQL owns migrations; this role is for application data access only.
 set -eu
 
 : "${RAG_DB_RUNTIME_USER:?RAG_DB_RUNTIME_USER is required}"

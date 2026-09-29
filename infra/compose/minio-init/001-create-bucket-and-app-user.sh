@@ -1,4 +1,5 @@
 #!/bin/sh
+# Bootstrap a bucket-scoped application identity using the root account.
 set -eu
 
 : "${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}"
