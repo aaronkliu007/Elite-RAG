@@ -27,6 +27,7 @@ import javax.sql.DataSource;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -147,6 +148,58 @@ class JdbcOrganizationIntegrationTest {
             assertEquals(1L, count("org_unit"));
             assertEquals(1L, count("org_membership"));
         }
+    }
+
+    @Test
+    void acceptsExternalIdsAtThe255CharacterBoundary() {
+        String departmentId = "d".repeat(255);
+        String userId = "u".repeat(255);
+        service.synchronize(snapshot(List.of(department(departmentId, null)),
+                List.of(user(userId, true, departmentId))));
+        assertEquals(7, id("org_unit", departmentId).version());
+        assertEquals(7, id("app_user", userId).version());
+        assertEquals(1L, count("org_membership"));
+    }
+
+    @Test
+    void reconcilesMoreThan16384UsersWithoutExceedingSqlParameterLimits() {
+        service.synchronize(snapshot(List.of(department("root", null)), List.of(user("u-0", true, "root"))));
+        UUID existingUserId = id("app_user", "u-0");
+        UUID existingDepartmentId = id("org_unit", "root");
+        var users = new ArrayList<ExternalUser>(16_385);
+        for (int index = 0; index < 16_385; index++) {
+            users.add(user("u-" + index, true, "root"));
+        }
+
+        service.synchronize(snapshot(List.of(department("root", null)), users));
+
+        assertEquals(16_385L, count("app_user"));
+        assertEquals(16_385L, count("org_membership"));
+        assertEquals(existingUserId, id("app_user", "u-0"));
+        assertEquals(existingDepartmentId, id("org_unit", "root"));
+        assertEquals(7, id("app_user", "u-16384").version());
+        assertTrue(versions.isEnabled("u-16384"));
+        assertEquals(1L, jdbc.sql("SELECT count(*) FROM org_membership AS m "
+                        + "JOIN app_user AS u ON u.id = m.user_id "
+                        + "JOIN org_unit AS d ON d.id = m.org_unit_id "
+                        + "WHERE u.external_id = 'u-16384' AND d.external_id = 'root'")
+                .query(Long.class).single());
+    }
+
+    @Test
+    void reconcilesDepartmentsAcrossTheBatchBoundary() {
+        var departments = new ArrayList<ExternalDepartment>(501);
+        departments.add(department("root", null));
+        for (int index = 1; index <= 500; index++) {
+            departments.add(department("d-" + index, "root"));
+        }
+
+        service.synchronize(snapshot(departments, List.of(user("alice", true, "d-500"))));
+
+        assertEquals(501L, count("org_unit"));
+        assertEquals(id("org_unit", "root"), jdbc.sql("SELECT parent_id FROM org_unit WHERE external_id = 'd-500'")
+                .query(UUID.class).single());
+        assertEquals(1L, count("org_membership"));
     }
 
     @Test

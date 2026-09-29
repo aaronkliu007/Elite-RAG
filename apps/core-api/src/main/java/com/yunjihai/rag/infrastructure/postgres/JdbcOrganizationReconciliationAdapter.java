@@ -25,6 +25,7 @@ import java.util.UUID;
 /** Replaces one complete upstream organization snapshot inside the caller's transaction. */
 public class JdbcOrganizationReconciliationAdapter implements OrganizationReconciliationPort {
     public static final int MAX_EXTERNAL_ID_LENGTH = 255;
+    private static final int ROWS_PER_STATEMENT = 500;
     private final JdbcClient jdbc;
 
     public JdbcOrganizationReconciliationAdapter(JdbcClient jdbc) {
@@ -40,14 +41,15 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
             jdbc.sql("SELECT pg_advisory_xact_lock(20260929, 3)").query((rs, row) -> 1).single();
             var previouslyEnabled = new HashSet<>(jdbc.sql("SELECT external_id FROM app_user WHERE enabled")
                     .query(String.class).list());
+            stageSnapshotIds(snapshot);
             upsertDepartments(snapshot);
             var departmentIds = ids("org_unit");
             updateParents(snapshot, departmentIds);
             upsertUsers(snapshot);
             var userIds = ids("app_user");
             replaceMemberships(snapshot, userIds, departmentIds);
-            disableMissingUsers(snapshot);
-            disableMissingDepartments(snapshot);
+            disableMissingUsers();
+            disableMissingDepartments();
             var active = new HashSet<String>();
             for (var user : snapshot.users()) {
                 if (user.active()) active.add(user.externalId());
@@ -59,12 +61,49 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
         }
     }
 
+    private void stageSnapshotIds(OrganizationSnapshot snapshot) {
+        jdbc.sql("CREATE TEMP TABLE IF NOT EXISTS rag_org_snapshot_ids "
+                + "(kind char(1) NOT NULL, external_id text NOT NULL, "
+                + "PRIMARY KEY (kind, external_id)) ON COMMIT DROP").update();
+        jdbc.sql("TRUNCATE rag_org_snapshot_ids").update();
+        var batch = new ValueBatch();
+        for (var department : snapshot.departments()) {
+            batch.add("D", department.externalId());
+            if (batch.size() == ROWS_PER_STATEMENT) {
+                insertSnapshotIds(batch);
+                batch.clear();
+            }
+        }
+        for (var user : snapshot.users()) {
+            if (!user.active()) continue;
+            batch.add("U", user.externalId());
+            if (batch.size() == ROWS_PER_STATEMENT) {
+                insertSnapshotIds(batch);
+                batch.clear();
+            }
+        }
+        if (!batch.isEmpty()) insertSnapshotIds(batch);
+    }
+
+    private void insertSnapshotIds(ValueBatch batch) {
+        jdbc.sql("INSERT INTO rag_org_snapshot_ids (kind, external_id) VALUES " + batch.sql())
+                .params(batch.params()).update();
+    }
+
     private void upsertDepartments(OrganizationSnapshot snapshot) {
         if (snapshot.departments().isEmpty()) return;
         var batch = new ValueBatch();
         for (var department : snapshot.departments()) {
             batch.add(UuidV7.generate(snapshot.capturedAt()), department.externalId(), department.name());
+            if (batch.size() == ROWS_PER_STATEMENT) {
+                upsertDepartmentBatch(batch);
+                batch.clear();
+            }
         }
+        if (!batch.isEmpty()) upsertDepartmentBatch(batch);
+    }
+
+    private void upsertDepartmentBatch(ValueBatch batch) {
         jdbc.sql("INSERT INTO org_unit (id, external_id, name) VALUES " + batch.sql()
                         + " ON CONFLICT (external_id) DO UPDATE SET name = EXCLUDED.name, "
                         + "enabled = true, updated_at = now()")
@@ -77,7 +116,15 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
         for (var department : snapshot.departments()) {
             batch.add(department.externalId(), department.parentExternalId() == null
                     ? null : departmentIds.get(department.parentExternalId()));
+            if (batch.size() == ROWS_PER_STATEMENT) {
+                updateParentBatch(batch);
+                batch.clear();
+            }
         }
+        if (!batch.isEmpty()) updateParentBatch(batch);
+    }
+
+    private void updateParentBatch(ValueBatch batch) {
         jdbc.sql("UPDATE org_unit AS target SET parent_id = source.parent_id, updated_at = now() "
                         + "FROM (VALUES " + batch.sqlWithUuidSecondColumn() + ") AS source(external_id, parent_id) "
                         + "WHERE target.external_id = source.external_id")
@@ -89,7 +136,15 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
         var batch = new ValueBatch();
         for (var user : snapshot.users()) {
             batch.add(UuidV7.generate(snapshot.capturedAt()), user.externalId(), user.displayName(), user.active());
+            if (batch.size() == ROWS_PER_STATEMENT) {
+                upsertUserBatch(batch);
+                batch.clear();
+            }
         }
+        if (!batch.isEmpty()) upsertUserBatch(batch);
+    }
+
+    private void upsertUserBatch(ValueBatch batch) {
         jdbc.sql("INSERT INTO app_user (id, external_id, display_name, enabled) VALUES " + batch.sql()
                         + " ON CONFLICT (external_id) DO UPDATE SET display_name = EXCLUDED.display_name, "
                         + "enabled = EXCLUDED.enabled, updated_at = now()")
@@ -105,35 +160,30 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
             if (!user.active()) continue;
             for (var department : user.departmentExternalIds()) {
                 batch.add(userIds.get(user.externalId()), departmentIds.get(department), capturedAt);
+                if (batch.size() == ROWS_PER_STATEMENT) {
+                    insertMembershipBatch(batch);
+                    batch.clear();
+                }
             }
         }
-        if (!batch.isEmpty()) {
-            jdbc.sql("INSERT INTO org_membership (user_id, org_unit_id, snapshot_at) VALUES " + batch.sql())
-                    .params(batch.params()).update();
-        }
+        if (!batch.isEmpty()) insertMembershipBatch(batch);
     }
 
-    private void disableMissingUsers(OrganizationSnapshot snapshot) {
-        var active = snapshot.users().stream().filter(ExternalUser::active)
-                .map(ExternalUser::externalId).toList();
-        if (active.isEmpty()) {
-            jdbc.sql("UPDATE app_user SET enabled = false, updated_at = now() WHERE enabled").update();
-        } else {
-            jdbc.sql("UPDATE app_user SET enabled = false, updated_at = now() "
-                            + "WHERE enabled AND external_id NOT IN (:active)")
-                    .param("active", active).update();
-        }
+    private void insertMembershipBatch(ValueBatch batch) {
+        jdbc.sql("INSERT INTO org_membership (user_id, org_unit_id, snapshot_at) VALUES " + batch.sql())
+                .params(batch.params()).update();
     }
 
-    private void disableMissingDepartments(OrganizationSnapshot snapshot) {
-        var present = snapshot.departments().stream().map(ExternalDepartment::externalId).toList();
-        if (present.isEmpty()) {
-            jdbc.sql("UPDATE org_unit SET enabled = false, updated_at = now() WHERE enabled").update();
-        } else {
-            jdbc.sql("UPDATE org_unit SET enabled = false, updated_at = now() "
-                            + "WHERE enabled AND external_id NOT IN (:present)")
-                    .param("present", present).update();
-        }
+    private void disableMissingUsers() {
+        jdbc.sql("UPDATE app_user AS target SET enabled = false, updated_at = now() "
+                + "WHERE enabled AND NOT EXISTS (SELECT 1 FROM rag_org_snapshot_ids AS snapshot "
+                + "WHERE snapshot.kind = 'U' AND snapshot.external_id = target.external_id)").update();
+    }
+
+    private void disableMissingDepartments() {
+        jdbc.sql("UPDATE org_unit AS target SET enabled = false, updated_at = now() "
+                + "WHERE enabled AND NOT EXISTS (SELECT 1 FROM rag_org_snapshot_ids AS snapshot "
+                + "WHERE snapshot.kind = 'D' AND snapshot.external_id = target.external_id)").update();
     }
 
     private Map<String, UUID> ids(String table) {
@@ -223,6 +273,8 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
         }
 
         boolean isEmpty() { return rows.isEmpty(); }
+        int size() { return rows.size(); }
+        void clear() { rows.clear(); params.clear(); }
         Map<String, Object> params() { return params; }
         String sql() { return sql(false); }
         String sqlWithUuidSecondColumn() { return sql(true); }
