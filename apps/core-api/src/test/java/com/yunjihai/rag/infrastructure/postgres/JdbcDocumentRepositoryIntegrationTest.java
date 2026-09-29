@@ -22,9 +22,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -287,7 +287,7 @@ abstract class DocumentPostgresFixture {
 
     record RaceResult(int successes, List<Throwable> failures) { }
 
-    @Configuration
+    @TestConfiguration
     @EnableTransactionManagement(proxyTargetClass = true)
     static class TestConfig {
         @Bean DataSource dataSource() { return runtimeDataSource; }
