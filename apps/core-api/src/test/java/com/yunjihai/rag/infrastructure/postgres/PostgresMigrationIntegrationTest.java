@@ -6,6 +6,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.postgresql.util.PSQLException;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.io.IOException;
@@ -55,24 +56,46 @@ class PostgresMigrationIntegrationTest {
                 "document_version", "active_blob_reservation", "acl_entry", "ingestion_job",
                 "canonical_document", "canonical_node", "audit_event", "blob_cleanup_candidate"),
                 values("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'"));
-        assertEquals("uuid", scalar("SELECT data_type FROM information_schema.columns WHERE table_name = 'document' AND column_name = 'id'"));
-        assertEquals("timestamp with time zone", scalar("SELECT data_type FROM information_schema.columns WHERE table_name = 'document_version' AND column_name = 'created_at'"));
-        assertEquals("jsonb", scalar("SELECT data_type FROM information_schema.columns WHERE table_name = 'canonical_node' AND column_name = 'bounding_box'"));
-        assertEquals("bigint", scalar("SELECT data_type FROM information_schema.columns WHERE table_name = 'document' AND column_name = 'revision'"));
-        assertTrue(definitions("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'document'::regclass").stream()
-                .anyMatch(definition -> definition.contains("FOREIGN KEY (id, current_published_version_id)")));
-        assertTrue(definitions("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'document_version'::regclass").stream()
-                .anyMatch(definition -> definition.contains("UNIQUE (document_id, id)")));
-        assertTrue(definitions("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'org_unit'::regclass").stream()
-                .anyMatch(definition -> definition.contains("FOREIGN KEY (parent_id)")));
-        assertTrue(definitions("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'acl_entry'::regclass").stream()
-                .anyMatch(definition -> definition.startsWith("CHECK")));
-        assertTrue(definitions("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ingestion_job'::regclass").stream()
-                .anyMatch(definition -> definition.startsWith("CHECK")));
-        assertTrue(definitions("SELECT indexdef FROM pg_indexes WHERE tablename = 'acl_entry'").stream()
-                .anyMatch(definition -> definition.contains("(principal_type, principal_id)")));
-        assertTrue(definitions("SELECT indexdef FROM pg_indexes WHERE tablename = 'ingestion_job'").stream()
-                .anyMatch(definition -> definition.contains("(status, next_attempt_at)")));
+        assertColumnType("app_user", "id", "uuid");
+        assertColumnType("app_user", "created_at", "timestamp with time zone");
+        assertColumnType("org_unit", "parent_id", "uuid");
+        assertColumnType("org_membership", "snapshot_at", "timestamp with time zone");
+        assertColumnType("knowledge_space", "created_by", "uuid");
+        assertColumnType("document", "id", "uuid");
+        assertColumnType("document", "current_published_version_id", "uuid");
+        assertColumnType("document", "revision", "bigint");
+        assertColumnType("document", "updated_at", "timestamp with time zone");
+        assertColumnType("document_version", "document_id", "uuid");
+        assertColumnType("document_version", "created_at", "timestamp with time zone");
+        assertColumnType("active_blob_reservation", "version_id", "uuid");
+        assertColumnType("acl_entry", "principal_id", "uuid");
+        assertColumnType("acl_entry", "expires_at", "timestamp with time zone");
+        assertColumnType("ingestion_job", "lease_token", "uuid");
+        assertColumnType("ingestion_job", "lease_expires_at", "timestamp with time zone");
+        assertColumnType("canonical_document", "parsed_at", "timestamp with time zone");
+        assertColumnType("canonical_node", "bounding_box", "jsonb");
+        assertColumnType("canonical_node", "table_cells", "jsonb");
+        assertColumnType("audit_event", "metadata", "jsonb");
+        assertColumnType("audit_event", "occurred_at", "timestamp with time zone");
+        assertColumnType("blob_cleanup_candidate", "registered_at", "timestamp with time zone");
+        assertConstraint("document", "FOREIGN KEY (id, current_published_version_id) REFERENCES document_version(document_id, id)");
+        assertConstraint("document_version", "UNIQUE (document_id, id)");
+        assertConstraint("document_version", "UNIQUE (document_id, version_number)");
+        assertConstraint("org_unit", "FOREIGN KEY (parent_id) REFERENCES org_unit(id)");
+        assertConstraint("org_membership", "FOREIGN KEY (user_id) REFERENCES app_user(id)");
+        assertConstraint("org_membership", "FOREIGN KEY (org_unit_id) REFERENCES org_unit(id)");
+        assertConstraint("knowledge_space", "FOREIGN KEY (created_by) REFERENCES app_user(id)");
+        assertConstraint("document", "FOREIGN KEY (space_id) REFERENCES knowledge_space(id)");
+        assertConstraint("document_version", "FOREIGN KEY (document_id) REFERENCES document(id)");
+        assertConstraint("active_blob_reservation", "FOREIGN KEY (space_id, document_id) REFERENCES document(space_id, id)");
+        assertConstraint("active_blob_reservation", "FOREIGN KEY (document_id, version_id) REFERENCES document_version(document_id, id)");
+        assertConstraint("acl_entry", "FOREIGN KEY (space_id, document_id) REFERENCES document(space_id, id)");
+        assertConstraint("ingestion_job", "FOREIGN KEY (document_id, version_id) REFERENCES document_version(document_id, id)");
+        assertConstraint("canonical_document", "FOREIGN KEY (version_id) REFERENCES document_version(id)");
+        assertConstraint("canonical_node", "FOREIGN KEY (version_id) REFERENCES canonical_document(version_id)");
+        assertIndex("acl_entry", "(principal_type, principal_id)", "revoked_at IS NULL");
+        assertIndex("ingestion_job", "(status, next_attempt_at)", "QUEUED");
+        assertIndex("ingestion_job", "(status, next_attempt_at)", "RETRY_WAIT");
         UUID cleanupId = UUID.randomUUID();
         sql("INSERT INTO blob_cleanup_candidate (id, bucket, sha256, object_key, status) VALUES ('"
                 + cleanupId + "', 'rag-documents', '" + "b".repeat(64) + "', 'sha256/b/blob', 'DEFERRED')");
@@ -82,17 +105,68 @@ class PostgresMigrationIntegrationTest {
     }
 
     @Test
+    void rejectsInvalidAclScopesDuplicateActiveGrantsAndInvalidStates() throws SQLException {
+        migrate();
+        UUID user = UUID.randomUUID(), space = UUID.randomUUID(), document = UUID.randomUUID(), version = UUID.randomUUID();
+        sql("INSERT INTO app_user (id, external_id, display_name) VALUES ('" + user + "', 'acl-owner', 'Owner')");
+        sql("INSERT INTO knowledge_space (id, name, created_by) VALUES ('" + space + "', 'S', '" + user + "')");
+        sql("INSERT INTO document (id, space_id, title) VALUES ('" + document + "', '" + space + "', 'D')");
+        sql("INSERT INTO document_version (id, document_id, version_number, source_blob_id, created_by) VALUES ('" + version + "', '" + document + "', 1, 'blob', '" + user + "')");
+
+        sql("INSERT INTO acl_entry (id, space_id, scope, principal_type, principal_id) VALUES ('" + UUID.randomUUID() + "', '" + space + "', 'SPACE', 'USER', '" + user + "')");
+        PSQLException duplicateGrant = assertThrows(PSQLException.class, () -> sql(
+                "INSERT INTO acl_entry (id, space_id, scope, principal_type, principal_id) VALUES ('" + UUID.randomUUID() + "', '" + space + "', 'SPACE', 'USER', '" + user + "')"));
+        assertEquals("acl_active_space_unique", duplicateGrant.getServerErrorMessage().getConstraint());
+        sql("INSERT INTO acl_entry (id, space_id, document_id, scope, principal_type, principal_id) VALUES ('" + UUID.randomUUID() + "', '" + space + "', '" + document + "', 'DOCUMENT', 'USER', '" + user + "')");
+        PSQLException duplicateDocumentGrant = assertThrows(PSQLException.class, () -> sql(
+                "INSERT INTO acl_entry (id, space_id, document_id, scope, principal_type, principal_id) VALUES ('" + UUID.randomUUID() + "', '" + space + "', '" + document + "', 'DOCUMENT', 'USER', '" + user + "')"));
+        assertEquals("acl_active_document_unique", duplicateDocumentGrant.getServerErrorMessage().getConstraint());
+        assertCheckViolation("INSERT INTO acl_entry (id, space_id, document_id, scope, principal_type, principal_id) VALUES ('" + UUID.randomUUID() + "', '" + space + "', '" + document + "', 'SPACE', 'USER', '" + user + "')");
+        assertCheckViolation("INSERT INTO acl_entry (id, space_id, scope, principal_type, principal_id) VALUES ('" + UUID.randomUUID() + "', '" + space + "', 'DOCUMENT', 'USER', '" + user + "')");
+        assertCheckViolation("INSERT INTO acl_entry (id, space_id, scope, principal_type, principal_id) VALUES ('" + UUID.randomUUID() + "', '" + space + "', 'OTHER', 'USER', '" + user + "')");
+        assertCheckViolation("INSERT INTO acl_entry (id, space_id, scope, principal_type, principal_id) VALUES ('" + UUID.randomUUID() + "', '" + space + "', 'SPACE', 'INVALID', '" + user + "')");
+        assertCheckViolation("UPDATE document_version SET status = 'INVALID' WHERE id = '" + version + "'");
+        assertCheckViolation("UPDATE document_version SET parse_status = 'INVALID' WHERE id = '" + version + "'");
+        for (String status : java.util.List.of("DRAFT", "IN_REVIEW", "PUBLISHED", "ARCHIVED")) {
+            sql("UPDATE document_version SET status = '" + status + "' WHERE id = '" + version + "'");
+        }
+        for (String status : java.util.List.of("PENDING", "SUCCEEDED", "FAILED")) {
+            sql("UPDATE document_version SET parse_status = '" + status + "' WHERE id = '" + version + "'");
+        }
+        assertCheckViolation("UPDATE document SET revision = -1 WHERE id = '" + document + "'");
+        String jobPrefix = "INSERT INTO ingestion_job (id, document_id, version_id, requested_by, source_blob_id, source_filename, media_type, byte_size, status) VALUES ('";
+        String jobSuffix = "', '" + document + "', '" + version + "', '" + user + "', 'blob', 'file.txt', 'text/plain', 1, '";
+        assertCheckViolation(jobPrefix + UUID.randomUUID() + jobSuffix + "INVALID')");
+        assertCheckViolation(jobPrefix + UUID.randomUUID() + jobSuffix + "LEASED')");
+        for (String status : java.util.List.of("QUEUED", "RETRY_WAIT", "SUCCEEDED", "FAILED")) {
+            sql(jobPrefix + UUID.randomUUID() + jobSuffix + status + "')");
+        }
+        sql("INSERT INTO ingestion_job (id, document_id, version_id, requested_by, source_blob_id, source_filename, media_type, byte_size, status, lease_token, lease_worker, lease_expires_at) VALUES ('"
+                + UUID.randomUUID() + "', '" + document + "', '" + version + "', '" + user
+                + "', 'blob', 'file.txt', 'text/plain', 1, 'LEASED', '" + UUID.randomUUID() + "', 'worker', now())");
+    }
+
+    @Test
     void rejectsDuplicateExternalIdsDocumentVersionsAndActiveBlobReservations() throws SQLException {
         migrate();
         UUID user = UUID.randomUUID(), space = UUID.randomUUID(), document = UUID.randomUUID(), version = UUID.randomUUID();
+        UUID secondDocument = UUID.randomUUID(), secondVersion = UUID.randomUUID();
         sql("INSERT INTO app_user (id, external_id, display_name) VALUES ('" + user + "', 'external-1', 'A')");
         assertThrows(SQLException.class, () -> sql("INSERT INTO app_user (id, external_id, display_name) VALUES ('" + UUID.randomUUID() + "', 'external-1', 'B')"));
+        sql("INSERT INTO org_unit (id, external_id, name) VALUES ('" + UUID.randomUUID() + "', 'department-1', 'A')");
+        assertThrows(SQLException.class, () -> sql("INSERT INTO org_unit (id, external_id, name) VALUES ('" + UUID.randomUUID() + "', 'department-1', 'B')"));
         sql("INSERT INTO knowledge_space (id, name, created_by) VALUES ('" + space + "', 'S', '" + user + "')");
         sql("INSERT INTO document (id, space_id, title) VALUES ('" + document + "', '" + space + "', 'D')");
+        sql("INSERT INTO document (id, space_id, title) VALUES ('" + secondDocument + "', '" + space + "', 'E')");
         sql("INSERT INTO document_version (id, document_id, version_number, source_blob_id, created_by) VALUES ('" + version + "', '" + document + "', 1, 'blob-1', '" + user + "')");
+        sql("INSERT INTO document_version (id, document_id, version_number, source_blob_id, created_by) VALUES ('" + secondVersion + "', '" + secondDocument + "', 1, 'blob-3', '" + user + "')");
         assertThrows(SQLException.class, () -> sql("INSERT INTO document_version (id, document_id, version_number, source_blob_id, created_by) VALUES ('" + UUID.randomUUID() + "', '" + document + "', 1, 'blob-2', '" + user + "')"));
         sql("INSERT INTO active_blob_reservation (space_id, sha256, document_id, version_id) VALUES ('" + space + "', '" + "a".repeat(64) + "', '" + document + "', '" + version + "')");
-        assertThrows(SQLException.class, () -> sql("INSERT INTO active_blob_reservation (space_id, sha256, document_id, version_id) VALUES ('" + space + "', '" + "a".repeat(64) + "', '" + document + "', '" + version + "')"));
+        PSQLException duplicateReservation = assertThrows(PSQLException.class,
+                () -> sql("INSERT INTO active_blob_reservation (space_id, sha256, document_id, version_id) VALUES ('"
+                        + space + "', '" + "a".repeat(64) + "', '" + secondDocument + "', '" + secondVersion + "')"));
+        assertEquals("23505", duplicateReservation.getSQLState());
+        assertEquals("active_blob_reservation_pkey", duplicateReservation.getServerErrorMessage().getConstraint());
     }
 
     @Test
@@ -178,6 +252,28 @@ class PostgresMigrationIntegrationTest {
         try (Connection connection = ownerConnection(); Statement statement = connection.createStatement()) {
             statement.execute(command);
         }
+    }
+
+    private static void assertColumnType(String table, String column, String expectedType) throws SQLException {
+        assertEquals(expectedType, scalar("SELECT data_type FROM information_schema.columns WHERE table_schema = 'public'"
+                + " AND table_name = '" + table + "' AND column_name = '" + column + "'"), table + "." + column);
+    }
+
+    private static void assertConstraint(String table, String expectedDefinition) throws SQLException {
+        assertTrue(definitions("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public."
+                + table + "'::regclass").stream().anyMatch(definition -> definition.contains(expectedDefinition)),
+                table + " must have " + expectedDefinition);
+    }
+
+    private static void assertIndex(String table, String columns, String predicate) throws SQLException {
+        assertTrue(definitions("SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = '"
+                + table + "'").stream().anyMatch(definition -> definition.contains(columns) && definition.contains(predicate)),
+                table + " must index " + columns + " with " + predicate);
+    }
+
+    private static void assertCheckViolation(String command) {
+        PSQLException failure = assertThrows(PSQLException.class, () -> sql(command));
+        assertEquals("23514", failure.getSQLState());
     }
 
     private static String scalar(String query) throws SQLException {
