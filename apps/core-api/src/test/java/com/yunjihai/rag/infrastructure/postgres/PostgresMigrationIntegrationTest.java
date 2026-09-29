@@ -35,6 +35,7 @@ class PostgresMigrationIntegrationTest {
         POSTGRES.start();
         sql("CREATE ROLE rag_runtime_test LOGIN PASSWORD 'runtime_test_only'");
         sql("ALTER DATABASE rag_test SET rag.runtime_role = 'rag_runtime_test'");
+        sql("REVOKE TEMPORARY ON DATABASE rag_test FROM PUBLIC");
     }
 
     @AfterAll
@@ -44,6 +45,7 @@ class PostgresMigrationIntegrationTest {
 
     @BeforeEach
     void emptyDatabase() throws SQLException {
+        sql("REVOKE TEMPORARY ON DATABASE rag_test FROM rag_runtime_test");
         sql("DROP SCHEMA public CASCADE");
         sql("CREATE SCHEMA public");
         sql("GRANT USAGE ON SCHEMA public TO rag_runtime_test");
@@ -186,6 +188,23 @@ class PostgresMigrationIntegrationTest {
     void runningRoleCannotCreateOrAlterSchema() throws SQLException {
         migrate();
         try (Connection connection = runtimeConnection(); Statement statement = connection.createStatement()) {
+            assertThrows(SQLException.class, () -> statement.execute("CREATE TABLE forbidden (id integer)"));
+            assertThrows(SQLException.class, () -> statement.execute("ALTER TABLE document ADD COLUMN forbidden integer"));
+        }
+    }
+
+    @Test
+    void migrationGrantsRuntimeTemporaryTablesWithoutPermanentSchemaPrivileges() throws SQLException {
+        assertEquals("f", scalar("SELECT has_database_privilege('rag_runtime_test', current_database(), 'TEMPORARY')"));
+        try (Connection connection = runtimeConnection(); Statement statement = connection.createStatement()) {
+            assertThrows(SQLException.class, () -> statement.execute("CREATE TEMP TABLE before_migration (id integer)"));
+        }
+
+        migrate();
+
+        assertEquals("t", scalar("SELECT has_database_privilege('rag_runtime_test', current_database(), 'TEMPORARY')"));
+        try (Connection connection = runtimeConnection(); Statement statement = connection.createStatement()) {
+            statement.execute("CREATE TEMP TABLE runtime_snapshot_ids (id integer) ON COMMIT DROP");
             assertThrows(SQLException.class, () -> statement.execute("CREATE TABLE forbidden (id integer)"));
             assertThrows(SQLException.class, () -> statement.execute("ALTER TABLE document ADD COLUMN forbidden integer"));
         }

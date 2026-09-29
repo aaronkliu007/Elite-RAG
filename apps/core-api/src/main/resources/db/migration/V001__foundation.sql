@@ -180,7 +180,8 @@ CREATE TABLE blob_cleanup_candidate (
 );
 
 -- The init script records the runtime role on this database before Flyway connects.
--- Grant only the application tables; never grant runtime access to Flyway history.
+-- Grant only application tables and transaction-local TEMPORARY storage;
+-- never grant runtime access to Flyway history or permanent schema DDL.
 DO $$
 DECLARE
     runtime_role text := current_setting('rag.runtime_role', true);
@@ -197,4 +198,5 @@ BEGIN
         EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %I TO %I', writable_table, runtime_role);
     END LOOP;
     EXECUTE format('GRANT SELECT, INSERT ON TABLE audit_event TO %I', runtime_role);
+    EXECUTE format('GRANT TEMPORARY ON DATABASE %I TO %I', current_database(), runtime_role);
 END $$;

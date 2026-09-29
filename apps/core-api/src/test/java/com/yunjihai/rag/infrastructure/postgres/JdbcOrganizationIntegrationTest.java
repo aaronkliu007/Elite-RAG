@@ -53,6 +53,7 @@ class JdbcOrganizationIntegrationTest {
              var statement = connection.createStatement()) {
             statement.execute("CREATE ROLE rag_runtime_test LOGIN PASSWORD 'runtime_test_only'");
             statement.execute("ALTER DATABASE rag_organization_test SET rag.runtime_role = 'rag_runtime_test'");
+            statement.execute("REVOKE TEMPORARY ON DATABASE rag_organization_test FROM PUBLIC");
         }
         Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration").load().migrate();
