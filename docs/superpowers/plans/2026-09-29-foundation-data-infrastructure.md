@@ -85,7 +85,7 @@ Run:
 
 ```powershell
 .\mvnw.cmd -q -pl apps/core-api -Dtest=PostgresMigrationIntegrationTest test
-docker compose -f infra/compose/compose.yaml config --quiet
+docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml config --quiet
 ```
 
 Expected: PASS and exit code 0.
@@ -363,6 +363,8 @@ git commit -m "feat: connect immutable MinIO blob storage"
 - Create: `apps/core-api/src/main/java/com/yunjihai/rag/infrastructure/minio/MinioAdapterConfiguration.java`
 - Create: `apps/core-api/src/test/java/com/yunjihai/rag/acceptance/PostgresFoundationAcceptanceTest.java`
 - Create: `apps/core-api/src/test/java/com/yunjihai/rag/acceptance/DependencyHealthIntegrationTest.java`
+- Modify: `apps/core-api/src/main/resources/application.yml`
+- Modify: `apps/core-api/src/main/resources/application-local.yml`
 - Modify: `apps/core-api/src/test/java/com/yunjihai/rag/ArchitectureSmokeTest.java`
 - Modify: `scripts/verify.ps1`
 - Modify: `docs/runbooks/knowledge-foundation.md`
@@ -381,7 +383,7 @@ git commit -m "feat: connect immutable MinIO blob storage"
 Run:
 
 ```powershell
-.\mvnw.cmd -q -pl apps/core-api '-Dtest=ArchitectureSmokeTest,PostgresFoundationAcceptanceTest' test
+.\mvnw.cmd -q -pl apps/core-api '-Dtest=ArchitectureSmokeTest,PostgresFoundationAcceptanceTest,DependencyHealthIntegrationTest' test
 ```
 
 Expected: FAIL because the production adapter configuration is not wired.
@@ -402,7 +404,7 @@ Run:
 $env:JAVA_HOME='C:\Program Files\Zulu\zulu-21'
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
 corepack pnpm --dir apps/web exec playwright test
-docker compose -f infra/compose/compose.yaml config --quiet
+docker compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml config --quiet
 docker compose --env-file infra/compose/.env.example -p elite-rag-verify -f infra/compose/compose.yaml up -d --wait
 docker compose --env-file infra/compose/.env.example -p elite-rag-verify -f infra/compose/compose.yaml down --volumes
 git diff --check
