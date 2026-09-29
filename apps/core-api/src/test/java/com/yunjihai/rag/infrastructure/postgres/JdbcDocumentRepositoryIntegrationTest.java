@@ -140,6 +140,102 @@ class JdbcDocumentRepositoryIntegrationTest extends DocumentPostgresFixture {
     }
 
     @Test
+    void omittingPersistedHistoryCannotDropItsReservation() {
+        var space = createSpace();
+        var first = version(1, 'a', DocumentStatus.PUBLISHED, ParseStatus.SUCCEEDED,
+                actor, AT, actor, AT);
+        var second = version(2, 'b', DocumentStatus.DRAFT, ParseStatus.PENDING,
+                actor, AT.plusSeconds(1), actor, AT.plusSeconds(1));
+        var original = new DocumentAggregate(UUID.randomUUID(), space, "Original", List.of(first, second),
+                first.id(), false, 0);
+        documents.insert(original);
+        var missingHistory = new DocumentAggregate(original.id(), space, "Incomplete", List.of(first),
+                first.id(), false, 1);
+
+        assertRejectedWithoutChanges(original, List.of("a".repeat(64), "b".repeat(64)),
+                () -> documents.replace(missingHistory, 0));
+        assertEquals(new DocumentVersionRef(original.id(), second.id()),
+                documents.findActiveVersionBySpaceAndSourceBlob(space, blob('b')).orElseThrow());
+    }
+
+    @Test
+    void historicalIdentityAndImmutableFieldsCannotBeRewritten() {
+        var space = createSpace();
+        var original = draft(space, 'a');
+        documents.insert(original);
+        var first = original.versions().getFirst();
+        UUID otherActor = UUID.randomUUID();
+        jdbc.sql("INSERT INTO app_user (id, external_id, display_name) VALUES (:id, :externalId, 'Other')")
+                .param("id", otherActor).param("externalId", otherActor.toString()).update();
+        var changedHistory = List.of(
+                new DocumentVersion(UUID.randomUUID(), 1, first.sourceBlobId(), first.status(),
+                        first.parseStatus(), actor, AT, actor, AT),
+                new DocumentVersion(first.id(), 2, first.sourceBlobId(), first.status(),
+                        first.parseStatus(), actor, AT, actor, AT),
+                new DocumentVersion(first.id(), 1, blob('c'), first.status(),
+                        first.parseStatus(), actor, AT, actor, AT),
+                new DocumentVersion(first.id(), 1, first.sourceBlobId(), first.status(),
+                        first.parseStatus(), otherActor, AT, actor, AT),
+                new DocumentVersion(first.id(), 1, first.sourceBlobId(), first.status(),
+                        first.parseStatus(), actor, AT.plusSeconds(1), actor, AT));
+
+        for (var changed : changedHistory) {
+            var replacement = new DocumentAggregate(original.id(), space, "Changed", List.of(changed),
+                    null, false, 1);
+            assertRejectedWithoutChanges(original, List.of("a".repeat(64)),
+                    () -> documents.replace(replacement, 0));
+        }
+    }
+
+    @Test
+    void existingVersionCannotBeMovedFromAnotherDocument() {
+        var space = createSpace();
+        var target = draft(space, 'a');
+        documents.insert(target);
+        var donorFirst = version(1, 'b', DocumentStatus.DRAFT, ParseStatus.PENDING, actor, AT, actor, AT);
+        var donorSecond = version(2, 'c', DocumentStatus.DRAFT, ParseStatus.PENDING,
+                actor, AT.plusSeconds(1), actor, AT.plusSeconds(1));
+        var donor = new DocumentAggregate(UUID.randomUUID(), space, "Donor", List.of(donorFirst, donorSecond),
+                null, false, 0);
+        documents.insert(donor);
+        var moved = new DocumentAggregate(target.id(), space, "Moved", List.of(target.latestVersion(), donorSecond),
+                null, false, 1);
+
+        assertRejectedWithoutChanges(target, List.of("a".repeat(64)),
+                () -> documents.replace(moved, 0));
+        assertEquals(donor, documents.findById(donor.id()).orElseThrow());
+        assertEquals(new DocumentVersionRef(donor.id(), donorSecond.id()),
+                documents.findActiveVersionBySpaceAndSourceBlob(space, blob('c')).orElseThrow());
+    }
+
+    @Test
+    void revisionMustAdvanceExactlyOnce() {
+        var space = createSpace();
+        var original = draft(space, 'a');
+        documents.insert(original);
+        for (long invalidRevision : List.of(0L, 2L)) {
+            var replacement = new DocumentAggregate(original.id(), space, "Changed", original.versions(),
+                    null, false, invalidRevision);
+            assertRejectedWithoutChanges(original, List.of("a".repeat(64)),
+                    () -> documents.replace(replacement, 0));
+        }
+    }
+
+    @Test
+    void revisionAtLongMaximumCannotWrap() {
+        var space = createSpace();
+        var draft = draft(space, 'a');
+        var original = new DocumentAggregate(draft.id(), space, draft.title(), draft.versions(),
+                null, false, Long.MAX_VALUE);
+        documents.insert(original);
+        var wrapped = new DocumentAggregate(original.id(), space, "Wrapped", original.versions(),
+                null, false, Long.MIN_VALUE);
+
+        assertRejectedWithoutChanges(original, List.of("a".repeat(64)),
+                () -> documents.replace(wrapped, Long.MAX_VALUE));
+    }
+
+    @Test
     void concurrentCreatesForSameSpaceAndHashHaveOneWinner() throws Exception {
         var space = createSpace();
         var first = draft(space, 'a');
@@ -172,6 +268,16 @@ class JdbcDocumentRepositoryIntegrationTest extends DocumentPostgresFixture {
         assertInstanceOf(ConcurrentDocumentUpdateException.class, result.failures().getFirst());
         assertEquals(1, documents.findById(initial.id()).orElseThrow().revision());
         assertEquals(1L, count("active_blob_reservation"));
+    }
+
+    private void assertRejectedWithoutChanges(DocumentAggregate original, List<String> hashes, Runnable attempt) {
+        var failure = assertThrows(ConcurrentDocumentUpdateException.class, attempt::run);
+        assertNull(failure.getCause());
+        assertEquals(original, documents.findById(original.id()).orElseThrow());
+        assertEquals(hashes, jdbc.sql("SELECT sha256 FROM active_blob_reservation WHERE document_id = :documentId ORDER BY sha256")
+                .param("documentId", original.id()).query(String.class).list());
+        assertEquals(original.versions().size(), jdbc.sql("SELECT count(*) FROM document_version WHERE document_id = :documentId")
+                .param("documentId", original.id()).query(Long.class).single());
     }
 }
 
