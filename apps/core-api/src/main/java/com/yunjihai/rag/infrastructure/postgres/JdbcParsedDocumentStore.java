@@ -27,6 +27,7 @@ import java.util.Set;
 public class JdbcParsedDocumentStore implements ParsedDocumentStore {
     private static final int MAX_NODES = 1_000_000;
     private static final int MAX_TABLE_CELLS = 100_000;
+    private static final int NODE_BATCH_SIZE = 1_000;
     private static final Set<String> NODE_KINDS = Set.of(
             "TITLE", "HEADING", "PARAGRAPH", "LIST_ITEM", "TABLE", "IMAGE", "CAPTION", "PAGE_BREAK");
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -67,29 +68,7 @@ public class JdbcParsedDocumentStore implements ParsedDocumentStore {
                     .param("pageCount", document.pageCount())
                     .param("parsedAt", utc(at))
                     .update();
-            for (int order = 0; order < rows.size(); order++) {
-                var row = rows.get(order);
-                var node = row.node();
-                jdbc.sql("""
-                        INSERT INTO canonical_node (
-                            version_id, node_id, kind, body_text, parent_node_id, page,
-                            bounding_box, table_cells, confidence, stable_order)
-                        VALUES (
-                            :versionId, :nodeId, :kind, :bodyText, :parentNodeId, :page,
-                            CAST(:boundingBox AS jsonb), CAST(:tableCells AS jsonb), :confidence, :stableOrder)
-                        """)
-                        .param("versionId", version.versionId())
-                        .param("nodeId", node.nodeId())
-                        .param("kind", node.kind())
-                        .param("bodyText", node.text())
-                        .param("parentNodeId", node.parentNodeId())
-                        .param("page", node.page())
-                        .param("boundingBox", row.boundingBox())
-                        .param("tableCells", row.tableCells())
-                        .param("confidence", node.confidence())
-                        .param("stableOrder", order)
-                        .update();
-            }
+            insertNodeBatches(version, rows);
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }
@@ -100,19 +79,32 @@ public class JdbcParsedDocumentStore implements ParsedDocumentStore {
                 || document.sourceFilename().length() > 255 || document.mediaType().length() > 255
                 || !wellFormedUnicode(document.sourceFilename()) || !wellFormedUnicode(document.mediaType())
                 || document.pageCount() < 1 || document.pageCount() > 500
-                || document.nodes() == null || document.nodes().size() > MAX_NODES) {
+                || document.nodes() == null) {
             throw invalid();
         }
-        Map<String, CanonicalNode> nodes = new HashMap<>();
-        for (var node : document.nodes()) {
+        var sourceNodes = document.nodes();
+        validateNodeCount(sourceNodes.size());
+        Map<String, Integer> indexes = new HashMap<>(hashCapacity(sourceNodes.size()));
+        for (int index = 0; index < sourceNodes.size(); index++) {
+            var node = sourceNodes.get(index);
             validateNode(node, document.pageCount());
-            if (nodes.putIfAbsent(node.nodeId(), node) != null) throw invalid();
+            if (indexes.putIfAbsent(node.nodeId(), index) != null) throw invalid();
         }
-        for (var node : document.nodes()) {
-            if (node.parentNodeId() != null && !nodes.containsKey(node.parentNodeId())) throw invalid();
-            rejectParentCycle(node.nodeId(), nodes);
+        int[] parents = new int[sourceNodes.size()];
+        java.util.Arrays.fill(parents, -1);
+        for (int index = 0; index < sourceNodes.size(); index++) {
+            String parentId = sourceNodes.get(index).parentNodeId();
+            if (parentId == null) continue;
+            Integer parent = indexes.get(parentId);
+            if (parent == null) throw invalid();
+            parents[index] = parent;
         }
-        return document.nodes().stream().map(JdbcParsedDocumentStore::serialize).toList();
+        rejectParentCycles(parents);
+        return sourceNodes.stream().map(JdbcParsedDocumentStore::serialize).toList();
+    }
+
+    static void validateNodeCount(int count) {
+        if (count < 0 || count > MAX_NODES) throw invalid();
     }
 
     private static void validateNode(CanonicalNode node, int pageCount) {
@@ -154,14 +146,71 @@ public class JdbcParsedDocumentStore implements ParsedDocumentStore {
         }
     }
 
-    private static void rejectParentCycle(String start, Map<String, CanonicalNode> nodes) {
-        Set<String> visited = new HashSet<>();
-        String current = start;
-        while (current != null) {
-            if (!visited.add(current)) throw invalid();
-            var node = nodes.get(current);
-            current = node == null ? null : node.parentNodeId();
+    private static void rejectParentCycles(int[] parents) {
+        byte[] states = new byte[parents.length];
+        for (int start = 0; start < parents.length; start++) {
+            int current = start;
+            while (current >= 0 && states[current] == 0) {
+                states[current] = 1;
+                current = parents[current];
+            }
+            if (current >= 0 && states[current] == 1) throw invalid();
+            current = start;
+            while (current >= 0 && states[current] == 1) {
+                states[current] = 2;
+                current = parents[current];
+            }
         }
+    }
+
+    private void insertNodeBatches(DocumentVersionId version, List<NodeRow> rows) {
+        for (int start = 0; start < rows.size(); start += NODE_BATCH_SIZE) {
+            int end = Math.min(start + NODE_BATCH_SIZE, rows.size());
+            var sql = new StringBuilder("""
+                    INSERT INTO canonical_node (
+                        version_id, node_id, kind, body_text, parent_node_id, page,
+                        bounding_box, table_cells, confidence, stable_order)
+                    VALUES
+                    """);
+            for (int index = start; index < end; index++) {
+                if (index > start) sql.append(",\n");
+                String suffix = Integer.toString(index - start);
+                sql.append("(:versionId, :nodeId").append(suffix)
+                        .append(", :kind").append(suffix)
+                        .append(", :bodyText").append(suffix)
+                        .append(", :parentNodeId").append(suffix)
+                        .append(", :page").append(suffix)
+                        .append(", CAST(:boundingBox").append(suffix).append(" AS jsonb)")
+                        .append(", CAST(:tableCells").append(suffix).append(" AS jsonb)")
+                        .append(", :confidence").append(suffix)
+                        .append(", :stableOrder").append(suffix).append(')');
+            }
+            JdbcClient.StatementSpec statement = jdbc.sql(sql.toString()).param("versionId", version.versionId());
+            for (int index = start; index < end; index++) {
+                int offset = index - start;
+                String suffix = Integer.toString(offset);
+                var row = rows.get(index);
+                var node = row.node();
+                statement = statement
+                        .param("nodeId" + suffix, node.nodeId())
+                        .param("kind" + suffix, node.kind())
+                        .param("bodyText" + suffix, node.text())
+                        .param("parentNodeId" + suffix, node.parentNodeId())
+                        .param("page" + suffix, node.page())
+                        .param("boundingBox" + suffix, row.boundingBox())
+                        .param("tableCells" + suffix, row.tableCells())
+                        .param("confidence" + suffix, node.confidence())
+                        .param("stableOrder" + suffix, index);
+            }
+            if (statement.update() != end - start) {
+                throw new IllegalStateException("CANONICAL_NODE_BATCH_WRITE_FAILURE");
+            }
+        }
+    }
+
+    private static int hashCapacity(int size) {
+        if (size < 3) return 4;
+        return Math.min(1 << 30, (int) Math.ceil(size / 0.75d));
     }
 
     private static NodeRow serialize(CanonicalNode node) {

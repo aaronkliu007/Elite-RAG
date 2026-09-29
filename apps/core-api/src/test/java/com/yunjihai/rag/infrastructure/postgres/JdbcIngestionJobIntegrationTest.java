@@ -24,6 +24,7 @@ import java.sql.DriverManager;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -32,6 +33,63 @@ import java.util.concurrent.TimeUnit;
 import static org.junit.jupiter.api.Assertions.*;
 
 class JdbcIngestionJobIntegrationTest extends IngestionPostgresFixture {
+    @Test
+    void arbitrarySourceBlobIdAndShaRoundTripWithoutConflation() {
+        String sourceBlobId = "blob-801";
+        String sha256 = "8".repeat(64);
+        jdbc.sql("UPDATE document_version SET source_blob_id = :sourceBlobId WHERE id = :versionId")
+                .param("sourceBlobId", sourceBlobId)
+                .param("versionId", request.documentVersion().versionId())
+                .update();
+        var independent = new IngestionRequest(request.documentVersion(), actor, sourceBlobId,
+                request.filename(), request.mediaType(), request.sizeBytes(), sha256);
+        UUID jobId = UUID.randomUUID();
+
+        jobs.enqueue(jobId, independent, AT);
+        var claimed = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
+
+        assertEquals(independent, claimed.request());
+        assertEquals(sourceBlobId, ownerJdbc.sql("SELECT source_blob_id FROM ingestion_job WHERE id = :id")
+                .param("id", jobId).query(String.class).single());
+        assertEquals(sha256, ownerJdbc.sql("SELECT sha256 FROM ingestion_job WHERE id = :id")
+                .param("id", jobId).query(String.class).single());
+    }
+
+    @Test
+    void enqueueRejectsBlobNotOwnedByVersionBeforeCreatingJob() {
+        var mismatched = new IngestionRequest(request.documentVersion(), actor, "blob-802",
+                request.filename(), request.mediaType(), request.sizeBytes(), "8".repeat(64));
+
+        var failure = assertThrows(RuntimeException.class,
+                () -> jobs.enqueue(UUID.randomUUID(), mismatched, AT));
+
+        assertEquals("INGESTION_REQUEST_CONFLICT", failure.getMessage());
+        assertNull(failure.getCause());
+        assertEquals(0L, ownerJdbc.sql("SELECT count(*) FROM ingestion_job").query(Long.class).single());
+        assertEquals(document.latestVersion().sourceBlobId(), ownerJdbc.sql(
+                        "SELECT source_blob_id FROM document_version WHERE id = :id")
+                .param("id", request.documentVersion().versionId()).query(String.class).single());
+    }
+
+    @Test
+    void leaseRequiresPositiveDurationAfterPostgresMicrosecondNormalization() {
+        UUID jobId = UUID.randomUUID();
+        jobs.enqueue(jobId, request, AT);
+        Instant withinSameMicrosecond = AT.plusNanos(100);
+        Instant laterWithinSameMicrosecond = AT.plusNanos(900);
+
+        assertThrows(IllegalArgumentException.class,
+                () -> jobs.claimNext("worker-a", withinSameMicrosecond, laterWithinSameMicrosecond));
+        assertEquals("QUEUED", text(jobId, "status"));
+
+        Instant leaseUntil = AT.plusNanos(1_100);
+        var lease = jobs.claimNext("worker-a", withinSameMicrosecond, leaseUntil).orElseThrow();
+        assertEquals(leaseUntil.truncatedTo(ChronoUnit.MICROS), lease.leaseUntil());
+        assertTrue(jobs.claimNext("worker-b", AT.plusNanos(999), AT.plusSeconds(1)).isEmpty());
+        assertEquals(jobId, jobs.claimNext("worker-b", lease.leaseUntil(), AT.plusSeconds(1))
+                .orElseThrow().jobId());
+    }
+
     @Test
     void claimsEligibleJobsInStableFifoOrderAndHonorsNextAttemptAt() {
         var laterId = UUID.fromString("01995f10-0010-7000-8000-000000000002");

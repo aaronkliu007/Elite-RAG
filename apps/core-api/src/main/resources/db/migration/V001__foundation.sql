@@ -109,6 +109,7 @@ CREATE TABLE ingestion_job (
     version_id uuid NOT NULL,
     requested_by uuid NOT NULL REFERENCES app_user(id),
     source_blob_id text NOT NULL,
+    sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
     source_filename text NOT NULL,
     media_type text NOT NULL,
     byte_size bigint NOT NULL CHECK (byte_size >= 0),

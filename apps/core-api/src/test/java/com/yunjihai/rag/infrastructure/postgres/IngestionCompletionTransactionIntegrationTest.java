@@ -16,6 +16,7 @@ import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceReadAuthorization;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -32,10 +33,47 @@ import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class IngestionCompletionTransactionIntegrationTest extends IngestionPostgresFixture {
+    @Test
+    void acceptsExactlyOneMillionNodesAndRejectsOnlyTheNextCount() {
+        assertDoesNotThrow(() -> JdbcParsedDocumentStore.validateNodeCount(1_000_000));
+        assertThrows(InvalidParserResponseException.class,
+                () -> JdbcParsedDocumentStore.validateNodeCount(1_000_001));
+    }
+
+    @Test
+    @Timeout(value = 30, unit = TimeUnit.SECONDS)
+    void persistsFiftyThousandNodeDeepChainWithStableOrderUsingBoundedBatching() {
+        int size = 50_000;
+        var nodes = IntStream.range(0, size)
+                .mapToObj(index -> new CanonicalNode(
+                        "node-" + index,
+                        "PARAGRAPH",
+                        "text-" + index,
+                        index == 0 ? null : "node-" + (index - 1),
+                        1,
+                        null,
+                        null,
+                        1.0))
+                .toList();
+
+        parsed.replace(request.documentVersion(), body(nodes), AT);
+
+        assertEquals(size, count("canonical_node"));
+        assertEquals(0, ownerJdbc.sql("SELECT min(stable_order) FROM canonical_node WHERE version_id = :versionId")
+                .param("versionId", request.documentVersion().versionId()).query(Integer.class).single());
+        assertEquals(size - 1, ownerJdbc.sql("SELECT max(stable_order) FROM canonical_node WHERE version_id = :versionId")
+                .param("versionId", request.documentVersion().versionId()).query(Integer.class).single());
+        assertEquals("node-49999", ownerJdbc.sql("""
+                SELECT node_id FROM canonical_node WHERE version_id = :versionId ORDER BY stable_order DESC LIMIT 1
+                """).param("versionId", request.documentVersion().versionId()).query(String.class).single());
+    }
+
     @Test
     void canonicalReplacementIsIdempotentAndPreservesStableOrderAndJsonb() {
         var body = validBody();

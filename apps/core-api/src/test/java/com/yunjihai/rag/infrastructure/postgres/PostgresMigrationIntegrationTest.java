@@ -74,6 +74,7 @@ class PostgresMigrationIntegrationTest {
         assertColumnType("acl_entry", "expires_at", "timestamp with time zone");
         assertColumnType("ingestion_job", "lease_token", "uuid");
         assertColumnType("ingestion_job", "lease_expires_at", "timestamp with time zone");
+        assertColumnType("ingestion_job", "sha256", "text");
         assertColumnType("canonical_document", "parsed_at", "timestamp with time zone");
         assertColumnType("canonical_node", "bounding_box", "jsonb");
         assertColumnType("canonical_node", "table_cells", "jsonb");
@@ -136,16 +137,19 @@ class PostgresMigrationIntegrationTest {
             sql("UPDATE document_version SET parse_status = '" + status + "' WHERE id = '" + version + "'");
         }
         assertCheckViolation("UPDATE document SET revision = -1 WHERE id = '" + document + "'");
-        String jobPrefix = "INSERT INTO ingestion_job (id, document_id, version_id, requested_by, source_blob_id, source_filename, media_type, byte_size, status) VALUES ('";
-        String jobSuffix = "', '" + document + "', '" + version + "', '" + user + "', 'blob', 'file.txt', 'text/plain', 1, '";
+        String jobPrefix = "INSERT INTO ingestion_job (id, document_id, version_id, requested_by, source_blob_id, sha256, source_filename, media_type, byte_size, status) VALUES ('";
+        String jobSuffix = "', '" + document + "', '" + version + "', '" + user + "', 'blob', '" + "a".repeat(64) + "', 'file.txt', 'text/plain', 1, '";
         assertCheckViolation(jobPrefix + UUID.randomUUID() + jobSuffix + "INVALID')");
         assertCheckViolation(jobPrefix + UUID.randomUUID() + jobSuffix + "LEASED')");
         for (String status : java.util.List.of("QUEUED", "RETRY_WAIT", "SUCCEEDED", "FAILED")) {
             sql(jobPrefix + UUID.randomUUID() + jobSuffix + status + "')");
         }
-        sql("INSERT INTO ingestion_job (id, document_id, version_id, requested_by, source_blob_id, source_filename, media_type, byte_size, status, lease_token, lease_worker, lease_expires_at) VALUES ('"
+        sql("INSERT INTO ingestion_job (id, document_id, version_id, requested_by, source_blob_id, sha256, source_filename, media_type, byte_size, status, lease_token, lease_worker, lease_expires_at) VALUES ('"
                 + UUID.randomUUID() + "', '" + document + "', '" + version + "', '" + user
-                + "', 'blob', 'file.txt', 'text/plain', 1, 'LEASED', '" + UUID.randomUUID() + "', 'worker', now())");
+                + "', 'blob', '" + "b".repeat(64) + "', 'file.txt', 'text/plain', 1, 'LEASED', '" + UUID.randomUUID() + "', 'worker', now())");
+        assertCheckViolation("INSERT INTO ingestion_job (id, document_id, version_id, requested_by, source_blob_id, sha256, source_filename, media_type, byte_size) VALUES ('"
+                + UUID.randomUUID() + "', '" + document + "', '" + version + "', '" + user
+                + "', 'blob', 'not-a-sha', 'file.txt', 'text/plain', 1)");
     }
 
     @Test

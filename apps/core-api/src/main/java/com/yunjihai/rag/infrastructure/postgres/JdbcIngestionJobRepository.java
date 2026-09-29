@@ -5,6 +5,7 @@ import com.yunjihai.rag.ingestion.IngestionJobRepository;
 import com.yunjihai.rag.ingestion.IngestionLease;
 import com.yunjihai.rag.ingestion.IngestionLeaseConflictException;
 import com.yunjihai.rag.ingestion.IngestionRequest;
+import com.yunjihai.rag.ingestion.IngestionRequestConflictException;
 import com.yunjihai.rag.ingestion.ParserError;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -14,14 +15,13 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 /** PostgreSQL-backed recoverable ingestion queue with token-bound leases. */
 public final class JdbcIngestionJobRepository implements IngestionJobRepository {
-    private static final Pattern OBJECT_KEY = Pattern.compile("^sha256/([0-9a-f]{2})/([0-9a-f]{64})$");
     private final JdbcClient jdbc;
 
     public JdbcIngestionJobRepository(JdbcClient jdbc) {
@@ -33,29 +33,32 @@ public final class JdbcIngestionJobRepository implements IngestionJobRepository 
         Objects.requireNonNull(jobId);
         Objects.requireNonNull(request);
         Objects.requireNonNull(at);
-        String digest = digest(request.sourceBlobId());
-        if (!digest.equals(request.sha256())) {
-            throw new IllegalArgumentException("入库源 Blob 与摘要不一致");
+        if (!request.sha256().matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException("入库 SHA-256 无效");
         }
         try {
-            jdbc.sql("""
+            int inserted = jdbc.sql("""
                     INSERT INTO ingestion_job (
-                        id, document_id, version_id, requested_by, source_blob_id, source_filename,
+                        id, document_id, version_id, requested_by, source_blob_id, sha256, source_filename,
                         media_type, byte_size, status, attempts, next_attempt_at, created_at, updated_at)
-                    VALUES (
-                        :id, :documentId, :versionId, :requestedBy, :sourceBlobId, :sourceFilename,
-                        :mediaType, :byteSize, 'QUEUED', 0, :at, :at, :at)
+                    SELECT :id, version.document_id, version.id, :requestedBy, :sourceBlobId, :sha256,
+                           :sourceFilename, :mediaType, :byteSize, 'QUEUED', 0, :at, :at, :at
+                    FROM document_version AS version
+                    WHERE version.document_id = :documentId AND version.id = :versionId
+                      AND version.source_blob_id = :sourceBlobId
                     """)
                     .param("id", jobId)
                     .param("documentId", request.documentVersion().documentId())
                     .param("versionId", request.documentVersion().versionId())
                     .param("requestedBy", request.actorId())
                     .param("sourceBlobId", request.sourceBlobId())
+                    .param("sha256", request.sha256())
                     .param("sourceFilename", request.filename())
                     .param("mediaType", request.mediaType())
                     .param("byteSize", request.sizeBytes())
-                    .param("at", utc(at))
+                    .param("at", utc(micros(at)))
                     .update();
+            if (inserted != 1) throw new IngestionRequestConflictException();
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }
@@ -68,7 +71,9 @@ public final class JdbcIngestionJobRepository implements IngestionJobRepository 
         }
         Objects.requireNonNull(now);
         Objects.requireNonNull(leaseUntil);
-        if (!leaseUntil.isAfter(now)) {
+        Instant normalizedNow = micros(now);
+        Instant normalizedLeaseUntil = micros(leaseUntil);
+        if (!normalizedLeaseUntil.isAfter(normalizedNow)) {
             throw new IllegalArgumentException("租约截止时间必须晚于领取时间");
         }
         UUID leaseToken = UUID.randomUUID();
@@ -90,13 +95,13 @@ public final class JdbcIngestionJobRepository implements IngestionJobRepository 
                     FROM candidate
                     WHERE job.id = candidate.id
                     RETURNING job.id, job.document_id, job.version_id, job.requested_by,
-                              job.source_blob_id, job.source_filename, job.media_type, job.byte_size,
+                              job.source_blob_id, job.sha256, job.source_filename, job.media_type, job.byte_size,
                               job.attempts, job.lease_token, job.lease_worker, job.lease_expires_at
                     """)
-                    .param("now", utc(now))
+                    .param("now", utc(normalizedNow))
                     .param("leaseToken", leaseToken)
                     .param("workerId", workerId)
-                    .param("leaseUntil", utc(leaseUntil))
+                    .param("leaseUntil", utc(normalizedLeaseUntil))
                     .query(JdbcIngestionJobRepository::mapLease)
                     .optional();
         } catch (DataAccessException failure) {
@@ -119,7 +124,7 @@ public final class JdbcIngestionJobRepository implements IngestionJobRepository 
     public void retry(UUID jobId, UUID leaseToken, ParserError error, Instant nextAttemptAt, Instant at) {
         Objects.requireNonNull(error);
         Objects.requireNonNull(nextAttemptAt);
-        if (nextAttemptAt.isBefore(at)) {
+        if (micros(nextAttemptAt).isBefore(micros(at))) {
             throw new IllegalArgumentException("下次尝试时间不能早于当前时间");
         }
         transition(jobId, leaseToken, at, """
@@ -159,7 +164,7 @@ public final class JdbcIngestionJobRepository implements IngestionJobRepository 
                     .param("leaseToken", leaseToken)
                     .param("at", utc(at));
             if (error != null) statement = statement.param("errorCode", error.code().name());
-            if (nextAttemptAt != null) statement = statement.param("nextAttemptAt", utc(nextAttemptAt));
+            if (nextAttemptAt != null) statement = statement.param("nextAttemptAt", utc(micros(nextAttemptAt)));
             if (statement.update() != 1) throw new IngestionLeaseConflictException();
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
@@ -171,22 +176,17 @@ public final class JdbcIngestionJobRepository implements IngestionJobRepository 
         var request = new IngestionRequest(
                 new DocumentVersionId(row.getObject("document_id", UUID.class), row.getObject("version_id", UUID.class)),
                 row.getObject("requested_by", UUID.class), sourceBlobId, row.getString("source_filename"),
-                row.getString("media_type"), row.getLong("byte_size"), digest(sourceBlobId));
+                row.getString("media_type"), row.getLong("byte_size"), row.getString("sha256"));
         return new IngestionLease(
                 row.getObject("id", UUID.class), row.getObject("lease_token", UUID.class), row.getInt("attempts"),
                 row.getString("lease_worker"), row.getObject("lease_expires_at", OffsetDateTime.class).toInstant(), request);
     }
 
-    private static String digest(String sourceBlobId) {
-        if (sourceBlobId == null) throw new IllegalArgumentException("入库源 Blob 无效");
-        var match = OBJECT_KEY.matcher(sourceBlobId);
-        if (!match.matches() || !match.group(2).startsWith(match.group(1))) {
-            throw new IllegalArgumentException("入库源 Blob 必须为规范 SHA-256 对象键");
-        }
-        return match.group(2);
+    private static Instant micros(Instant instant) {
+        return instant.truncatedTo(ChronoUnit.MICROS);
     }
 
     private static OffsetDateTime utc(Instant instant) {
-        return OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
+        return OffsetDateTime.ofInstant(micros(instant), ZoneOffset.UTC);
     }
 }
