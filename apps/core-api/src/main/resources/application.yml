@@ -1,0 +1,17 @@
+spring:
+  application:
+    name: core-api
+  flyway:
+    enabled: false
+    validate-on-migrate: true
+    ignore-migration-patterns: ''
+    clean-disabled: true
+  jpa:
+    hibernate:
+      ddl-auto: none
+
+management:
+  endpoint:
+    health:
+      probes:
+        enabled: true

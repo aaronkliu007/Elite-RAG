@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      POSTGRES_USER: ${RAG_DB_MIGRATION_USER:?set RAG_DB_MIGRATION_USER}
+      POSTGRES_PASSWORD: ${RAG_DB_MIGRATION_PASSWORD:?set RAG_DB_MIGRATION_PASSWORD}
+      RAG_DB_RUNTIME_USER: ${RAG_DB_RUNTIME_USER:?set RAG_DB_RUNTIME_USER}
+      RAG_DB_RUNTIME_PASSWORD: ${RAG_DB_RUNTIME_PASSWORD:?set RAG_DB_RUNTIME_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init/001-create-runtime-role.sh:/docker-entrypoint-initdb.d/001-create-runtime-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  minio:
+    image: quay.io/minio/aistor/minio:RELEASE.2026-09-19T17-05-25Z
+    command: server /data --console-address ':9001' --license /minio.license
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - minio_data:/data
+      - type: bind
+        source: ${RAG_MINIO_LICENSE_FILE:?set RAG_MINIO_LICENSE_FILE}
+        target: /minio.license
+        read_only: true
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  minio-init:
+    image: quay.io/minio/aistor/mc:RELEASE.2026-09-19T15-24-59Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+      RAG_MINIO_BUCKET: ${RAG_MINIO_BUCKET:?set RAG_MINIO_BUCKET}
+      RAG_MINIO_ACCESS_KEY: ${RAG_MINIO_ACCESS_KEY:?set RAG_MINIO_ACCESS_KEY}
+      RAG_MINIO_SECRET_KEY: ${RAG_MINIO_SECRET_KEY:?set RAG_MINIO_SECRET_KEY}
+    volumes:
+      - ./minio-init:/minio-init:ro
+    entrypoint: ["/bin/sh", "/minio-init/001-create-bucket-and-app-user.sh"]
+    restart: "no"
+
+volumes:
+  postgres_data:
+  minio_data:
