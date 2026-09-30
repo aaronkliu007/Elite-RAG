@@ -39,7 +39,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MinioBlobStoreIntegrationTest {
     private static final String IMAGE = "quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3";
-    private static final Path LICENSE = Path.of("E:\\git_secrets\\Elite-RAG\\minio.license");
+    private static final Path LICENSE = Path.of(java.util.Optional.ofNullable(System.getenv("RAG_MINIO_LICENSE_FILE"))
+            .filter(value -> !value.isBlank())
+            .orElse("E:\\git_secrets\\Elite-RAG\\minio.license"));
     private static final String ROOT_USER = "task7-root-user";
     private static final String ROOT_PASSWORD = "task7-root-password-only";
     private static final String BUCKET = "task7-documents";

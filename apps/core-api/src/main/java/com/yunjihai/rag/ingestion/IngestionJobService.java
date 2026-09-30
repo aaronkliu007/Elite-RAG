@@ -128,7 +128,7 @@ public class IngestionJobService {
             recordParseFailure(lease, error);
             return;
         }
-        documents.markParsingFailed(
+        documents.markParsingFailedForIngestion(
                 lease.request().documentVersion().documentId(),
                 lease.request().documentVersion().versionId(),
                 now);

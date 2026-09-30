@@ -6,6 +6,7 @@ import com.yunjihai.rag.access.AclService;
 import com.yunjihai.rag.access.PrincipalRef;
 import com.yunjihai.rag.access.PrincipalType;
 import com.yunjihai.rag.audit.AuditEventStore;
+import com.yunjihai.rag.audit.AuditService;
 import com.yunjihai.rag.identity.ExternalDepartment;
 import com.yunjihai.rag.identity.ExternalUser;
 import com.yunjihai.rag.identity.OrganizationReconciliationPort;
@@ -29,6 +30,13 @@ import com.yunjihai.rag.ingestion.CanonicalDocumentBody;
 import com.yunjihai.rag.ingestion.CanonicalDocumentV1;
 import com.yunjihai.rag.ingestion.CanonicalNode;
 import com.yunjihai.rag.ingestion.DocumentVersionId;
+import com.yunjihai.rag.ingestion.DocumentDraftGateway;
+import com.yunjihai.rag.ingestion.FileSystemUploadSpooler;
+import com.yunjihai.rag.ingestion.MinioBlobStore;
+import com.yunjihai.rag.ingestion.UploadCommand;
+import com.yunjihai.rag.ingestion.UploadInspection;
+import com.yunjihai.rag.ingestion.UploadPolicy;
+import com.yunjihai.rag.ingestion.UploadService;
 import com.yunjihai.rag.ingestion.IngestionJobRepository;
 import com.yunjihai.rag.ingestion.IngestionJobService;
 import com.yunjihai.rag.ingestion.IngestionRequest;
@@ -59,6 +67,9 @@ import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -84,6 +95,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @SpringBootTest(properties = "spring.main.web-application-type=none")
 @ActiveProfiles("local")
@@ -141,6 +153,7 @@ class PostgresFoundationAcceptanceTest {
                 LocalFoundationInfrastructure.MIGRATION_PASSWORD);
              var statement = connection.createStatement()) {
             statement.execute("TRUNCATE TABLE app_user CASCADE");
+            statement.execute("TRUNCATE TABLE blob_cleanup_candidate");
         }
     }
 
@@ -350,6 +363,82 @@ class PostgresFoundationAcceptanceTest {
                 at, true));
     }
 
+    @Test
+    void uploadDatabaseFailuresRetainCleanupOutsideTheAbortedTransaction() throws Exception {
+        synchronizeSpaceReaders(Instant.now());
+        UUID owner = userId("owner");
+        var space = spaces.createSpace("上传回滚验证", owner, Instant.now());
+        var ownerJdbc = JdbcClient.create(new DriverManagerDataSource(
+                LocalFoundationInfrastructure.jdbcUrl(), LocalFoundationInfrastructure.MIGRATION_USER,
+                LocalFoundationInfrastructure.MIGRATION_PASSWORD));
+        long auditBefore = scalar("SELECT count(*) FROM audit_event");
+        for (String stage : List.of("document_version", "audit_event")) {
+            byte[] source = ("%PDF-1.7 recovery " + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8);
+            String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(source));
+            String key = "sha256/" + sha.substring(0, 2) + "/" + sha;
+            ownerJdbc.sql("""
+                    CREATE FUNCTION final_upload_failpoint() RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN RAISE EXCEPTION 'private database fault'; END $$
+                    """).update();
+            ownerJdbc.sql("CREATE TRIGGER final_upload_failpoint AFTER INSERT ON " + stage
+                    + " FOR EACH ROW EXECUTE FUNCTION final_upload_failpoint()").update();
+            try {
+                var failure = assertThrows(RuntimeException.class,
+                        () -> context.getBean(UploadService.class).accept(new UploadCommand(
+                                space.id(), "回滚文档", "recovery.pdf", MediaType.APPLICATION_PDF,
+                                source.length, new ByteArrayInputStream(source), owner)));
+                assertThat(failure).hasMessage("DATABASE_FAILURE").hasNoCause();
+                assertThat(failure.getSuppressed()).isEmpty();
+            } finally {
+                ownerJdbc.sql("DROP TRIGGER final_upload_failpoint ON " + stage).update();
+                ownerJdbc.sql("DROP FUNCTION final_upload_failpoint()").update();
+            }
+            assertThat(minio.statObject(StatObjectArgs.builder()
+                    .bucket(LocalFoundationInfrastructure.BUCKET).object(key).build()).size()).isEqualTo(source.length);
+            assertThat(scalar("SELECT count(*) FROM document")).isZero();
+            assertThat(scalar("SELECT count(*) FROM document_version")).isZero();
+            assertThat(scalar("SELECT count(*) FROM active_blob_reservation")).isZero();
+            assertThat(scalar("SELECT count(*) FROM audit_event")).isEqualTo(auditBefore);
+            assertThat(jdbc.sql("SELECT status FROM blob_cleanup_candidate WHERE object_key = :key")
+                    .param("key", key).query(String.class).optional()).contains("PENDING");
+        }
+    }
+
+    @Test
+    void uncertainObjectWriteRetainsCleanupWhileOuterBusinessWritesRollBack() throws Exception {
+        synchronizeSpaceReaders(Instant.now());
+        UUID owner = userId("owner");
+        var space = spaces.createSpace("不确定上传验证", owner, Instant.now());
+        long auditBefore = scalar("SELECT count(*) FROM audit_event");
+        byte[] source = ("%PDF-1.7 uncertain " + UUID.randomUUID()).getBytes(StandardCharsets.UTF_8);
+        String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(source));
+        String key = "sha256/" + sha.substring(0, 2) + "/" + sha;
+        var client = context.getBean(SdkMinioObjectClient.class);
+        // 真实对象已写入，仅在响应边界注入丢失确认；数据库及事务仍使用 local 生产装配。
+        var uncertain = new MinioBlobStore(LocalFoundationInfrastructure.BUCKET,
+                (bucket, objectKey, stream, length, type) -> {
+                    client.putIfAbsent(bucket, objectKey, stream, length, type);
+                    throw new IllegalStateException("MINIO_OBJECT_WRITE_UNCERTAIN", null);
+                }, context.getBean(OrphanBlobRecorder.class));
+        var transaction = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+
+        var failure = assertThrows(IllegalStateException.class, () -> transaction.executeWithoutResult(status -> {
+            documents.createDraft(space.id(), "外层回滚草稿", key, owner, Instant.now());
+            uncertain.putIfAbsent(sha, new ByteArrayInputStream(source), source.length, MediaType.APPLICATION_PDF);
+        }));
+
+        assertThat(failure).hasMessage("MINIO_OBJECT_WRITE_UNCERTAIN").hasNoCause();
+        assertThat(failure.getSuppressed()).isEmpty();
+        assertThat(minio.statObject(StatObjectArgs.builder()
+                .bucket(LocalFoundationInfrastructure.BUCKET).object(key).build()).size()).isEqualTo(source.length);
+        assertThat(scalar("SELECT count(*) FROM document")).isZero();
+        assertThat(scalar("SELECT count(*) FROM document_version")).isZero();
+        assertThat(scalar("SELECT count(*) FROM active_blob_reservation")).isZero();
+        assertThat(scalar("SELECT count(*) FROM audit_event")).isEqualTo(auditBefore);
+        assertThat(jdbc.sql("SELECT status FROM blob_cleanup_candidate WHERE object_key = :key")
+                .param("key", key).query(String.class).optional()).contains("PENDING");
+    }
+
     private UUID userId(String externalId) {
         return jdbc.sql("SELECT id FROM app_user WHERE external_id = :externalId")
                 .param("externalId", externalId).query(UUID.class).single();
@@ -362,6 +451,13 @@ class PostgresFoundationAcceptanceTest {
     @TestConfiguration(proxyBeanMethods = false)
     static class AcceptanceAuthorization {
         @Bean
+        UploadService uploadService(BlobStore blobs, DocumentDraftGateway drafts, AuditService audit) {
+            return new UploadService(new UploadPolicy(1024 * 1024, 100, 10_000, 50),
+                    new FileSystemUploadSpooler(),
+                    (path, filename, mediaType) -> UploadInspection.safe(mediaType), blobs, drafts, audit);
+        }
+
+        @Bean
         @Primary
         KnowledgeWriteAuthorization acceptanceWriteAuthorization() {
             return KnowledgeWriteAuthorization.allowAll();
@@ -371,7 +467,9 @@ class PostgresFoundationAcceptanceTest {
 
 final class LocalFoundationInfrastructure {
     static final String AISTOR_IMAGE = "quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3";
-    static final Path LICENSE = Path.of("E:\\git_secrets\\Elite-RAG\\minio.license");
+    static final Path LICENSE = Path.of(java.util.Optional.ofNullable(System.getenv("RAG_MINIO_LICENSE_FILE"))
+            .filter(value -> !value.isBlank())
+            .orElse("E:\\git_secrets\\Elite-RAG\\minio.license"));
     static final String DATABASE = "rag_acceptance";
     static final String MIGRATION_USER = "migration_owner";
     static final String MIGRATION_PASSWORD = "migration_test_only";

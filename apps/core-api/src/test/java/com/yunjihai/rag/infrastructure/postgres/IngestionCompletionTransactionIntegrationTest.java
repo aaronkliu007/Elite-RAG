@@ -9,14 +9,23 @@ import com.yunjihai.rag.ingestion.CanonicalDocumentV1;
 import com.yunjihai.rag.ingestion.CanonicalNode;
 import com.yunjihai.rag.ingestion.CanonicalTableCell;
 import com.yunjihai.rag.ingestion.IngestionJobService;
+import com.yunjihai.rag.ingestion.DocumentVersionId;
+import com.yunjihai.rag.ingestion.IngestionLease;
+import com.yunjihai.rag.ingestion.IngestionRequest;
+import com.yunjihai.rag.ingestion.IngestionLeaseConflictException;
 import com.yunjihai.rag.ingestion.InvalidParserResponseException;
+import com.yunjihai.rag.ingestion.ParserError;
+import com.yunjihai.rag.ingestion.ParserErrorCode;
 import com.yunjihai.rag.ingestion.ParserStatus;
+import com.yunjihai.rag.knowledge.DocumentLifecycleException;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceReadAuthorization;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
@@ -184,6 +193,189 @@ class IngestionCompletionTransactionIntegrationTest extends IngestionPostgresFix
             removeFailpoint(stage);
             jobs.complete(jobId, lease.leaseToken(), AT.plusSeconds(1));
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"SUPERSEDED", "PUBLISHED", "ARCHIVED"})
+    void exhaustedObsoleteJobsTerminateWithoutChangingDocumentsAndReleaseTheQueue(String state) {
+        try (var context = serviceContext()) {
+            var service = context.getBean(IngestionJobService.class);
+            var documents = context.getBean(JdbcDocumentRepository.class);
+            var successor = prepareObsoleteVersion(context.getBean(DocumentService.class), state);
+            var before = documents.findById(document.id()).orElseThrow();
+            var nextBefore = documents.findById(successor.documentVersion().documentId()).orElseThrow();
+            UUID oldJob = UUID.randomUUID();
+            var expired = exhaustLease(oldJob);
+            UUID nextJob = UUID.randomUUID();
+            jobs.enqueue(nextJob, successor, AT);
+
+            assertTrue(assertDoesNotThrow(() -> service.claimNext("recovery-worker")).isEmpty());
+
+            assertTerminated(oldJob, "TIMEOUT", 4);
+            assertEquals(before, documents.findById(document.id()).orElseThrow());
+            assertEquals(nextBefore, documents.findById(successor.documentVersion().documentId()).orElseThrow());
+            var stale = new IngestionLease(oldJob, expired.leaseToken(), expired.attempt(),
+                    expired.workerId(), AT.plusSeconds(30), expired.request());
+            assertThrows(IngestionLeaseConflictException.class, () -> service.fail(stale, terminalError()));
+            assertEquals(1L, count("audit_event"));
+            var next = service.claimNext("next-worker").orElseThrow();
+            assertEquals(nextJob, next.jobId());
+            assertEquals(1, next.attempt());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"SUPERSEDED", "PUBLISHED", "ARCHIVED"})
+    void terminalParserFailureOfObsoleteVersionPreservesLifecycleAndAudit(String state) {
+        try (var context = serviceContext()) {
+            var service = context.getBean(IngestionJobService.class);
+            var successor = prepareObsoleteVersion(context.getBean(DocumentService.class), state);
+            var documents = context.getBean(JdbcDocumentRepository.class);
+            var before = documents.findById(document.id()).orElseThrow();
+            UUID oldJob = UUID.randomUUID();
+            jobs.enqueue(oldJob, request, AT.minusSeconds(1));
+            var lease = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
+            UUID nextJob = UUID.randomUUID();
+            jobs.enqueue(nextJob, successor, AT);
+
+            assertDoesNotThrow(() -> service.fail(lease, terminalError()));
+
+            assertTerminated(oldJob, "CONVERSION_FAILED", 1);
+            assertEquals(before, documents.findById(document.id()).orElseThrow());
+            assertEquals(nextJob, service.claimNext("next-worker").orElseThrow().jobId());
+        }
+    }
+
+    @Test
+    void obsoleteJobTerminationRollsBackClaimAndTerminalStateIfAuditFails() {
+        try (var context = serviceContext()) {
+            var service = context.getBean(IngestionJobService.class);
+            var successor = prepareObsoleteVersion(context.getBean(DocumentService.class), "SUPERSEDED");
+            var documents = context.getBean(JdbcDocumentRepository.class);
+            var before = documents.findById(document.id()).orElseThrow();
+            UUID oldJob = UUID.randomUUID();
+            var expired = exhaustLease(oldJob);
+            UUID nextJob = UUID.randomUUID();
+            jobs.enqueue(nextJob, successor, AT);
+            installFailpoint("audit_event");
+
+            var failure = assertThrows(PostgresPersistenceExceptionTranslator.Failure.class,
+                    () -> service.claimNext("recovery-worker"));
+
+            assertEquals("DATABASE_FAILURE", failure.getMessage());
+            assertNull(failure.getCause());
+            assertEquals("LEASED", jobField(oldJob, "status"));
+            assertEquals(expired.leaseToken(), jobToken(oldJob));
+            assertEquals(3, attempts(oldJob));
+            assertEquals("QUEUED", jobField(nextJob, "status"));
+            assertEquals(0, attempts(nextJob));
+            assertEquals(before, documents.findById(document.id()).orElseThrow());
+            assertEquals(0L, count("audit_event"));
+            removeFailpoint("audit_event");
+            assertTrue(service.claimNext("recovery-worker").isEmpty());
+            assertTerminated(oldJob, "TIMEOUT", 4);
+            assertEquals(nextJob, service.claimNext("next-worker").orElseThrow().jobId());
+        }
+    }
+
+    @Test
+    void terminalFailureStillMarksCurrentDraftFailedAndAuditFailureRollsEverythingBack() {
+        try (var context = serviceContext()) {
+            var service = context.getBean(IngestionJobService.class);
+            UUID jobId = UUID.randomUUID();
+            jobs.enqueue(jobId, request, AT);
+            var lease = jobs.claimNext("worker", AT, AT.plusSeconds(30)).orElseThrow();
+            installFailpoint("audit_event");
+            assertThrows(PostgresPersistenceExceptionTranslator.Failure.class, () -> service.fail(lease, terminalError()));
+            assertEquals("PENDING", documentField("parse_status"));
+            assertEquals(0L, documentRevision());
+            assertEquals("LEASED", jobField(jobId, "status"));
+            assertEquals(lease.leaseToken(), jobToken(jobId));
+            assertEquals(0L, count("audit_event"));
+            removeFailpoint("audit_event");
+
+            service.fail(lease, terminalError());
+
+            assertEquals("DRAFT", documentField("status"));
+            assertEquals("FAILED", documentField("parse_status"));
+            assertEquals(1L, documentRevision());
+            assertTerminated(jobId, "CONVERSION_FAILED", 1);
+        }
+    }
+
+    @Test
+    void missingVersionAndCurrentReviewInconsistencyStillFailClosed() {
+        try (var context = serviceContext()) {
+            var documents = context.getBean(DocumentService.class);
+            var service = context.getBean(IngestionJobService.class);
+            documents.completeParsing(document.id(), request.documentVersion().versionId(), actor, AT);
+            UUID jobId = UUID.randomUUID();
+            jobs.enqueue(jobId, request, AT);
+            var lease = jobs.claimNext("worker", AT, AT.plusSeconds(30)).orElseThrow();
+            assertThrows(DocumentLifecycleException.class, () -> service.fail(lease, terminalError()));
+
+            documents.publish(document.id(), request.documentVersion().versionId(), actor, AT);
+            var wrongRequest = new IngestionRequest(new DocumentVersionId(document.id(), UUID.randomUUID()),
+                    actor, request.sourceBlobId(), request.filename(), request.mediaType(), request.sizeBytes(), request.sha256());
+            var invalid = new IngestionLease(jobId, lease.leaseToken(), 1, "worker", lease.leaseUntil(), wrongRequest);
+            assertThrows(DocumentLifecycleException.class, () -> service.fail(invalid, terminalError()));
+
+            assertEquals("LEASED", jobField(jobId, "status"));
+            assertEquals(lease.leaseToken(), jobToken(jobId));
+            assertEquals("PUBLISHED", documentField("status"));
+            assertEquals("SUCCEEDED", documentField("parse_status"));
+            assertEquals(0L, count("audit_event"));
+        }
+    }
+
+    private IngestionRequest prepareObsoleteVersion(DocumentService documents, String state) {
+        String sha = "b".repeat(64);
+        String blob = "sha256/bb/" + sha;
+        com.yunjihai.rag.knowledge.DocumentAggregate next;
+        if (state.equals("SUPERSEDED")) {
+            next = documents.createNextDraft(document.id(), blob, actor, AT);
+        } else {
+            documents.completeParsing(document.id(), request.documentVersion().versionId(), actor, AT);
+            documents.publish(document.id(), request.documentVersion().versionId(), actor, AT);
+            if (state.equals("ARCHIVED")) documents.archive(document.id(), actor, AT);
+            next = documents.createDraft(space, "后续文档", blob, actor, AT);
+        }
+        return new IngestionRequest(new DocumentVersionId(next.id(), next.latestVersion().id()),
+                actor, blob, "next.pdf", "application/pdf", 1234, sha);
+    }
+
+    private IngestionLease exhaustLease(UUID jobId) {
+        jobs.enqueue(jobId, request, AT.minusSeconds(120));
+        jobs.claimNext("expired-1", AT.minusSeconds(90), AT.minusSeconds(60)).orElseThrow();
+        jobs.claimNext("expired-2", AT.minusSeconds(60), AT.minusSeconds(30)).orElseThrow();
+        return jobs.claimNext("expired-3", AT.minusSeconds(30), AT).orElseThrow();
+    }
+
+    private void assertTerminated(UUID jobId, String errorCode, int attempts) {
+        assertEquals("FAILED", jobField(jobId, "status"));
+        assertEquals(errorCode, jobField(jobId, "error_code"));
+        assertTrue(ownerJdbc.sql("SELECT lease_token IS NULL AND lease_worker IS NULL AND lease_expires_at IS NULL "
+                        + "FROM ingestion_job WHERE id = :id")
+                .param("id", jobId).query(Boolean.class).single());
+        assertEquals(attempts, attempts(jobId));
+        assertEquals(1L, count("audit_event"));
+        assertEquals("PARSE", ownerJdbc.sql("SELECT action FROM audit_event").query(String.class).single());
+        assertEquals("FAILED", ownerJdbc.sql("SELECT result FROM audit_event").query(String.class).single());
+        assertEquals(request.documentVersion().versionId(), ownerJdbc.sql("SELECT resource_id FROM audit_event")
+                .query(UUID.class).single());
+        assertEquals(jobId.toString(), ownerJdbc.sql("SELECT metadata->>'jobId' FROM audit_event")
+                .query(String.class).single());
+        assertEquals(errorCode, ownerJdbc.sql("SELECT metadata->>'errorCode' FROM audit_event")
+                .query(String.class).single());
+    }
+
+    private int attempts(UUID jobId) {
+        return ownerJdbc.sql("SELECT attempts FROM ingestion_job WHERE id = :id")
+                .param("id", jobId).query(Integer.class).single();
+    }
+
+    private ParserError terminalError() {
+        return new ParserError(ParserErrorCode.CONVERSION_FAILED, "解析失败", false);
     }
 
     private AnnotationConfigApplicationContext serviceContext() {

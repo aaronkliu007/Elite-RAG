@@ -128,6 +128,21 @@ public class DocumentService {
     }
 
     @Transactional
+    public DocumentAggregate markParsingFailedForIngestion(UUID documentId, UUID versionId, Instant at) {
+        var current = findOrThrow(documentId);
+        // 必须先确认版本归属；不存在的版本仍属于不一致，不能伪装成过期任务。
+        var version = current.version(versionId);
+        if (current.archived() || !current.latestVersion().id().equals(versionId)
+                || version.status() == DocumentStatus.PUBLISHED || version.status() == DocumentStatus.ARCHIVED) {
+            // 旧任务可以终结，但不能改写新版本、已发布结果或归档历史。
+            return current;
+        }
+        var updated = current.markParsingFailed(versionId, at);
+        repository.replace(updated, current.revision());
+        return updated;
+    }
+
+    @Transactional
     public DocumentAggregate publish(UUID documentId, UUID versionId, UUID actorId, Instant at) {
         var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
                 document -> document.publish(versionId, actorId, at));

@@ -4,11 +4,13 @@ import com.yunjihai.rag.ingestion.OrphanBlobCandidate;
 import com.yunjihai.rag.ingestion.OrphanBlobRecorder;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Objects;
 import java.util.UUID;
 
-public final class JdbcOrphanBlobRecorder implements OrphanBlobRecorder {
+public class JdbcOrphanBlobRecorder implements OrphanBlobRecorder {
     private final JdbcClient jdbc;
 
     public JdbcOrphanBlobRecorder(JdbcClient jdbc) {
@@ -16,6 +18,8 @@ public final class JdbcOrphanBlobRecorder implements OrphanBlobRecorder {
     }
 
     @Override
+    // 对象写入无法参与数据库回滚；即使调用事务已 aborted，补偿事实也必须独立提交。
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void record(OrphanBlobCandidate candidate) {
         Objects.requireNonNull(candidate);
         try {
