@@ -33,6 +33,7 @@ import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
 import com.yunjihai.rag.retrieval.projection.ProjectionCutoverLock;
 import com.yunjihai.rag.retrieval.projection.ProjectionDocumentLock;
 import com.yunjihai.rag.retrieval.projection.ProjectionEventRepository;
+import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -138,6 +139,11 @@ public class PostgresAdapterConfiguration {
             ProjectionDocumentLock documents,
             ProjectionCutoverLock cutover) {
         return new JdbcProjectionChangePublisher(jdbc, events, documents, cutover);
+    }
+
+    @Bean
+    RetrievalAuthorizationPort retrievalAuthorizationPort(JdbcClient jdbc) {
+        return new JdbcRetrievalAuthorizationAdapter(jdbc);
     }
 
     @Bean
