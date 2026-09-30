@@ -60,6 +60,7 @@ public final class OpenSearchRecallQueryFactory {
         ObjectNode bool = root.putObject("bool");
         ArrayNode filters = bool.putArray("filter");
         filters.add(term("recordType", "NODE"));
+        filters.add(term("currentPublished", true));
         filters.add(term("spaceId", filter.spaceId().toString()));
         filters.add(acl("spaceAcl", principalKeys, filter));
 

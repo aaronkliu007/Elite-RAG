@@ -51,6 +51,7 @@
         }
       },
       "documentRestricted": {"type": "boolean"},
+      "currentPublished": {"type": "boolean"},
       "industry": {"type": "keyword"},
       "product": {"type": "keyword"},
       "solutionType": {"type": "keyword"},

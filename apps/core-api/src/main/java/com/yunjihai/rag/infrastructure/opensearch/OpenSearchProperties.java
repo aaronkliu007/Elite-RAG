@@ -21,6 +21,7 @@ public record OpenSearchProperties(
         boolean http = "http".equalsIgnoreCase(endpoint.getScheme());
         boolean https = "https".equalsIgnoreCase(endpoint.getScheme());
         if ((!http && !https) || endpoint.getHost() == null
+                || endpoint.getUserInfo() != null
                 || endpoint.getQuery() != null || endpoint.getFragment() != null) {
             throw new IllegalArgumentException("OpenSearch endpoint must be an HTTP(S) origin");
         }

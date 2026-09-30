@@ -49,10 +49,13 @@ public class AclService {
             PrincipalRef principal,
             Instant validUntil,
             Instant at) {
-        requireCommand(actorId, spaceId, null, principal, validUntil, at);
-        repository.grantSpace(spaceId, principal, validUntil, at);
-        record(actorId, spaceId, null, principal, "SPACE_GRANT");
-        projections.spaceAclChanged(spaceId, at);
+        projections.withSpaceChangeLock(spaceId, () -> {
+            requireCommand(actorId, spaceId, null, principal, validUntil, at);
+            repository.grantSpace(spaceId, principal, validUntil, at);
+            record(actorId, spaceId, null, principal, "SPACE_GRANT");
+            projections.spaceAclChanged(spaceId, at);
+            return null;
+        });
     }
 
     @Transactional
@@ -63,13 +66,16 @@ public class AclService {
             PrincipalRef principal,
             Instant validUntil,
             Instant at) {
-        requireCommand(actorId, spaceId, documentId, principal, validUntil, at);
-        if (!repository.isWithinSpaceScope(spaceId, principal, at)) {
-            throw new IllegalArgumentException("文档授权不能突破知识空间范围");
-        }
-        repository.grantDocument(spaceId, documentId, principal, validUntil, at);
-        record(actorId, spaceId, documentId, principal, "DOCUMENT_GRANT");
-        projections.documentAclChanged(spaceId, documentId, at);
+        projections.withDocumentChangeLock(documentId, () -> {
+            requireCommand(actorId, spaceId, documentId, principal, validUntil, at);
+            if (!repository.isWithinSpaceScope(spaceId, principal, at)) {
+                throw new IllegalArgumentException("文档授权不能突破知识空间范围");
+            }
+            repository.grantDocument(spaceId, documentId, principal, validUntil, at);
+            record(actorId, spaceId, documentId, principal, "DOCUMENT_GRANT");
+            projections.documentAclChanged(spaceId, documentId, at);
+            return null;
+        });
     }
 
     @Transactional
@@ -78,10 +84,13 @@ public class AclService {
             UUID spaceId,
             PrincipalRef principal,
             Instant at) {
-        requireCommand(actorId, spaceId, null, principal, null, at);
-        repository.revokeSpace(spaceId, principal, at);
-        record(actorId, spaceId, null, principal, "SPACE_REVOKE");
-        projections.spaceAclChanged(spaceId, at);
+        projections.withSpaceChangeLock(spaceId, () -> {
+            requireCommand(actorId, spaceId, null, principal, null, at);
+            repository.revokeSpace(spaceId, principal, at);
+            record(actorId, spaceId, null, principal, "SPACE_REVOKE");
+            projections.spaceAclChanged(spaceId, at);
+            return null;
+        });
     }
 
     @Transactional
@@ -91,10 +100,13 @@ public class AclService {
             UUID documentId,
             PrincipalRef principal,
             Instant at) {
-        requireCommand(actorId, spaceId, documentId, principal, null, at);
-        repository.revokeDocument(spaceId, documentId, principal, at);
-        record(actorId, spaceId, documentId, principal, "DOCUMENT_REVOKE");
-        projections.documentAclChanged(spaceId, documentId, at);
+        projections.withDocumentChangeLock(documentId, () -> {
+            requireCommand(actorId, spaceId, documentId, principal, null, at);
+            repository.revokeDocument(spaceId, documentId, principal, at);
+            record(actorId, spaceId, documentId, principal, "DOCUMENT_REVOKE");
+            projections.documentAclChanged(spaceId, documentId, at);
+            return null;
+        });
     }
 
     private void requireCommand(

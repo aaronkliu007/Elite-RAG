@@ -61,6 +61,7 @@ class OpenSearchRetrieverIntegrationTest {
 
     private static OpenSearchConnection connection;
     private static OpenSearchLexicalRetriever lexical;
+    private static OpenSearchProjectionWriter writer;
     private static URI endpoint;
 
     @BeforeAll
@@ -70,7 +71,7 @@ class OpenSearchRetrieverIntegrationTest {
         connection = new OpenSearchClientFactory().create(new OpenSearchProperties(endpoint, null, null));
         var indexes = new OpenSearchIndexManager(connection.client());
         indexes.createGeneration(INDEX, OptionalInt.of(4));
-        var writer = new OpenSearchProjectionWriter(connection.client());
+        writer = new OpenSearchProjectionWriter(connection.client());
 
         writer.apply(INDEX, snapshot(SPACE, DEPLOY_DOCUMENT, "部署方案", "Kubernetes 部署方案与灰度发布",
                 Set.of(grant("USER", USER, null)), Set.of(), false, "软件", 1));
@@ -122,6 +123,29 @@ class OpenSearchRetrieverIntegrationTest {
         assertTrue(missingDocumentGrant.isEmpty());
         assertEquals(List.of(RECOVERY_DOCUMENT),
                 bothGrants.stream().map(item -> item.documentId()).toList());
+    }
+
+    @Test
+    void recallRejectsNodeThatIsNotMarkedAsCurrentPublishedProjection() throws Exception {
+        UUID staleDocument = UUID.randomUUID();
+        writer.apply(INDEX, snapshot(SPACE, staleDocument, "历史投影", "历史投影唯一词",
+                Set.of(grant("USER", USER, null)), Set.of(), false, "软件", 40));
+        String id = versionId(staleDocument) + ":node-1";
+        var body = new ObjectMapper().writeValueAsString(
+                Map.of("doc", Map.of("currentPublished", false)));
+        var response = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(endpoint.resolve("/" + INDEX + "/_update/"
+                                + id.replace(":", "%3A")))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString(body)).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, response.statusCode(), response.body());
+        HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(endpoint.resolve("/" + INDEX + "/_refresh"))
+                        .POST(HttpRequest.BodyPublishers.noBody()).build(),
+                HttpResponse.BodyHandlers.discarding());
+
+        assertTrue(lexical.retrieve("历史投影唯一词", filter(Set.of(user()), Map.of()), 10).isEmpty());
     }
 
     @Test

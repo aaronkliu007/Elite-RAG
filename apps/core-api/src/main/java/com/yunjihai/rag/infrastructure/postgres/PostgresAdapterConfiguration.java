@@ -130,8 +130,14 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
-    PrincipalResolverPort principalResolverPort(EffectivePrincipalSet principals) {
-        return (userId, at) -> principals.forUser(userId);
+    PrincipalResolverPort principalResolverPort(JdbcClient jdbc, EffectivePrincipalSet principals) {
+        return (userId, at) -> {
+            boolean enabled = jdbc.sql("SELECT EXISTS (SELECT 1 FROM app_user WHERE id = :id AND enabled)")
+                    .param("id", userId)
+                    .query(Boolean.class)
+                    .single();
+            return enabled ? principals.forUser(userId) : java.util.Set.of();
+        };
     }
 
     @Bean

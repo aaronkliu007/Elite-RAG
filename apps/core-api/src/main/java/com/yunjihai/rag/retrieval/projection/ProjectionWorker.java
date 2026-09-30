@@ -4,6 +4,10 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class ProjectionWorker {
     static final String TEMPORARY_ERROR = "PROJECTION_TEMPORARY_FAILURE";
@@ -39,24 +43,37 @@ public final class ProjectionWorker {
         if (targetIndex == null || targetIndex.isBlank()) {
             throw new IllegalArgumentException("target index must not be blank");
         }
-        Instant claimedAt = clock.instant();
-        List<ProjectionLease> leases = events.claimBatch(
-                workerId, policy.claimBatchSize(), claimedAt,
-                claimedAt.plus(policy.leaseDuration()));
         int completed = 0;
-        for (ProjectionLease lease : leases) {
-            if (processLease(lease, targetIndex)) completed++;
+        for (int claimed = 0; claimed < policy.claimBatchSize(); claimed++) {
+            Instant claimedAt = clock.instant();
+            List<ProjectionLease> leases = events.claimBatch(
+                    workerId, 1, claimedAt, claimedAt.plus(policy.leaseDuration()));
+            if (leases.isEmpty()) break;
+            if (leases.size() != 1) {
+                throw new IllegalStateException("PROJECTION_CLAIM_LIMIT_VIOLATED");
+            }
+            if (processLease(leases.getFirst(), targetIndex)) completed++;
         }
         return completed;
     }
 
     private boolean processLease(ProjectionLease lease, String targetIndex) {
-        try {
+        if (lease.attempt() > policy.maxAttempts()) {
+            try {
+                events.fail(lease.eventId(), lease.leaseToken(), RETRY_EXHAUSTED, clock.instant());
+            } catch (ProjectionLeaseConflictException staleLease) {
+                return false;
+            }
+            return false;
+        }
+        try (var heartbeat = new LeaseHeartbeat(lease)) {
+            heartbeat.renewNow();
             switch (lease.scope()) {
                 case DOCUMENT -> projectDocument(
-                        lease.spaceId(), lease.documentId(), lease.sequence(), targetIndex);
-                case SPACE -> projectSpace(lease, targetIndex);
+                        lease.spaceId(), lease.documentId(), lease.sequence(), targetIndex, heartbeat);
+                case SPACE -> projectSpace(lease, targetIndex, heartbeat);
             }
+            heartbeat.requireOwned();
             events.complete(lease.eventId(), lease.leaseToken(), clock.instant());
             return true;
         } catch (ProjectionLeaseConflictException staleLease) {
@@ -68,27 +85,33 @@ public final class ProjectionWorker {
         }
     }
 
-    private void projectSpace(ProjectionLease lease, String targetIndex) {
+    private void projectSpace(ProjectionLease lease, String targetIndex, LeaseHeartbeat heartbeat) {
         var cursor = lease.progressDocumentId();
         while (true) {
+            heartbeat.renewNow();
             var page = source.pageSpace(
                     lease.spaceId(), cursor, policy.spacePageSize(), lease.sequence());
             if (page.isEmpty()) return;
             for (RetrievalProjectionSnapshot snapshot : page) {
                 projectDocument(
-                        lease.spaceId(), snapshot.documentId(), lease.sequence(), targetIndex);
+                        lease.spaceId(), snapshot.documentId(), lease.sequence(), targetIndex, heartbeat);
             }
             cursor = page.getLast().documentId();
-            events.checkpoint(lease.eventId(), lease.leaseToken(), cursor, clock.instant());
+            Instant checkpointedAt = clock.instant();
+            events.checkpoint(lease.eventId(), lease.leaseToken(), cursor, checkpointedAt,
+                    checkpointedAt.plus(policy.leaseDuration()));
         }
     }
 
     private void projectDocument(
-            java.util.UUID spaceId, java.util.UUID documentId, long sequence, String targetIndex) {
+            java.util.UUID spaceId, java.util.UUID documentId, long sequence, String targetIndex,
+            LeaseHeartbeat heartbeat) {
+        heartbeat.renewNow();
         documentLock.withDocumentLock(documentId, () -> {
             writer.apply(targetIndex, source.load(spaceId, documentId, sequence));
             return null;
         });
+        heartbeat.requireOwned();
     }
 
     private void transitionFailure(ProjectionLease lease, RuntimeException failure) {
@@ -120,6 +143,57 @@ public final class ProjectionWorker {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+    }
+
+    private final class LeaseHeartbeat implements AutoCloseable {
+        private final ProjectionLease lease;
+        private final ScheduledExecutorService scheduler;
+        private final AtomicReference<RuntimeException> failure = new AtomicReference<>();
+
+        private LeaseHeartbeat(ProjectionLease lease) {
+            this.lease = lease;
+            this.scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
+                Thread thread = new Thread(task, "projection-lease-heartbeat");
+                thread.setDaemon(true);
+                return thread;
+            });
+            long interval = Math.max(1L, policy.leaseDuration().toNanos() / 3L);
+            scheduler.scheduleAtFixedRate(this::renewInBackground,
+                    interval, interval, TimeUnit.NANOSECONDS);
+        }
+
+        private void renewNow() {
+            requireOwned();
+            Instant renewedAt = clock.instant();
+            try {
+                events.renew(lease.eventId(), lease.leaseToken(), renewedAt,
+                        renewedAt.plus(policy.leaseDuration()));
+            } catch (RuntimeException lost) {
+                failure.compareAndSet(null, lost);
+                throw lost;
+            }
+        }
+
+        private void renewInBackground() {
+            if (failure.get() != null) return;
+            try {
+                Instant renewedAt = clock.instant();
+                events.renew(lease.eventId(), lease.leaseToken(), renewedAt,
+                        renewedAt.plus(policy.leaseDuration()));
+            } catch (RuntimeException lost) {
+                failure.compareAndSet(null, lost);
+            }
+        }
+
+        private void requireOwned() {
+            RuntimeException lost = failure.get();
+            if (lost != null) throw lost;
+        }
+
+        @Override
+        public void close() {
+            scheduler.shutdownNow();
         }
     }
 }

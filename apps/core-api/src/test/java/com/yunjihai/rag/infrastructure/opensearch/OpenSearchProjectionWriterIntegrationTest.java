@@ -24,6 +24,9 @@ import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -93,6 +96,7 @@ class OpenSearchProjectionWriterIntegrationTest {
         assertEquals("NODE", stored.get("recordType").asText());
         assertEquals(10, stored.get("projectionSequence").asLong());
         assertEquals("第一段", stored.get("bodyText").asText());
+        assertTrue(stored.get("currentPublished").asBoolean());
 
         writer.apply(index, snapshot(9, List.of(node("node-1", "旧内容"))));
         indexes.refresh(index);
@@ -130,6 +134,60 @@ class OpenSearchProjectionWriterIntegrationTest {
 
         assertThrows(IllegalStateException.class,
                 () -> writer.apply(index, snapshot(30, List.of(node("node-1", "不是整数")))));
+    }
+
+    @Test
+    void pinsPhysicalGenerationBeforeAliasCutoverSoStaleApplyCannotTouchNewIndex() throws Exception {
+        String oldIndex = "chunks-pin-old";
+        String newIndex = "chunks-pin-new";
+        indexes.createGeneration(oldIndex, OptionalInt.empty());
+        indexes.createGeneration(newIndex, OptionalInt.empty());
+        writer.apply(newIndex, snapshot(50, List.of(node("node-1", "新代正文"))));
+        String previous = indexes.aliasTarget(OpenSearchIndexManager.WRITE_ALIAS).orElse(null);
+        indexes.switchAliases(previous, oldIndex);
+
+        var resolved = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var staleWriter = new OpenSearchProjectionWriter(connection.client(), JSON, physical -> {
+            assertEquals(oldIndex, physical);
+            resolved.countDown();
+            await(release);
+        });
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var stale = executor.submit(() -> staleWriter.apply(
+                    OpenSearchIndexManager.WRITE_ALIAS,
+                    snapshot(40, List.of(node("node-1", "过期正文")))));
+            assertTrue(resolved.await(5, TimeUnit.SECONDS));
+            indexes.switchAliases(oldIndex, newIndex);
+            release.countDown();
+            stale.get(10, TimeUnit.SECONDS);
+        }
+
+        indexes.refresh(newIndex);
+        assertEquals("新代正文", source(newIndex, "version-1:node-1").get("bodyText").asText());
+        assertEquals(50, source(newIndex, "version-1:node-1").get("projectionSequence").asLong());
+    }
+
+    @Test
+    void readHealthRequiresUsableReadAlias() throws Exception {
+        String current = indexes.aliasTarget(OpenSearchIndexManager.READ_ALIAS).orElse(null);
+        if (current != null) assertTrue(request("DELETE", "/" + current, null).statusCode() < 300);
+        var health = new OpenSearchReadHealthIndicator(connection.client());
+        assertEquals("DOWN", health.health().getStatus().getCode());
+
+        String healthy = "chunks-health-ready";
+        indexes.createGeneration(healthy, OptionalInt.empty());
+        indexes.switchAliases(null, healthy);
+        assertEquals("UP", health.health().getStatus().getCode());
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            if (!latch.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("test latch timed out");
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("test interrupted", failure);
+        }
     }
 
     private static RetrievalProjectionSnapshot snapshot(long sequence, List<ProjectionNode> nodes) {

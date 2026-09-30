@@ -9,6 +9,7 @@ import com.yunjihai.rag.infrastructure.opensearch.OpenSearchIndexManager;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchProperties;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchRebuildService;
 import com.yunjihai.rag.retrieval.TrustedRetrievalService;
+import com.yunjihai.rag.retrieval.PrincipalResolverPort;
 import com.yunjihai.rag.retrieval.domain.DegradationReason;
 import com.yunjihai.rag.retrieval.domain.RetrievalFilter;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
@@ -23,6 +24,7 @@ import org.springframework.boot.health.registry.HealthContributorRegistry;
 import org.springframework.boot.web.server.servlet.context.ServletWebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
@@ -103,6 +105,17 @@ class RetrievalProductionWiringTest {
                             Map.of()));
             assertThat(result.candidates()).isEmpty();
             assertThat(result.degradationReasons()).containsExactly(DegradationReason.VECTOR_UNAVAILABLE);
+
+            var jdbc = context.getBean(JdbcClient.class);
+            UUID disabledUser = UUID.randomUUID();
+            jdbc.sql("INSERT INTO app_user (id, external_id, display_name) VALUES (:id, :external, 'Disabled')")
+                    .param("id", disabledUser).param("external", disabledUser.toString()).update();
+            var resolver = context.getBean(PrincipalResolverPort.class);
+            assertThat(resolver.resolve(disabledUser, Instant.now()))
+                    .contains(new PrincipalRef(PrincipalType.USER, disabledUser));
+            jdbc.sql("UPDATE app_user SET enabled = false WHERE id = :id")
+                    .param("id", disabledUser).update();
+            assertThat(resolver.resolve(disabledUser, Instant.now())).isEmpty();
         }
     }
 

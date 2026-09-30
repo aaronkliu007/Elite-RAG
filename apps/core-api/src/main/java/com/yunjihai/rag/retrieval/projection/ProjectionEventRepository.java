@@ -11,7 +11,9 @@ public interface ProjectionEventRepository {
 
     List<ProjectionLease> claimBatch(String workerId, int limit, Instant now, Instant leaseUntil);
 
-    void checkpoint(UUID eventId, UUID leaseToken, UUID progressDocumentId, Instant at);
+    void renew(UUID eventId, UUID leaseToken, Instant at, Instant leaseUntil);
+
+    void checkpoint(UUID eventId, UUID leaseToken, UUID progressDocumentId, Instant at, Instant leaseUntil);
 
     void complete(UUID eventId, UUID leaseToken, Instant at);
 

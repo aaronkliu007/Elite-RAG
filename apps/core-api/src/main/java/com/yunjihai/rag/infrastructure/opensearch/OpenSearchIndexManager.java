@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.UUID;
 import java.util.regex.Pattern;
 
 public final class OpenSearchIndexManager {
@@ -100,14 +101,75 @@ public final class OpenSearchIndexManager {
     }
 
     public long countNodes(String indexName) {
+        return count(indexName, "{\"term\":{\"recordType\":\"NODE\"}}");
+    }
+
+    public long countTombstones(String indexName) {
+        return count(indexName, "{\"term\":{\"recordType\":\"TOMBSTONE\"}}");
+    }
+
+    public long countNodesForSpace(String indexName, UUID spaceId) {
+        Objects.requireNonNull(spaceId);
+        return count(indexName, filtered(
+                term("recordType", "NODE"), term("spaceId", spaceId.toString()),
+                term("currentPublished", true)));
+    }
+
+    public long countNodesForDocumentVersion(
+            String indexName, UUID documentId, UUID versionId) {
+        Objects.requireNonNull(documentId);
+        if (versionId == null) {
+            return count(indexName, filtered(
+                    term("recordType", "NODE"), term("documentId", documentId.toString())));
+        }
+        return count(indexName, filtered(
+                term("recordType", "NODE"), term("documentId", documentId.toString()),
+                term("versionId", versionId.toString()), term("currentPublished", true)));
+    }
+
+    public long countExpectedNode(
+            String indexName, String nodeId, UUID spaceId, UUID documentId, UUID versionId) {
+        Objects.requireNonNull(nodeId);
+        Objects.requireNonNull(spaceId);
+        Objects.requireNonNull(documentId);
+        Objects.requireNonNull(versionId);
+        ObjectNode ids = json.createObjectNode();
+        ids.putArray("values").add(nodeId);
+        ObjectNode idsQuery = json.createObjectNode().set("ids", ids);
+        return count(indexName, filtered(idsQuery,
+                term("recordType", "NODE"), term("spaceId", spaceId.toString()),
+                term("documentId", documentId.toString()), term("versionId", versionId.toString()),
+                term("currentPublished", true)));
+    }
+
+    private long count(String indexName, String queryJson) {
         validateIndex(indexName);
         String response = execute("POST", "/" + indexName + "/_count",
-                "{\"query\":{\"term\":{\"recordType\":\"NODE\"}}}");
+                "{\"query\":" + queryJson + "}");
         try {
             return json.readTree(response).path("count").asLong();
         } catch (IOException failure) {
             throw new IllegalStateException("OPENSEARCH_COUNT_RESPONSE_INVALID", failure);
         }
+    }
+
+    private String filtered(ObjectNode... clauses) {
+        ObjectNode query = json.createObjectNode();
+        var filter = query.putObject("bool").putArray("filter");
+        for (ObjectNode clause : clauses) filter.add(clause);
+        return query.toString();
+    }
+
+    private ObjectNode term(String field, String value) {
+        ObjectNode result = json.createObjectNode();
+        result.putObject("term").put(field, value);
+        return result;
+    }
+
+    private ObjectNode term(String field, boolean value) {
+        ObjectNode result = json.createObjectNode();
+        result.putObject("term").put(field, value);
+        return result;
     }
 
     public void refresh(String indexName) {

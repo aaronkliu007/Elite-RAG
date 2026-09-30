@@ -81,8 +81,10 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
 
             var transactions = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
             var publisher = context.getBean(ProjectionChangePublisher.class);
-            transactions.executeWithoutResult(status -> publisher.documentAclChanged(
-                    space, document, Instant.now()));
+            transactions.executeWithoutResult(status -> publisher.withDocumentChangeLock(document, () -> {
+                publisher.documentAclChanged(space, document, Instant.now());
+                return null;
+            }));
 
             assertThat(context.getBean(ProjectionWorker.class).runOnce(
                     "acceptance-worker", OpenSearchIndexManager.WRITE_ALIAS)).isEqualTo(1);

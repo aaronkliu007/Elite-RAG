@@ -138,9 +138,11 @@ public class DocumentService {
     @Transactional
     public DocumentAggregate completeParsing(
             UUID documentId, UUID versionId, UUID actorId, Instant at) {
-        var updated = mutate(documentId, document -> document.completeParsing(versionId, actorId, at));
-        projections.documentChanged(updated, versionId, at);
-        return updated;
+        return projections.withDocumentChangeLock(documentId, () -> {
+            var updated = mutate(documentId, document -> document.completeParsing(versionId, actorId, at));
+            projections.documentChanged(updated, versionId, at);
+            return updated;
+        });
     }
 
     @Transactional
@@ -165,20 +167,24 @@ public class DocumentService {
 
     @Transactional
     public DocumentAggregate publish(UUID documentId, UUID versionId, UUID actorId, Instant at) {
-        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
-                document -> document.publish(versionId, actorId, at));
-        record(actorId, AuditAction.PUBLISH, "DOCUMENT_VERSION", versionId, updated);
-        projections.documentChanged(updated, versionId, at);
-        return updated;
+        return projections.withDocumentChangeLock(documentId, () -> {
+            var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
+                    document -> document.publish(versionId, actorId, at));
+            record(actorId, AuditAction.PUBLISH, "DOCUMENT_VERSION", versionId, updated);
+            projections.documentChanged(updated, versionId, at);
+            return updated;
+        });
     }
 
     @Transactional
     public DocumentAggregate archive(UUID documentId, UUID actorId, Instant at) {
-        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.ARCHIVE_DOCUMENT,
-                document -> document.archive(actorId, at));
-        record(actorId, AuditAction.ARCHIVE, "DOCUMENT", documentId, updated);
-        projections.documentChanged(updated, updated.currentPublishedVersionId().orElseThrow(), at);
-        return updated;
+        return projections.withDocumentChangeLock(documentId, () -> {
+            var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.ARCHIVE_DOCUMENT,
+                    document -> document.archive(actorId, at));
+            record(actorId, AuditAction.ARCHIVE, "DOCUMENT", documentId, updated);
+            projections.documentChanged(updated, updated.currentPublishedVersionId().orElseThrow(), at);
+            return updated;
+        });
     }
 
     @Transactional

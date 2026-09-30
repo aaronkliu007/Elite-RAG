@@ -134,14 +134,29 @@ public final class JdbcProjectionEventRepository implements ProjectionEventRepos
     }
 
     @Override
-    public void checkpoint(UUID eventId, UUID leaseToken, UUID progressDocumentId, Instant at) {
-        Objects.requireNonNull(progressDocumentId);
+    public void renew(UUID eventId, UUID leaseToken, Instant at, Instant leaseUntil) {
+        requireFutureLease(at, leaseUntil);
         transition(jdbc.sql("""
                 UPDATE retrieval_projection_event
-                SET progress_document_id = :progressDocumentId, updated_at = :at
+                SET lease_expires_at = GREATEST(lease_expires_at, :leaseUntil), updated_at = :at
+                WHERE id = :id AND status = 'LEASED' AND lease_token = :leaseToken
+                  AND lease_expires_at > :at
+                """).param("leaseUntil", utc(leaseUntil)), eventId, leaseToken, at);
+    }
+
+    @Override
+    public void checkpoint(
+            UUID eventId, UUID leaseToken, UUID progressDocumentId, Instant at, Instant leaseUntil) {
+        Objects.requireNonNull(progressDocumentId);
+        requireFutureLease(at, leaseUntil);
+        transition(jdbc.sql("""
+                UPDATE retrieval_projection_event
+                SET progress_document_id = :progressDocumentId,
+                    lease_expires_at = GREATEST(lease_expires_at, :leaseUntil), updated_at = :at
                 WHERE id = :id AND scope_type = 'SPACE' AND status = 'LEASED'
                   AND lease_token = :leaseToken AND lease_expires_at > :at
-                """).param("progressDocumentId", progressDocumentId), eventId, leaseToken, at);
+                """).param("progressDocumentId", progressDocumentId)
+                .param("leaseUntil", utc(leaseUntil)), eventId, leaseToken, at);
     }
 
     @Override
@@ -280,6 +295,14 @@ public final class JdbcProjectionEventRepository implements ProjectionEventRepos
     private static void validateErrorCode(String errorCode) {
         if (errorCode == null || errorCode.isBlank() || errorCode.length() > 100) {
             throw new IllegalArgumentException("投影错误码无效");
+        }
+    }
+
+    private static void requireFutureLease(Instant at, Instant leaseUntil) {
+        Objects.requireNonNull(at);
+        Objects.requireNonNull(leaseUntil);
+        if (!micros(leaseUntil).isAfter(micros(at))) {
+            throw new IllegalArgumentException("租约续期截止时间必须晚于当前时间");
         }
     }
 

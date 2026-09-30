@@ -14,6 +14,8 @@ CREATE TABLE document_retrieval_metadata (
 CREATE TABLE retrieval_projection_event (
     id uuid PRIMARY KEY,
     sequence bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
+    event_type text NOT NULL DEFAULT 'REFRESH_SCOPE'
+        CHECK (event_type = 'REFRESH_SCOPE'),
     scope_type text NOT NULL CHECK (scope_type IN ('DOCUMENT', 'SPACE')),
     space_id uuid NOT NULL REFERENCES knowledge_space(id),
     document_id uuid,

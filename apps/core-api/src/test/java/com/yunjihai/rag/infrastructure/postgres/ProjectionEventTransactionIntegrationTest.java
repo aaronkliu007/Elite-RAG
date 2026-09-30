@@ -44,6 +44,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -64,6 +65,8 @@ class ProjectionEventTransactionIntegrationTest {
     private static AclService acl;
     private static ToggleAuditSink audit;
     private static ProjectionDocumentLock documentLock;
+    private static ProjectionCutoverLock cutoverLock;
+    private static ProjectionEventRepository projectionEvents;
     private static PlatformTransactionManager transactions;
 
     private UUID actorId;
@@ -91,6 +94,8 @@ class ProjectionEventTransactionIntegrationTest {
         acl = context.getBean(AclService.class);
         audit = context.getBean(ToggleAuditSink.class);
         documentLock = context.getBean(ProjectionDocumentLock.class);
+        cutoverLock = context.getBean(ProjectionCutoverLock.class);
+        projectionEvents = context.getBean(ProjectionEventRepository.class);
         transactions = context.getBean(PlatformTransactionManager.class);
     }
 
@@ -201,6 +206,95 @@ class ProjectionEventTransactionIntegrationTest {
             second.get(5, TimeUnit.SECONDS);
             assertTrue(secondEntered.await(1, TimeUnit.SECONDS));
         }
+    }
+
+    @Test
+    void businessMutationAcquiresProjectionLocksBeforeDocumentRowWrite() throws Exception {
+        var document = documents.createDraft(spaceId, "锁顺序", blobId(), actorId, NOW);
+        var versionId = document.latestVersion().id();
+        documents.completeParsing(document.id(), versionId, actorId, NOW.plusSeconds(1));
+
+        var workerHasDocumentLock = new CountDownLatch(1);
+        var businessStarted = new CountDownLatch(1);
+        var workerReadRow = new CountDownLatch(1);
+        var transaction = new TransactionTemplate(transactions);
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var worker = executor.submit(() -> transaction.executeWithoutResult(ignored ->
+                    documentLock.withDocumentLock(document.id(), () -> {
+                        workerHasDocumentLock.countDown();
+                        await(businessStarted);
+                        try {
+                            Thread.sleep(250);
+                        } catch (InterruptedException failure) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(failure);
+                        }
+                        jdbc.sql("SELECT revision FROM document WHERE id = :id FOR UPDATE")
+                                .param("id", document.id()).query(Long.class).single();
+                        workerReadRow.countDown();
+                        return null;
+                    })));
+            assertTrue(workerHasDocumentLock.await(5, TimeUnit.SECONDS));
+            var business = executor.submit(() -> {
+                businessStarted.countDown();
+                return documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(2));
+            });
+
+            assertTrue(workerReadRow.await(3, TimeUnit.SECONDS),
+                    "业务事务必须在写文档行之前等待文档咨询锁");
+            worker.get(5, TimeUnit.SECONDS);
+            assertEquals(versionId, business.get(5, TimeUnit.SECONDS)
+                    .currentPublishedVersionId().orElseThrow());
+        }
+    }
+
+    @Test
+    void exclusiveCutoverCapturesFinalWatermarkBeforeConcurrentBusinessWrite() throws Exception {
+        var document = documents.createDraft(spaceId, "切换水位", blobId(), actorId, NOW);
+        var versionId = document.latestVersion().id();
+        documents.completeParsing(document.id(), versionId, actorId, NOW.plusSeconds(1));
+        jdbc.sql("DELETE FROM retrieval_projection_event").update();
+
+        var cutoverEntered = new CountDownLatch(1);
+        var releaseCutover = new CountDownLatch(1);
+        var businessStarted = new CountDownLatch(1);
+        var capturedWatermark = new AtomicLong(-1);
+        var transaction = new TransactionTemplate(transactions);
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var cutover = executor.submit(() -> transaction.executeWithoutResult(ignored ->
+                    cutoverLock.withExclusive(java.time.Duration.ofSeconds(5), () -> {
+                        capturedWatermark.set(projectionEvents.currentSequence());
+                        cutoverEntered.countDown();
+                        await(businessStarted);
+                        try {
+                            Thread.sleep(250);
+                        } catch (InterruptedException failure) {
+                            Thread.currentThread().interrupt();
+                            throw new IllegalStateException(failure);
+                        }
+                        var published = jdbc.sql("""
+                                SELECT current_published_version_id FROM document WHERE id = :id
+                                """).param("id", document.id()).query(UUID.class).optional();
+                        assertTrue(published.isEmpty(),
+                                "排他切换锁内的最终水位不能遗漏已写业务行但尚未入队的事件");
+                        await(releaseCutover);
+                        return null;
+                    })));
+            assertTrue(cutoverEntered.await(5, TimeUnit.SECONDS));
+            var business = executor.submit(() -> {
+                businessStarted.countDown();
+                return documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(2));
+            });
+            assertFalse(business.isDone());
+            releaseCutover.countDown();
+            cutover.get(5, TimeUnit.SECONDS);
+            business.get(5, TimeUnit.SECONDS);
+        }
+
+        assertEquals(0, capturedWatermark.get());
+        assertTrue(projectionEvents.currentSequence() > capturedWatermark.get());
     }
 
     private static void await(CountDownLatch latch) {

@@ -109,7 +109,8 @@ class JdbcProjectionEventIntegrationTest {
         var lease = repository.claimBatch("worker-a", 1, NOW, NOW.plusSeconds(30)).getFirst();
         UUID cursor = UUID.randomUUID();
 
-        repository.checkpoint(lease.eventId(), lease.leaseToken(), cursor, NOW.plusSeconds(1));
+        repository.checkpoint(lease.eventId(), lease.leaseToken(), cursor,
+                NOW.plusSeconds(1), NOW.plusSeconds(61));
         assertEquals(cursor, jdbc.sql("SELECT progress_document_id FROM retrieval_projection_event")
                 .query(UUID.class).single());
         assertThrows(ProjectionLeaseConflictException.class,

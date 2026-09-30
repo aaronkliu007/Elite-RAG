@@ -22,34 +22,57 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Consumer;
 
 public final class OpenSearchProjectionWriter implements SearchProjectionWriter {
     private final OpenSearchClient client;
     private final ObjectMapper json;
+    private final Consumer<String> targetResolved;
 
     public OpenSearchProjectionWriter(OpenSearchClient client) {
-        this(client, new ObjectMapper());
+        this(client, new ObjectMapper(), ignored -> { });
     }
 
     OpenSearchProjectionWriter(OpenSearchClient client, ObjectMapper json) {
+        this(client, json, ignored -> { });
+    }
+
+    OpenSearchProjectionWriter(
+            OpenSearchClient client, ObjectMapper json, Consumer<String> targetResolved) {
         this.client = Objects.requireNonNull(client);
         this.json = Objects.requireNonNull(json);
+        this.targetResolved = Objects.requireNonNull(targetResolved);
     }
 
     @Override
     public void apply(String targetIndex, RetrievalProjectionSnapshot snapshot) {
         OpenSearchIndexManager.validateIndex(targetIndex);
         Objects.requireNonNull(snapshot);
-        if (!acceptTombstone(targetIndex, snapshot)) return;
+        String concreteIndex = resolveConcreteTarget(targetIndex);
+        targetResolved.accept(concreteIndex);
+        if (!acceptTombstone(concreteIndex, snapshot)) return;
         if (snapshot.indexable()) {
-            writeNodes(targetIndex, snapshot);
-            refresh(targetIndex);
-            deleteResidualNodes(targetIndex, snapshot, snapshot.nodes().stream()
+            writeNodes(concreteIndex, snapshot);
+            refresh(concreteIndex);
+            deleteResidualNodes(concreteIndex, snapshot, snapshot.nodes().stream()
                     .map(ProjectionNode::indexDocumentId).collect(java.util.stream.Collectors.toSet()));
         } else {
-            refresh(targetIndex);
-            deleteResidualNodes(targetIndex, snapshot, Set.of());
+            refresh(concreteIndex);
+            deleteResidualNodes(concreteIndex, snapshot, Set.of());
         }
+    }
+
+    private String resolveConcreteTarget(String targetIndex) {
+        if (!OpenSearchIndexManager.READ_ALIAS.equals(targetIndex)
+                && !OpenSearchIndexManager.WRITE_ALIAS.equals(targetIndex)) {
+            return targetIndex;
+        }
+        JsonNode aliases = executeJson("GET", "/_alias/" + targetIndex, null);
+        var targets = aliases.properties().stream().map(java.util.Map.Entry::getKey).toList();
+        if (targets.size() != 1) throw new IllegalStateException("OPENSEARCH_ALIAS_TARGET_AMBIGUOUS");
+        String concrete = targets.getFirst();
+        OpenSearchIndexManager.validateIndex(concrete);
+        return concrete;
     }
 
     private boolean acceptTombstone(String index, RetrievalProjectionSnapshot snapshot) {
@@ -82,11 +105,22 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
         StringBuilder ndjson = new StringBuilder();
         for (ProjectionNode node : snapshot.nodes()) {
             ObjectNode action = json.createObjectNode();
-            ObjectNode indexAction = action.putObject("index");
-            indexAction.put("_index", index);
-            indexAction.put("_id", node.indexDocumentId());
+            ObjectNode updateAction = action.putObject("update");
+            updateAction.put("_index", index);
+            updateAction.put("_id", node.indexDocumentId());
             ndjson.append(action).append('\n');
-            ndjson.append(nodeDocument(snapshot, node)).append('\n');
+            ObjectNode source = nodeDocument(snapshot, node);
+            ObjectNode update = json.createObjectNode();
+            update.put("scripted_upsert", true);
+            ObjectNode script = update.putObject("script");
+            script.put("lang", "painless");
+            script.put("source", "if (ctx._source.projectionSequence != null && "
+                    + "ctx._source.projectionSequence > params.sequence) { ctx.op = 'none'; } "
+                    + "else { ctx._source.clear(); ctx._source.putAll(params.source); }");
+            script.putObject("params").put("sequence", snapshot.projectionSequence())
+                    .set("source", source);
+            update.set("upsert", source);
+            ndjson.append(update).append('\n');
         }
         JsonNode response = executeRaw("POST", "/_bulk",
                 Body.from(ndjson.toString().getBytes(StandardCharsets.UTF_8), "application/x-ndjson"));
@@ -120,6 +154,7 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
         document.set("spaceAcl", acl(snapshot.spaceAclGrants()));
         document.set("documentAcl", acl(snapshot.documentAclGrants()));
         document.put("documentRestricted", snapshot.documentRestricted());
+        document.put("currentPublished", true);
         snapshot.metadata().forEach(document::put);
         document.put("documentRevision", snapshot.documentRevision());
         document.put("projectionSequence", snapshot.projectionSequence());
@@ -186,7 +221,20 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
                     .putObject("ids").putArray("values");
             retainedIds.stream().sorted().forEach(values::add);
         }
-        executeJson("POST", "/" + index + "/_delete_by_query?conflicts=proceed", body);
+        JsonNode response = executeJson(
+                "POST", "/" + index + "/_delete_by_query?conflicts=proceed", body);
+        if (response.path("timed_out").asBoolean()
+                || response.path("version_conflicts").asLong() != 0
+                || !response.path("failures").isArray()
+                || !response.path("failures").isEmpty()) {
+            throw new IllegalStateException("OPENSEARCH_DELETE_INCOMPLETE");
+        }
+        refresh(index);
+        ObjectNode count = json.createObjectNode().set("query", body.path("query"));
+        JsonNode remaining = executeJson("POST", "/" + index + "/_count", count);
+        if (remaining.path("count").asLong(-1) != 0) {
+            throw new IllegalStateException("OPENSEARCH_DELETE_INCOMPLETE");
+        }
     }
 
     private void refresh(String index) {
@@ -196,8 +244,9 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
 
     private JsonNode executeJson(String method, String endpoint, JsonNode body) {
         try {
-            return execute(method, endpoint, Requests.builder().method(method).endpoint(endpoint)
-                    .json(body.toString()).build());
+            var builder = Requests.builder().method(method).endpoint(endpoint);
+            if (body != null) builder.json(body.toString());
+            return execute(method, endpoint, builder.build());
         } catch (RuntimeException failure) {
             throw failure;
         }

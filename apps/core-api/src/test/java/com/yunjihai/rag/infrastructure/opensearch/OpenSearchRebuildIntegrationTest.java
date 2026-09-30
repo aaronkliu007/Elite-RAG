@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -140,6 +141,38 @@ class OpenSearchRebuildIntegrationTest {
         assertEquals(oldIndex, indexes.aliasTarget(OpenSearchIndexManager.WRITE_ALIAS).orElseThrow());
     }
 
+    @Test
+    void deadlineStopsFinalReplayBetweenEventsAndKeepsExistingAliases() {
+        String oldIndex = initializeOldGeneration("chunks-replay-deadline-old");
+        var source = new MutableSource("正文");
+        var events = new FakeEvents(40);
+        var finalWrites = new AtomicInteger();
+        SearchProjectionWriter slowFinalWriter = (index, snapshot) -> {
+            if (snapshot.projectionSequence() > 40) {
+                finalWrites.incrementAndGet();
+                try {
+                    Thread.sleep(80);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(interrupted);
+                }
+            }
+            writer.apply(index, snapshot);
+        };
+        var cutover = new HookCutoverLock(() -> {
+            events.publishDocument(41, source.documentId, source.versionId);
+            events.publishDocument(42, source.documentId, source.versionId);
+        });
+        var service = service(source, events, slowFinalWriter, cutover);
+
+        assertThrows(RebuildValidationException.class,
+                () -> service.rebuild("chunks-replay-deadline-new", Duration.ofMillis(40)));
+
+        assertEquals(1, finalWrites.get());
+        assertEquals(oldIndex, indexes.aliasTarget(OpenSearchIndexManager.READ_ALIAS).orElseThrow());
+        assertEquals(oldIndex, indexes.aliasTarget(OpenSearchIndexManager.WRITE_ALIAS).orElseThrow());
+    }
+
     private static OpenSearchRebuildService service(
             RetrievalProjectionSource source,
             ProjectionEventRepository events,
@@ -234,7 +267,8 @@ class OpenSearchRebuildIntegrationTest {
         @Override public long enqueueDocument(UUID s, UUID d, UUID v, long r, Instant at) { throw new UnsupportedOperationException(); }
         @Override public long enqueueSpace(UUID s, Instant at) { throw new UnsupportedOperationException(); }
         @Override public List<ProjectionLease> claimBatch(String w, int l, Instant n, Instant u) { return List.of(); }
-        @Override public void checkpoint(UUID e, UUID t, UUID p, Instant at) { throw new UnsupportedOperationException(); }
+        @Override public void renew(UUID e, UUID t, Instant at, Instant until) { throw new UnsupportedOperationException(); }
+        @Override public void checkpoint(UUID e, UUID t, UUID p, Instant at, Instant until) { throw new UnsupportedOperationException(); }
         @Override public void complete(UUID e, UUID t, Instant at) { throw new UnsupportedOperationException(); }
         @Override public void retry(UUID e, UUID t, String c, Instant n, Instant at) { throw new UnsupportedOperationException(); }
         @Override public void fail(UUID e, UUID t, String c, Instant at) { throw new UnsupportedOperationException(); }

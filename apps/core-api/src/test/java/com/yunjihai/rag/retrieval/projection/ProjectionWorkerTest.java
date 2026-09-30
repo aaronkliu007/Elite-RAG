@@ -49,6 +49,7 @@ class ProjectionWorkerTest {
         assertEquals(1, repository.completed.size());
         assertTrue(repository.retried.isEmpty());
         assertEquals(NOW.plus(POLICY.leaseDuration()), repository.claimedLeaseUntil);
+        assertEquals(List.of(1, 1), repository.claimLimits);
     }
 
     @Test
@@ -66,7 +67,30 @@ class ProjectionWorkerTest {
         assertEquals(List.of(DOCUMENT_2, DOCUMENT_3), source.loaded);
         assertEquals(List.of(DOCUMENT_2, DOCUMENT_3), writer.documents);
         assertEquals(List.of(DOCUMENT_3), repository.checkpoints);
+        assertEquals(NOW.plus(POLICY.leaseDuration()), repository.checkpointLeaseUntil);
         assertEquals(1, repository.completed.size());
+    }
+
+    @Test
+    void renewsLeaseBeforeEachBatchItemAndStopsWhenOwnershipWasLost() {
+        var first = documentLease(20, 1);
+        var second = new ProjectionLease(
+                UUID.randomUUID(), 21, ProjectionScope.DOCUMENT, SPACE, DOCUMENT_2, null,
+                1L, null, UUID.randomUUID(), 1, "worker-a", NOW.plusSeconds(60));
+        var repository = new FakeRepository(first, second);
+        repository.failRenewAt = 3;
+        var source = new FakeSource(List.of(
+                deletion(DOCUMENT_1, 20), deletion(DOCUMENT_2, 21)));
+        var writer = new RecordingWriter();
+        var worker = new ProjectionWorker(
+                repository, source, new RecordingLock(), writer, POLICY, CLOCK);
+
+        assertEquals(1, worker.runOnce("worker-a", "rag-chunks-write"));
+
+        assertEquals(List.of(DOCUMENT_1), source.loaded);
+        assertEquals(List.of(DOCUMENT_1), writer.documents);
+        assertEquals(1, repository.completed.size());
+        assertTrue(repository.retried.isEmpty());
     }
 
     @Test
@@ -231,9 +255,14 @@ class ProjectionWorkerTest {
         private final List<UUID> failed = new ArrayList<>();
         private Instant claimedLeaseUntil;
         private Instant retryAt;
+        private Instant checkpointLeaseUntil;
         private String retryError;
         private String failedError;
         private RuntimeException completeFailure;
+        private int renewCalls;
+        private int failRenewAt = Integer.MAX_VALUE;
+        private int nextLease;
+        private final List<Integer> claimLimits = new ArrayList<>();
 
         private FakeRepository(ProjectionLease... leases) {
             this.leases = List.of(leases);
@@ -242,12 +271,22 @@ class ProjectionWorkerTest {
         @Override
         public List<ProjectionLease> claimBatch(String workerId, int limit, Instant now, Instant leaseUntil) {
             claimedLeaseUntil = leaseUntil;
-            return leases;
+            claimLimits.add(limit);
+            if (nextLease >= leases.size()) return List.of();
+            return List.of(leases.get(nextLease++));
         }
 
         @Override
-        public void checkpoint(UUID eventId, UUID token, UUID progressDocumentId, Instant at) {
+        public void renew(UUID eventId, UUID token, Instant at, Instant leaseUntil) {
+            renewCalls++;
+            if (renewCalls == failRenewAt) throw new ProjectionLeaseConflictException();
+        }
+
+        @Override
+        public void checkpoint(
+                UUID eventId, UUID token, UUID progressDocumentId, Instant at, Instant leaseUntil) {
             checkpoints.add(progressDocumentId);
+            checkpointLeaseUntil = leaseUntil;
         }
 
         @Override

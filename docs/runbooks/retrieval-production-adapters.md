@@ -122,7 +122,7 @@ Invoke-RestMethod http://127.0.0.1:8080/actuator/health/readiness
 - `workerId` 稳定且可区分实例；目标使用 `rag-chunks-write`。
 - 失败按策略退避，达到上限进入 `FAILED`；不得绕过租约 Token 手工改成完成。
 - Worker 被中断时保留线程中断标记，租约到期后可由其他实例恢复。
-- 监控 `PENDING/PROCESSING/FAILED` 数量、最老事件年龄和连续失败码，但不要记录正文。
+- 监控 `PENDING/LEASED/FAILED` 数量、最老事件年龄和连续失败码，但不要记录正文。
 
 重建流程创建新的物理代际索引，记录起始事件水位，全量扫描后重放增量；短暂排他锁内捕获最终水位、追平、刷新和校验，最后以单个 Manage Aliases 请求同时切换 `rag-chunks-read` 与 `rag-chunks-write`。校验失败或锁超时必须保留旧索引和旧别名。
 
