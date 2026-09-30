@@ -8,6 +8,7 @@ import org.opensearch.client.opensearch.generic.Requests;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.regex.Pattern;
 
@@ -72,6 +73,30 @@ public final class OpenSearchIndexManager {
         }
         ObjectNode body = json.createObjectNode().set("actions", actions);
         execute("POST", "/_aliases", body.toString());
+    }
+
+    public Optional<String> aliasTarget(String alias) {
+        if (!READ_ALIAS.equals(alias) && !WRITE_ALIAS.equals(alias)) {
+            throw new IllegalArgumentException("unknown managed OpenSearch alias");
+        }
+        try {
+            var request = Requests.builder().method("GET").endpoint("/_alias/" + alias).build();
+            try (var response = client.generic().execute(request)) {
+                if (response.getStatus() == 404) return Optional.empty();
+                String responseBody = response.getBody().map(value -> value.bodyAsString()).orElse("{}");
+                if (response.getStatus() < 200 || response.getStatus() >= 300) {
+                    throw new IllegalStateException("OPENSEARCH_ALIAS_LOOKUP_FAILED:" + response.getStatus());
+                }
+                var targets = json.readTree(responseBody).properties().stream()
+                        .map(java.util.Map.Entry::getKey).toList();
+                if (targets.size() != 1) {
+                    throw new IllegalStateException("OPENSEARCH_ALIAS_TARGET_AMBIGUOUS");
+                }
+                return Optional.of(targets.getFirst());
+            }
+        } catch (IOException failure) {
+            throw new IllegalStateException("OPENSEARCH_ALIAS_LOOKUP_FAILED", failure);
+        }
     }
 
     public long countNodes(String indexName) {
