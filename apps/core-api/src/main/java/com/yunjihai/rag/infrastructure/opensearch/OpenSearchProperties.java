@@ -1,11 +1,23 @@
 package com.yunjihai.rag.infrastructure.opensearch;
 
 import java.net.URI;
+import java.time.Duration;
 import java.util.Objects;
 
-public record OpenSearchProperties(URI endpoint, String username, String password) {
+public record OpenSearchProperties(
+        URI endpoint,
+        String username,
+        String password,
+        Duration connectTimeout,
+        Duration responseTimeout) {
+    public OpenSearchProperties(URI endpoint, String username, String password) {
+        this(endpoint, username, password, Duration.ofSeconds(3), Duration.ofSeconds(10));
+    }
+
     public OpenSearchProperties {
         Objects.requireNonNull(endpoint, "endpoint must not be null");
+        requirePositive(connectTimeout, "connectTimeout");
+        requirePositive(responseTimeout, "responseTimeout");
         boolean http = "http".equalsIgnoreCase(endpoint.getScheme());
         boolean https = "https".equalsIgnoreCase(endpoint.getScheme());
         if ((!http && !https) || endpoint.getHost() == null
@@ -28,9 +40,18 @@ public record OpenSearchProperties(URI endpoint, String username, String passwor
         return username != null;
     }
 
+    private static void requirePositive(Duration value, String name) {
+        Objects.requireNonNull(value, name + " must not be null");
+        if (value.isZero() || value.isNegative()) {
+            throw new IllegalArgumentException(name + " must be positive");
+        }
+    }
+
     @Override
     public String toString() {
         return "OpenSearchProperties[endpoint=" + endpoint + ", username=" + username
-                + ", password=" + (password == null ? null : "[REDACTED]") + "]";
+                + ", password=" + (password == null ? null : "[REDACTED]")
+                + ", connectTimeout=" + connectTimeout
+                + ", responseTimeout=" + responseTimeout + "]";
     }
 }

@@ -2,6 +2,7 @@
 
 # Local infrastructure credentials
 infra/compose/.env
+*.license
 
 # Java
 target/

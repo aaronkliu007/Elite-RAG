@@ -4,14 +4,17 @@
 
 ## 当前状态
 
-当前分支已完成第一批知识底座持久化能力，但仍是研发联调版本，不是可直接投产的系统：
+当前分支已完成知识底座持久化和第一批生产形态检索适配器，但仍是研发联调版本，不是可直接投产的系统：
 
 - PostgreSQL 17 + Flyway 管理组织、会话、知识空间、文档版本、ACL、入库租约、Canonical 解析结果、审计和 Blob 清理候选；
 - 官方 AIStor 以不可变 SHA-256 内容寻址方式保存原始文件；
 - `local` profile 装配 JDBC、MinIO、领域服务和 readiness，普通测试 profile 不连接外部基础设施；
+- PostgreSQL 事务投影事件、批量最终鉴权和权威投影读取已经落地；
+- OpenSearch 3.8.0 具备版本化映射、BM25/KNN 安全过滤、可恢复 Worker、无缝重建和读写别名；
+- 检索链路在 OpenSearch 召回后始终回到 PostgreSQL 做最终授权复核，ACL 紧急撤销不依赖索引先收敛；
 - 真实 PostgreSQL 与官方 AIStor 纵向验收覆盖组织同步、授权、上传、入库、待评审、发布、授权读取和审计；
 - Python Worker 仍只负责无状态解析，不持有数据库、AIStor 或模型凭据；
-- 可信检索、方案工作台的生产持久化、真实钉钉租户、云模型网关和业务 API/UI 仍属后续批次。
+- 真实 Embedding、真实 Reranker、黄金评测集、常驻投影调度/管理面、方案工作台生产持久化、真实钉钉租户、云模型网关和业务 API/UI 仍属后续批次。
 
 不得上传真实客户资料，不得宣称已经投产，也不得创建 `pilot-foundation-v1`、`pilot-retrieval-v1` 或 `pilot-workbench-v1` 标签。
 
@@ -79,7 +82,10 @@ Get-Content infra/compose/.env | ForEach-Object {
 @(
     'RAG_DB_MIGRATION_USER', 'RAG_DB_MIGRATION_PASSWORD',
     'RAG_DB_RUNTIME_USER', 'RAG_DB_RUNTIME_PASSWORD',
-    'RAG_MINIO_ACCESS_KEY', 'RAG_MINIO_SECRET_KEY', 'RAG_MINIO_BUCKET'
+    'RAG_MINIO_ACCESS_KEY', 'RAG_MINIO_SECRET_KEY', 'RAG_MINIO_BUCKET',
+    'RAG_OPENSEARCH_ENABLED', 'RAG_OPENSEARCH_ENDPOINT',
+    'RAG_OPENSEARCH_CONNECT_TIMEOUT', 'RAG_OPENSEARCH_RESPONSE_TIMEOUT',
+    'RAG_VECTOR_ENABLED', 'RAG_VECTOR_DIMENSION'
 ) | ForEach-Object {
     if (-not $localSettings.ContainsKey($_)) { throw "infra/compose/.env 缺少变量：$_" }
     [Environment]::SetEnvironmentVariable($_, $localSettings[$_], 'Process')
@@ -95,7 +101,7 @@ Invoke-RestMethod http://127.0.0.1:8080/actuator/health/liveness
 Invoke-RestMethod http://127.0.0.1:8080/actuator/health/readiness
 ```
 
-`liveness` 只说明 JVM 可响应；`readiness` 同时检查应用接流量状态、PostgreSQL 只读探针和 AIStor 专用随机探针。任一依赖不可用时 readiness 为 `DOWN`，但 liveness 保持 `UP`。AIStor 探针只使用 `__system/readiness/` 随机键并在 `finally` 清理，不读取或改写业务对象。
+`liveness` 只说明 JVM 可响应；`readiness` 同时检查应用接流量状态、PostgreSQL、AIStor、OpenSearch 读连接和投影写别名。任一必需依赖不可用时 readiness 为 `DOWN`，但 liveness 保持 `UP`。`embeddingCapability=DISABLED` 是允许的能力降级，不阻断 readiness；查询保留全文结果并标记 `VECTOR_UNAVAILABLE`。AIStor 探针只使用 `__system/readiness/` 随机键并在 `finally` 清理，不读取或改写业务对象。
 
 ## 统一验证
 
@@ -105,7 +111,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
 corepack pnpm --dir apps/web exec playwright test
 ```
 
-统一脚本会先明确检查 Docker CLI、Docker daemon 和仓库外许可证，再运行 Java（含真实基础设施验收）、Vue、前端构建与 lint、Python pytest、ruff 和 mypy。详细迁移、租约恢复、清理候选和故障排查见[知识底座运行与恢复手册](docs/runbooks/knowledge-foundation.md)。
+统一脚本会先明确检查 Docker CLI、Docker daemon 和仓库外许可证，再运行 Java（含真实基础设施验收）、Vue、前端构建与 lint、Python pytest、ruff 和 mypy。详细迁移、租约恢复、清理候选和故障排查见[知识底座运行与恢复手册](docs/runbooks/knowledge-foundation.md)；检索投影、别名、最终鉴权与降级处理见[检索生产适配器运行手册](docs/runbooks/retrieval-production-adapters.md)。
 
 ## 架构边界
 

@@ -33,6 +33,8 @@ import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
 import com.yunjihai.rag.retrieval.projection.ProjectionCutoverLock;
 import com.yunjihai.rag.retrieval.projection.ProjectionDocumentLock;
 import com.yunjihai.rag.retrieval.projection.ProjectionEventRepository;
+import com.yunjihai.rag.retrieval.projection.RetrievalProjectionSource;
+import com.yunjihai.rag.retrieval.PrincipalResolverPort;
 import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -120,6 +122,16 @@ public class PostgresAdapterConfiguration {
     @Bean
     ProjectionEventRepository projectionEventRepository(JdbcClient jdbc) {
         return new JdbcProjectionEventRepository(jdbc);
+    }
+
+    @Bean
+    RetrievalProjectionSource retrievalProjectionSource(JdbcClient jdbc) {
+        return new JdbcRetrievalProjectionSource(jdbc);
+    }
+
+    @Bean
+    PrincipalResolverPort principalResolverPort(EffectivePrincipalSet principals) {
+        return (userId, at) -> principals.forUser(userId);
     }
 
     @Bean

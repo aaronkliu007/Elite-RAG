@@ -560,6 +560,8 @@ final class LocalFoundationInfrastructure {
         properties.add("rag.minio.access-key", () -> MINIO_APP_USER);
         properties.add("rag.minio.secret-key", () -> MINIO_APP_PASSWORD);
         properties.add("rag.minio.bucket", () -> BUCKET);
+        properties.add("rag.opensearch.enabled", () -> "false");
+        properties.add("management.endpoint.health.group.readiness.include", () -> "readinessState,db,minio");
     }
 
     static String minioEndpoint() {

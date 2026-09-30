@@ -22,6 +22,27 @@ rag:
     access-key: ${RAG_MINIO_ACCESS_KEY}
     secret-key: ${RAG_MINIO_SECRET_KEY}
     bucket: ${RAG_MINIO_BUCKET:rag-documents}
+  opensearch:
+    enabled: ${RAG_OPENSEARCH_ENABLED:true}
+    endpoint: ${RAG_OPENSEARCH_ENDPOINT:http://127.0.0.1:9200}
+    username: ${RAG_OPENSEARCH_USERNAME:}
+    password: ${RAG_OPENSEARCH_PASSWORD:}
+    connect-timeout: ${RAG_OPENSEARCH_CONNECT_TIMEOUT:PT3S}
+    response-timeout: ${RAG_OPENSEARCH_RESPONSE_TIMEOUT:PT10S}
+    worker:
+      batch-size: ${RAG_OPENSEARCH_WORKER_BATCH_SIZE:20}
+      space-page-size: ${RAG_OPENSEARCH_SPACE_PAGE_SIZE:100}
+      lease-duration: ${RAG_OPENSEARCH_LEASE_DURATION:PT2M}
+      max-attempts: ${RAG_OPENSEARCH_MAX_ATTEMPTS:5}
+      initial-retry-delay: ${RAG_OPENSEARCH_INITIAL_RETRY_DELAY:PT5S}
+      max-retry-delay: ${RAG_OPENSEARCH_MAX_RETRY_DELAY:PT5M}
+    rebuild:
+      page-size: ${RAG_OPENSEARCH_REBUILD_PAGE_SIZE:100}
+      replay-batch-size: ${RAG_OPENSEARCH_REPLAY_BATCH_SIZE:500}
+  retrieval:
+    vector:
+      enabled: ${RAG_VECTOR_ENABLED:false}
+      dimension: ${RAG_VECTOR_DIMENSION:1536}
 
 management:
   endpoint:
@@ -30,7 +51,7 @@ management:
         liveness:
           include: livenessState
         readiness:
-          include: readinessState,db,minio
+          include: readinessState,db,minio,opensearchRead,opensearchProjection
   endpoints:
     web:
       exposure:
