@@ -153,6 +153,60 @@ class SdkMinioObjectClientTest {
     }
 
     @Test
+    void reconciliationStatFailureCannotExposeStorageDetails() {
+        var operations = matchingExistingObject();
+        operations.completeFailure = s3Failure(412, "PreconditionFailed");
+        operations.statFailure = new IllegalStateException(
+                "https://storage.internal.example Authorization: credential-secret");
+        var objects = new SdkMinioObjectClient(operations);
+
+        assertThatThrownBy(() -> objects.putIfAbsent(
+                BUCKET, KEY, new ByteArrayInputStream(new byte[]{1}), 1, "application/pdf"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("MINIO_OBJECT_WRITE_FAILED")
+                .hasNoCause()
+                .satisfies(error -> {
+                    assertThat(error.getSuppressed()).isEmpty();
+                    assertThat(error.getMessage())
+                            .doesNotContain("storage.internal.example")
+                            .doesNotContain("Authorization")
+                            .doesNotContain("credential-secret");
+                });
+        assertThat(operations.aborted).isTrue();
+        assertThat(operations.statCalls).isEqualTo(1);
+    }
+
+    @Test
+    void completeHttpSuccessWithS3ErrorBodyAbortsAndReportsSafeFailure() {
+        stubMultipartStartAndPart();
+        server.stubFor(post(urlPathEqualTo("/" + BUCKET + "/" + KEY))
+                .withQueryParam("uploadId", equalTo("upload-1"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/xml")
+                        .withBody("<Error><Code>InternalError</Code>"
+                                + "<Message>Authorization: credential-secret at storage.internal.example</Message>"
+                                + "<RequestId>request</RequestId><HostId>host</HostId></Error>")));
+        server.stubFor(delete(urlPathEqualTo("/" + BUCKET + "/" + KEY))
+                .withQueryParam("uploadId", equalTo("upload-1"))
+                .willReturn(aResponse().withStatus(204)));
+        var objects = new SdkMinioObjectClient(async);
+
+        assertThatThrownBy(() -> objects.putIfAbsent(
+                BUCKET, KEY, new ByteArrayInputStream(new byte[]{1}), 1, "application/pdf"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("MINIO_OBJECT_WRITE_FAILED")
+                .hasNoCause()
+                .satisfies(error -> {
+                    assertThat(error.getSuppressed()).isEmpty();
+                    assertThat(error.getMessage())
+                            .doesNotContain("storage.internal.example")
+                            .doesNotContain("Authorization")
+                            .doesNotContain("credential-secret");
+                });
+        server.verify(1, deleteRequestedFor(urlPathEqualTo("/" + BUCKET + "/" + KEY))
+                .withQueryParam("uploadId", equalTo("upload-1")));
+    }
+
+    @Test
     void mismatchedStatusAndPermissionFailureNeverReconcile() {
         for (ErrorResponseException failure : List.of(
                 s3Failure(500, "PreconditionFailed"), s3Failure(403, "AccessDenied"))) {
@@ -237,6 +291,17 @@ class SdkMinioObjectClientTest {
     }
 
     private void stubSuccessfulMultipart() {
+        stubMultipartStartAndPart();
+        server.stubFor(post(urlPathEqualTo("/" + BUCKET + "/" + KEY))
+                .withQueryParam("uploadId", equalTo("upload-1"))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/xml")
+                        .withBody("<CompleteMultipartUploadResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+                                + "<Location>http://localhost/" + BUCKET + "/" + KEY + "</Location>"
+                                + "<Bucket>" + BUCKET + "</Bucket><Key>" + KEY + "</Key>"
+                                + "<ETag>\"complete\"</ETag></CompleteMultipartUploadResult>")));
+    }
+
+    private void stubMultipartStartAndPart() {
         server.stubFor(post(urlPathEqualTo("/" + BUCKET + "/" + KEY))
                 .withQueryParam("uploads", equalTo(""))
                 .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/xml")
@@ -247,13 +312,6 @@ class SdkMinioObjectClientTest {
                 .withQueryParam("partNumber", equalTo("1"))
                 .withQueryParam("uploadId", equalTo("upload-1"))
                 .willReturn(aResponse().withStatus(200).withHeader("ETag", "\"part-1\"")));
-        server.stubFor(post(urlPathEqualTo("/" + BUCKET + "/" + KEY))
-                .withQueryParam("uploadId", equalTo("upload-1"))
-                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/xml")
-                        .withBody("<CompleteMultipartUploadResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
-                                + "<Location>http://localhost/" + BUCKET + "/" + KEY + "</Location>"
-                                + "<Bucket>" + BUCKET + "</Bucket><Key>" + KEY + "</Key>"
-                                + "<ETag>\"complete\"</ETag></CompleteMultipartUploadResult>")));
     }
 
     private static RecordingOperations matchingExistingObject() {
@@ -280,6 +338,7 @@ class SdkMinioObjectClientTest {
         private Exception partFailure;
         private Exception completeFailure;
         private Exception abortFailure;
+        private Exception statFailure;
         private StoredObject stored;
 
         @Override
@@ -310,8 +369,9 @@ class SdkMinioObjectClientTest {
         }
 
         @Override
-        public StoredObject stat(String bucket, String key) {
+        public StoredObject stat(String bucket, String key) throws Exception {
             statCalls++;
+            if (statFailure != null) throw statFailure;
             return stored;
         }
     }

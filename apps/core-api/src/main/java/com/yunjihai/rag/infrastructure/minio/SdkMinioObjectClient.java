@@ -91,18 +91,17 @@ public final class SdkMinioObjectClient implements MinioObjectClient {
 
     private boolean verifyExisting(
             String bucket, String key, long length, String contentType, String digest) {
+        final MinioMultipartOperations.StoredObject existing;
         try {
-            var existing = operations.stat(bucket, key);
-            if (existing.length() != length || !contentType.equals(existing.contentType())
-                    || !digest.equals(existing.sha256())) {
-                throw conflict();
-            }
-            return false;
-        } catch (IllegalStateException failure) {
-            throw failure;
+            existing = operations.stat(bucket, key);
         } catch (Exception failure) {
             throw storageFailure();
         }
+        if (existing.length() != length || !contentType.equals(existing.contentType())
+                || !digest.equals(existing.sha256())) {
+            throw conflict();
+        }
+        return false;
     }
 
     private boolean abortQuietly(String bucket, String key, String uploadId) {
