@@ -167,6 +167,80 @@ class PostgresFoundationAcceptanceTest {
     }
 
     @Test
+    void authorizedEmptyKnowledgeSpaceReturnsEmptyList() {
+        Instant at = Instant.now();
+        synchronizeSpaceReaders(at);
+        UUID owner = userId("owner");
+        UUID reader = userId("reader");
+        var space = spaces.createSpace("空知识库", owner, at);
+        acl.grantSpace(owner, space.id(), new PrincipalRef(PrincipalType.USER, reader), null, at);
+
+        assertThat(scalar("SELECT count(*) FROM document")).isZero();
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), at)).isEmpty();
+    }
+
+    @Test
+    void unauthorizedOrMissingKnowledgeSpacesAreHidden() {
+        Instant at = Instant.now();
+        synchronizeSpaceReaders(at);
+        UUID owner = userId("owner");
+        UUID reader = userId("reader");
+        var space = spaces.createSpace("未授权知识库", owner, at);
+
+        assertThatThrownBy(() -> documents.listAuthorizedDocuments(reader, space.id(), at))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class).hasNoCause();
+        assertThatThrownBy(() -> documents.listAuthorizedDocuments(reader, UUID.randomUUID(), at))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class).hasNoCause();
+    }
+
+    @Test
+    void emptyKnowledgeSpaceRejectsExpiredAndRevokedSpaceAcl() {
+        Instant at = Instant.now();
+        synchronizeSpaceReaders(at);
+        UUID owner = userId("owner");
+        UUID reader = userId("reader");
+        var space = spaces.createSpace("限时知识库", owner, at);
+        var principal = new PrincipalRef(PrincipalType.USER, reader);
+        acl.grantSpace(owner, space.id(), principal, at.plusSeconds(2), at);
+
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), at.plusSeconds(1))).isEmpty();
+        assertThatThrownBy(() -> documents.listAuthorizedDocuments(reader, space.id(), at.plusSeconds(2)))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class).hasNoCause();
+        acl.grantSpace(owner, space.id(), principal, null, at.plusSeconds(3));
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), at.plusSeconds(3))).isEmpty();
+        acl.revokeSpace(owner, space.id(), principal, at.plusSeconds(4));
+        assertThatThrownBy(() -> documents.listAuthorizedDocuments(reader, space.id(), at.plusSeconds(4)))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class).hasNoCause();
+    }
+
+    @Test
+    void emptyKnowledgeSpaceUsesCurrentEnabledUserAndDepartmentPrincipals() {
+        Instant at = Instant.now();
+        synchronizeSpaceReaders(at);
+        UUID owner = userId("owner");
+        UUID reader = userId("reader");
+        UUID department = jdbc.sql("SELECT id FROM org_unit WHERE external_id = 'root'")
+                .query(UUID.class).single();
+        var space = spaces.createSpace("组织知识库", owner, at);
+        acl.grantSpace(owner, space.id(), new PrincipalRef(PrincipalType.DEPARTMENT, department), null, at);
+
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), at)).isEmpty();
+        jdbc.sql("UPDATE org_unit SET enabled = false WHERE id = :id").param("id", department).update();
+        assertThatThrownBy(() -> documents.listAuthorizedDocuments(reader, space.id(), at))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class).hasNoCause();
+        jdbc.sql("UPDATE org_unit SET enabled = true WHERE id = :id").param("id", department).update();
+        jdbc.sql("DELETE FROM org_membership WHERE user_id = :id").param("id", reader).update();
+        assertThatThrownBy(() -> documents.listAuthorizedDocuments(reader, space.id(), at))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class).hasNoCause();
+
+        acl.grantSpace(owner, space.id(), new PrincipalRef(PrincipalType.USER, reader), null, at);
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), at)).isEmpty();
+        jdbc.sql("UPDATE app_user SET enabled = false WHERE id = :id").param("id", reader).update();
+        assertThatThrownBy(() -> documents.listAuthorizedDocuments(reader, space.id(), at))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class).hasNoCause();
+    }
+
+    @Test
     void persistsTheCompleteKnowledgeFoundationFlowAcrossPostgresAndAistor() throws Exception {
         Instant at = Instant.now().minusSeconds(5);
         organizations.synchronize(new OrganizationSnapshot(
@@ -210,6 +284,7 @@ class PostgresFoundationAcceptanceTest {
 
         var persisted = context.getBean(DocumentRepository.class).findById(draft.id()).orElseThrow();
         assertThat(persisted.latestVersion().status()).isEqualTo(DocumentStatus.IN_REVIEW);
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), Instant.now())).isEmpty();
         var published = documents.publish(
                 draft.id(), draft.latestVersion().id(), owner, Instant.now());
         assertThat(published.latestVersion().status()).isEqualTo(DocumentStatus.PUBLISHED);
@@ -254,6 +329,25 @@ class PostgresFoundationAcceptanceTest {
         assertThat(minio.statObject(StatObjectArgs.builder()
                 .bucket(LocalFoundationInfrastructure.BUCKET).object(stored.objectKey()).build()).size())
                 .isEqualTo(source.length);
+
+        var readerPrincipal = new PrincipalRef(PrincipalType.USER, reader);
+        acl.grantDocument(owner, space.id(), draft.id(), readerPrincipal, null, Instant.now());
+        acl.revokeDocument(owner, space.id(), draft.id(), readerPrincipal, Instant.now());
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), Instant.now())).isEmpty();
+        acl.grantDocument(owner, space.id(), draft.id(), readerPrincipal, null, Instant.now());
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), Instant.now()))
+                .extracting(document -> document.id()).containsExactly(draft.id());
+        documents.archive(draft.id(), owner, Instant.now());
+        assertThat(documents.listAuthorizedDocuments(reader, space.id(), Instant.now())).isEmpty();
+    }
+
+    private void synchronizeSpaceReaders(Instant at) {
+        organizations.synchronize(new OrganizationSnapshot(
+                List.of(new ExternalDepartment("root", null, "公司"),
+                        new ExternalDepartment("engineering", "root", "研发中心")),
+                List.of(new ExternalUser("owner", "Owner", true, Set.of("engineering")),
+                        new ExternalUser("reader", "Reader", true, Set.of("engineering"))),
+                at, true));
     }
 
     private UUID userId(String externalId) {

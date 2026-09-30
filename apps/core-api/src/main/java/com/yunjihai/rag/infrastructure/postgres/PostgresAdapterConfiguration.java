@@ -2,6 +2,7 @@ package com.yunjihai.rag.infrastructure.postgres;
 
 import com.yunjihai.rag.access.AccessDecisionRepository;
 import com.yunjihai.rag.access.AccessDecisionService;
+import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.access.AclCommandRepository;
 import com.yunjihai.rag.access.AclService;
 import com.yunjihai.rag.access.DocumentSpaceLookup;
@@ -31,11 +32,15 @@ import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.StringJoiner;
 
 @Configuration(proxyBeanMethods = false)
 @Profile("local")
@@ -179,10 +184,41 @@ public class PostgresAdapterConfiguration {
 
     @Bean
     KnowledgeSpaceReadAuthorization knowledgeSpaceReadAuthorization(
-            AuthorizedDocumentQuery documents) {
+            JdbcClient jdbc,
+            EffectivePrincipalSet principals) {
         return (userId, spaceId, at) -> {
-            if (documents.listAuthorized(userId, spaceId, at).isEmpty()) {
-                throw new com.yunjihai.rag.access.AccessDeniedAsNotFoundException();
+            var effectivePrincipals = principals.forUser(userId).stream().toList();
+            var matches = new StringJoiner(", ");
+            for (int index = 0; index < effectivePrincipals.size(); index++) {
+                matches.add("(CAST(:principalType" + index + " AS text), CAST(:principalId" + index + " AS uuid))");
+            }
+            try {
+                var statement = jdbc.sql("""
+                                SELECT EXISTS (
+                                    SELECT 1
+                                    FROM knowledge_space space
+                                    JOIN app_user reader ON reader.id = :userId AND reader.enabled
+                                    JOIN acl_entry acl ON acl.space_id = space.id
+                                    WHERE space.id = :spaceId
+                                      AND acl.scope = 'SPACE'
+                                      AND acl.revoked_at IS NULL
+                                      AND (acl.expires_at IS NULL OR acl.expires_at > :at)
+                                      AND (acl.principal_type, acl.principal_id) IN (%s)
+                                )
+                                """.formatted(matches))
+                        .param("userId", userId)
+                        .param("spaceId", spaceId)
+                        .param("at", OffsetDateTime.ofInstant(at, ZoneOffset.UTC));
+                for (int index = 0; index < effectivePrincipals.size(); index++) {
+                    var principal = effectivePrincipals.get(index);
+                    statement = statement.param("principalType" + index, principal.type().name())
+                            .param("principalId" + index, principal.id());
+                }
+                if (!statement.query(Boolean.class).single()) {
+                    throw new AccessDeniedAsNotFoundException();
+                }
+            } catch (DataAccessException failure) {
+                throw PostgresPersistenceExceptionTranslator.translate(failure);
             }
         };
     }
