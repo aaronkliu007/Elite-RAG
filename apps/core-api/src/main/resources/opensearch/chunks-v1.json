@@ -1,0 +1,65 @@
+{
+  "settings": {
+    "index": {
+      "knn": true
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "recordType": {"type": "keyword"},
+      "spaceId": {"type": "keyword"},
+      "documentId": {"type": "keyword"},
+      "versionId": {"type": "keyword"},
+      "candidateId": {"type": "keyword"},
+      "nodeId": {"type": "keyword"},
+      "title": {"type": "text", "analyzer": "cjk"},
+      "headingPath": {"type": "text", "analyzer": "cjk"},
+      "bodyText": {"type": "text", "analyzer": "cjk"},
+      "kind": {"type": "keyword"},
+      "stableOrder": {"type": "integer"},
+      "confidence": {"type": "double"},
+      "locatorType": {"type": "keyword"},
+      "pageNumber": {"type": "integer"},
+      "boundingBox": {
+        "properties": {
+          "left": {"type": "double"},
+          "top": {"type": "double"},
+          "right": {"type": "double"},
+          "bottom": {"type": "double"}
+        }
+      },
+      "slideNumber": {"type": "integer"},
+      "tableName": {"type": "keyword"},
+      "startRow": {"type": "integer"},
+      "endRow": {"type": "integer"},
+      "startColumn": {"type": "integer"},
+      "endColumn": {"type": "integer"},
+      "markdownNodeId": {"type": "keyword"},
+      "spaceAcl": {
+        "type": "nested",
+        "properties": {
+          "principalKey": {"type": "keyword"},
+          "expiresAt": {"type": "date"}
+        }
+      },
+      "documentAcl": {
+        "type": "nested",
+        "properties": {
+          "principalKey": {"type": "keyword"},
+          "expiresAt": {"type": "date"}
+        }
+      },
+      "documentRestricted": {"type": "boolean"},
+      "industry": {"type": "keyword"},
+      "product": {"type": "keyword"},
+      "solutionType": {"type": "keyword"},
+      "year": {"type": "keyword"},
+      "documentRevision": {"type": "long"},
+      "projectionSequence": {"type": "long"},
+      "publishedAt": {"type": "date"},
+      "canonicalParsedAt": {"type": "date"},
+      "projectedAt": {"type": "date"}
+    }
+  }
+}
