@@ -56,7 +56,8 @@ class PostgresMigrationIntegrationTest {
         migrate();
         assertEquals(Set.of("app_user", "org_unit", "org_membership", "knowledge_space", "document",
                 "document_version", "active_blob_reservation", "acl_entry", "ingestion_job",
-                "canonical_document", "canonical_node", "audit_event", "blob_cleanup_candidate"),
+                "canonical_document", "canonical_node", "audit_event", "blob_cleanup_candidate",
+                "retrieval_projection_event", "document_retrieval_metadata"),
                 values("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'"));
         assertColumnType("app_user", "id", "uuid");
         assertColumnType("app_user", "created_at", "timestamp with time zone");
@@ -81,6 +82,10 @@ class PostgresMigrationIntegrationTest {
         assertColumnType("audit_event", "metadata", "jsonb");
         assertColumnType("audit_event", "occurred_at", "timestamp with time zone");
         assertColumnType("blob_cleanup_candidate", "registered_at", "timestamp with time zone");
+        assertColumnType("retrieval_projection_event", "sequence", "bigint");
+        assertColumnType("retrieval_projection_event", "lease_token", "uuid");
+        assertColumnType("retrieval_projection_event", "next_attempt_at", "timestamp with time zone");
+        assertColumnType("document_retrieval_metadata", "year", "integer");
         assertConstraint("document", "FOREIGN KEY (id, current_published_version_id) REFERENCES document_version(document_id, id)");
         assertConstraint("document_version", "UNIQUE (document_id, id)");
         assertConstraint("document_version", "UNIQUE (document_id, version_number)");
@@ -99,6 +104,8 @@ class PostgresMigrationIntegrationTest {
         assertIndex("acl_entry", "(principal_type, principal_id)", "revoked_at IS NULL");
         assertIndex("ingestion_job", "(status, next_attempt_at)", "QUEUED");
         assertIndex("ingestion_job", "(status, next_attempt_at)", "RETRY_WAIT");
+        assertIndex("retrieval_projection_event", "(status, next_attempt_at, sequence)", "PENDING");
+        assertIndex("retrieval_projection_event", "(lease_expires_at)", "LEASED");
         UUID cleanupId = UUID.randomUUID();
         sql("INSERT INTO blob_cleanup_candidate (id, bucket, sha256, object_key, status) VALUES ('"
                 + cleanupId + "', 'rag-documents', '" + "b".repeat(64) + "', 'sha256/b/blob', 'DEFERRED')");
@@ -230,7 +237,7 @@ class PostgresMigrationIntegrationTest {
         migrate();
         Flyway restartedApplication = flyway("classpath:db/migration");
         assertDoesNotThrow(restartedApplication::validate);
-        assertEquals(1, restartedApplication.info().applied().length);
+        assertEquals(2, restartedApplication.info().applied().length);
     }
 
     @Test
@@ -260,7 +267,7 @@ class PostgresMigrationIntegrationTest {
     }
 
     private static void migrate() {
-        assertEquals(1, flyway("classpath:db/migration").migrate().migrationsExecuted);
+        assertEquals(2, flyway("classpath:db/migration").migrate().migrationsExecuted);
     }
 
     private static Connection ownerConnection() throws SQLException {
