@@ -5,6 +5,7 @@ import com.yunjihai.rag.audit.AuditCommand;
 import com.yunjihai.rag.audit.AuditOutcome;
 import com.yunjihai.rag.audit.AuditSink;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
+import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -18,16 +19,27 @@ public class AclService {
     private final KnowledgeWriteAuthorization authorization;
     private final DocumentSpaceLookup documents;
     private final AuditSink audit;
+    private final ProjectionChangePublisher projections;
 
     public AclService(
             AclCommandRepository repository,
             KnowledgeWriteAuthorization authorization,
             DocumentSpaceLookup documents,
             AuditSink audit) {
+        this(repository, authorization, documents, audit, ProjectionChangePublisher.noop());
+    }
+
+    public AclService(
+            AclCommandRepository repository,
+            KnowledgeWriteAuthorization authorization,
+            DocumentSpaceLookup documents,
+            AuditSink audit,
+            ProjectionChangePublisher projections) {
         this.repository = Objects.requireNonNull(repository);
         this.authorization = Objects.requireNonNull(authorization);
         this.documents = Objects.requireNonNull(documents);
         this.audit = Objects.requireNonNull(audit);
+        this.projections = Objects.requireNonNull(projections);
     }
 
     @Transactional
@@ -40,6 +52,7 @@ public class AclService {
         requireCommand(actorId, spaceId, null, principal, validUntil, at);
         repository.grantSpace(spaceId, principal, validUntil, at);
         record(actorId, spaceId, null, principal, "SPACE_GRANT");
+        projections.spaceAclChanged(spaceId, at);
     }
 
     @Transactional
@@ -56,6 +69,7 @@ public class AclService {
         }
         repository.grantDocument(spaceId, documentId, principal, validUntil, at);
         record(actorId, spaceId, documentId, principal, "DOCUMENT_GRANT");
+        projections.documentAclChanged(spaceId, documentId, at);
     }
 
     @Transactional
@@ -67,6 +81,7 @@ public class AclService {
         requireCommand(actorId, spaceId, null, principal, null, at);
         repository.revokeSpace(spaceId, principal, at);
         record(actorId, spaceId, null, principal, "SPACE_REVOKE");
+        projections.spaceAclChanged(spaceId, at);
     }
 
     @Transactional
@@ -79,6 +94,7 @@ public class AclService {
         requireCommand(actorId, spaceId, documentId, principal, null, at);
         repository.revokeDocument(spaceId, documentId, principal, at);
         record(actorId, spaceId, documentId, principal, "DOCUMENT_REVOKE");
+        projections.documentAclChanged(spaceId, documentId, at);
     }
 
     private void requireCommand(

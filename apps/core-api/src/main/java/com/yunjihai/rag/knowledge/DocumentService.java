@@ -6,6 +6,7 @@ import com.yunjihai.rag.audit.AuditAction;
 import com.yunjihai.rag.audit.AuditCommand;
 import com.yunjihai.rag.audit.AuditOutcome;
 import com.yunjihai.rag.audit.AuditSink;
+import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -24,6 +25,7 @@ public class DocumentService {
     private final KnowledgeSpaceReadAuthorization spaceReadAuthorization;
     private final KnowledgeWriteAuthorization writeAuthorization;
     private final AuditSink audit;
+    private final ProjectionChangePublisher projections;
 
     public DocumentService(
             DocumentRepository repository,
@@ -32,7 +34,8 @@ public class DocumentService {
             AuthorizedDocumentQuery authorizedQuery,
             KnowledgeWriteAuthorization writeAuthorization) {
         this(repository, access, content, authorizedQuery,
-                KnowledgeSpaceReadAuthorization.denyAll(), writeAuthorization, AuditSink.noop());
+                KnowledgeSpaceReadAuthorization.denyAll(), writeAuthorization,
+                AuditSink.noop(), ProjectionChangePublisher.noop());
     }
 
     public DocumentService(
@@ -43,7 +46,8 @@ public class DocumentService {
             KnowledgeWriteAuthorization writeAuthorization,
             AuditSink audit) {
         this(repository, access, content, authorizedQuery,
-                KnowledgeSpaceReadAuthorization.denyAll(), writeAuthorization, audit);
+                KnowledgeSpaceReadAuthorization.denyAll(), writeAuthorization,
+                audit, ProjectionChangePublisher.noop());
     }
 
     public DocumentService(
@@ -54,7 +58,8 @@ public class DocumentService {
             KnowledgeSpaceReadAuthorization spaceReadAuthorization,
             KnowledgeWriteAuthorization writeAuthorization) {
         this(repository, access, content, authorizedQuery,
-                spaceReadAuthorization, writeAuthorization, AuditSink.noop());
+                spaceReadAuthorization, writeAuthorization,
+                AuditSink.noop(), ProjectionChangePublisher.noop());
     }
 
     public DocumentService(
@@ -65,6 +70,19 @@ public class DocumentService {
             KnowledgeSpaceReadAuthorization spaceReadAuthorization,
             KnowledgeWriteAuthorization writeAuthorization,
             AuditSink audit) {
+        this(repository, access, content, authorizedQuery, spaceReadAuthorization,
+                writeAuthorization, audit, ProjectionChangePublisher.noop());
+    }
+
+    public DocumentService(
+            DocumentRepository repository,
+            AccessDecisionService access,
+            DocumentContentGateway content,
+            AuthorizedDocumentQuery authorizedQuery,
+            KnowledgeSpaceReadAuthorization spaceReadAuthorization,
+            KnowledgeWriteAuthorization writeAuthorization,
+            AuditSink audit,
+            ProjectionChangePublisher projections) {
         this.repository = Objects.requireNonNull(repository);
         this.access = Objects.requireNonNull(access);
         this.content = Objects.requireNonNull(content);
@@ -72,6 +90,7 @@ public class DocumentService {
         this.spaceReadAuthorization = Objects.requireNonNull(spaceReadAuthorization);
         this.writeAuthorization = Objects.requireNonNull(writeAuthorization);
         this.audit = Objects.requireNonNull(audit);
+        this.projections = Objects.requireNonNull(projections);
     }
 
     @Transactional
@@ -119,7 +138,9 @@ public class DocumentService {
     @Transactional
     public DocumentAggregate completeParsing(
             UUID documentId, UUID versionId, UUID actorId, Instant at) {
-        return mutate(documentId, document -> document.completeParsing(versionId, actorId, at));
+        var updated = mutate(documentId, document -> document.completeParsing(versionId, actorId, at));
+        projections.documentChanged(updated, versionId, at);
+        return updated;
     }
 
     @Transactional
@@ -147,6 +168,7 @@ public class DocumentService {
         var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
                 document -> document.publish(versionId, actorId, at));
         record(actorId, AuditAction.PUBLISH, "DOCUMENT_VERSION", versionId, updated);
+        projections.documentChanged(updated, versionId, at);
         return updated;
     }
 
@@ -155,6 +177,7 @@ public class DocumentService {
         var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.ARCHIVE_DOCUMENT,
                 document -> document.archive(actorId, at));
         record(actorId, AuditAction.ARCHIVE, "DOCUMENT", documentId, updated);
+        projections.documentChanged(updated, updated.currentPublishedVersionId().orElseThrow(), at);
         return updated;
     }
 

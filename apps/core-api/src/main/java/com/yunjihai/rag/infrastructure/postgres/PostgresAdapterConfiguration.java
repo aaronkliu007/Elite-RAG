@@ -29,6 +29,10 @@ import com.yunjihai.rag.knowledge.KnowledgeSpaceReadAuthorization;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceRepository;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceService;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
+import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
+import com.yunjihai.rag.retrieval.projection.ProjectionCutoverLock;
+import com.yunjihai.rag.retrieval.projection.ProjectionDocumentLock;
+import com.yunjihai.rag.retrieval.projection.ProjectionEventRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -110,6 +114,30 @@ public class PostgresAdapterConfiguration {
     @Bean
     JdbcBlobCleanupEligibilityRepository jdbcBlobCleanupEligibilityRepository(JdbcClient jdbc) {
         return new JdbcBlobCleanupEligibilityRepository(jdbc);
+    }
+
+    @Bean
+    ProjectionEventRepository projectionEventRepository(JdbcClient jdbc) {
+        return new JdbcProjectionEventRepository(jdbc);
+    }
+
+    @Bean
+    ProjectionDocumentLock projectionDocumentLock(JdbcClient jdbc) {
+        return new JdbcProjectionDocumentLock(jdbc);
+    }
+
+    @Bean
+    ProjectionCutoverLock projectionCutoverLock(JdbcClient jdbc) {
+        return new JdbcProjectionCutoverLock(jdbc);
+    }
+
+    @Bean
+    ProjectionChangePublisher projectionChangePublisher(
+            JdbcClient jdbc,
+            ProjectionEventRepository events,
+            ProjectionDocumentLock documents,
+            ProjectionCutoverLock cutover) {
+        return new JdbcProjectionChangePublisher(jdbc, events, documents, cutover);
     }
 
     @Bean
@@ -243,9 +271,10 @@ public class PostgresAdapterConfiguration {
             AuthorizedDocumentQuery authorizedQuery,
             KnowledgeSpaceReadAuthorization spaceAuthorization,
             KnowledgeWriteAuthorization writeAuthorization,
-            AuditService audit) {
+            AuditService audit,
+            ProjectionChangePublisher projections) {
         return new DocumentService(documents, access, content, authorizedQuery,
-                spaceAuthorization, writeAuthorization, audit);
+                spaceAuthorization, writeAuthorization, audit, projections);
     }
 
     @Bean
@@ -253,8 +282,9 @@ public class PostgresAdapterConfiguration {
             AclCommandRepository acl,
             KnowledgeWriteAuthorization authorization,
             DocumentSpaceLookup documents,
-            AuditService audit) {
-        return new AclService(acl, authorization, documents, audit);
+            AuditService audit,
+            ProjectionChangePublisher projections) {
+        return new AclService(acl, authorization, documents, audit, projections);
     }
 
     @Bean

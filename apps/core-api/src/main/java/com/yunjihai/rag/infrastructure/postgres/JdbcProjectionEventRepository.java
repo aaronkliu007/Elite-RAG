@@ -34,11 +34,10 @@ public final class JdbcProjectionEventRepository implements ProjectionEventRepos
             UUID spaceId, UUID documentId, UUID versionId, long documentRevision, Instant at) {
         Objects.requireNonNull(spaceId);
         Objects.requireNonNull(documentId);
-        Objects.requireNonNull(versionId);
         Objects.requireNonNull(at);
         if (documentRevision < 0) throw new IllegalArgumentException("文档修订号不能为负数");
         try {
-            return jdbc.sql("""
+            var statement = jdbc.sql("""
                     INSERT INTO retrieval_projection_event (
                         id, scope_type, space_id, document_id, version_id, document_revision,
                         status, attempts, next_attempt_at, created_at, updated_at)
@@ -49,9 +48,12 @@ public final class JdbcProjectionEventRepository implements ProjectionEventRepos
                     .param("id", UuidV7.generate(at))
                     .param("spaceId", spaceId)
                     .param("documentId", documentId)
-                    .param("versionId", versionId)
                     .param("revision", documentRevision)
-                    .param("at", utc(at))
+                    .param("at", utc(at));
+            statement = versionId == null
+                    ? statement.param("versionId", null, java.sql.Types.OTHER)
+                    : statement.param("versionId", versionId);
+            return statement
                     .query(Long.class)
                     .single();
         } catch (DataAccessException failure) {
