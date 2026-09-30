@@ -1,117 +1,130 @@
 # 云基华海企业级 RAG 知识底座
 
-本仓库用于建设公司级知识资产沉淀、复用与治理底座，首期覆盖 Word、Excel、PDF、PPT、Markdown 和 PNG 的安全接入、统一解析、人工审核、授权发布和审计，并为后续检索问答、报表处理、方案设计与评审提供可信数据基础。
+本仓库用于建设公司级知识资产沉淀、复用与治理底座。首期覆盖 Word、Excel、PDF、PPT、Markdown 和 PNG 的安全接入、统一解析、人工审核、授权发布和审计，为后续检索问答、报表处理、方案设计与评审提供可信数据基础。
 
 ## 当前状态
 
-当前版本是“业务能力骨架”，不是可投产版本。
+当前分支已完成第一批知识底座持久化能力，但仍是研发联调版本，不是可直接投产的系统：
 
-已完成并由自动化测试覆盖：
+- PostgreSQL 17 + Flyway 管理组织、会话、知识空间、文档版本、ACL、入库租约、Canonical 解析结果、审计和 Blob 清理候选；
+- 官方 AIStor 以不可变 SHA-256 内容寻址方式保存原始文件；
+- `local` profile 装配 JDBC、MinIO、领域服务和 readiness，普通测试 profile 不连接外部基础设施；
+- 真实 PostgreSQL 与官方 AIStor 纵向验收覆盖组织同步、授权、上传、入库、待评审、发布、授权读取和审计；
+- Python Worker 仍只负责无状态解析，不持有数据库、AIStor 或模型凭据；
+- 可信检索、方案工作台的生产持久化、真实钉钉租户、云模型网关和业务 API/UI 仍属后续批次。
 
-- 主体展开、默认拒绝 ACL 与越权统一返回 404；
-- 钉钉身份适配器契约、组织快照校验和停用用户会话失效；
-- 不可变文档版本、解析成功门禁、人工发布和归档；
-- 上传隔离、大小与 MIME 校验、PDF/OOXML/Markdown 安全检查、SHA-256 内容寻址接口；
-- Java 与 Python 的版本化解析契约、FastAPI/Docling 无状态解析 Worker；
-- 可恢复入库租约、指数退避、尝试上限和结构化解析失败；
-- 空间/文档 ACL 授权与撤销，以及上传/解析/发布/ACL/查看/下载/归档审计；
-- 基础设施中立的可信检索内核：双路召回端口、RRF、重排降级、当前权限复核、中文近重复、来源证据和脱敏检索审计；
-- 基础设施中立的方案设计与评审内核：需求/大纲版本、分章 RAG、引用核验、风险确认、Evidence 定稿复核和不可变定稿；
-- Vue 知识管理流程及 mock HTTP 浏览器验收；
-- 业务层端到端验收：PDF 上传、解析、人工发布、授权读取、归档和审计保留。
+不得上传真实客户资料，不得宣称已经投产，也不得创建 `pilot-foundation-v1`、`pilot-retrieval-v1` 或 `pilot-workbench-v1` 标签。
 
-尚未完成，因此不得接入真实客户资料或宣称可上线：
+## 固定目录与许可证
 
-- PostgreSQL Schema、Flyway 迁移及仓储适配器；
-- MinIO、消息/任务队列和恶意软件扫描引擎的真实装配；
-- Core API 的生产配置、依赖注入和前后端管理投影对齐；
-- 钉钉真实租户联调、组织同步调度与正式登录会话；
-- 经过审批的云端大模型连接、密钥托管和出网控制；
-- PostgreSQL 批量授权适配器、OpenSearch 全文/向量索引、真实 Embedding/Reranker、引用 API 与检索质量黄金集；
-- 方案工作台的生产 API、Vue 页面、数据库仓储、真实模型网关、钉钉权限映射和 Word 导出；
-- 真实负责人、业务基线、可信资料清单、备份恢复指标和试点准入。
-
-真实 Docling 自动化目前覆盖固定 Markdown 表格和有效数字 PDF；DOCX、XLSX、PPTX、扫描 PDF 与 PNG 仍需 Task 0 批准的脱敏样本建立质量回归。业务层内存验收不证明数据库写入、任务状态与审计事件已在同一个 PostgreSQL 事务中回滚，也不证明并发上传唯一约束；这两项必须在 Task 2 的真实适配器完成后用故障注入集成测试验证。
-
-这些边界以[知识底座实施计划](docs/superpowers/plans/2026-09-24-knowledge-foundation.md)为准，并在执行账本中持续记录。当前不创建 `pilot-foundation-v1` 标签。
-
-可信检索内核的策略、验证命令、故障语义和后续基础设施门槛见[可信检索内核运行手册](docs/runbooks/trusted-retrieval-core.md)。当前只完成可长期保留的业务内核，不代表生产检索已经完成，明确不得创建 `pilot-retrieval-v1` 标签。
-
-方案设计与评审内核的状态机、幂等恢复、引用/风险门禁、定稿事务和后续适配要求见[方案设计与评审工作台业务内核运行手册](docs/runbooks/solution-workbench-core.md)。本批没有新增 API、UI、数据库、真实模型或 Word 导出，明确不得创建 `pilot-workbench-v1` 标签。
-
-## 目标架构
+项目唯一工作目录：
 
 ```text
-钉钉 ──身份/组织──> Java / Spring Boot 核心服务 ──业务状态、ACL、审计──> PostgreSQL
-                         │
-Web / Vue ──业务 API────┤
-                         ├──源文件/派生文件──────────────> MinIO
-                         │
-                         └──受控字节流 + 版本化任务──────> Python / FastAPI 解析 Worker
-                                                            │
-                                                            └──CanonicalDocumentV1
+E:\git_repo\Elite-RAG
 ```
 
-Java 服务是业务事实与安全边界的唯一所有者。Python Worker 只负责无状态文档解析，不持有数据库、MinIO 或云模型密钥。详细理由见 [ADR-0001](docs/adr/0001-java-business-python-parser-boundary.md)。
+AIStor Free 许可证放在仓库外：
 
-## 仓库结构
+```text
+E:\git_secrets\Elite-RAG\minio.license
+```
 
-- `apps/core-api`：Java 21 / Spring Boot 核心业务与安全边界；
-- `apps/web`：Vue 3 / TypeScript 知识管理界面；
-- `workers/document-parser`：Python 3.12 / FastAPI / Docling 解析 Worker；
-- `contracts/parser`：Java 与 Python 共用的 JSON Schema；
-- `docs/superpowers`：已批准的设计与分阶段实施计划；
-- `docs/runbooks`：运维和人工恢复手册；
-- `scripts/verify.ps1`：统一质量门禁。
+许可证不得复制进仓库、提交到 Git、粘贴到日志或工单。Compose 和 Testcontainers 只以只读方式挂载该文件。`scripts/verify.ps1` 只检查文件是否存在，不读取或输出内容。需要改路径时只在当前终端设置 `RAG_MINIO_LICENSE_FILE`。
 
-## 本地开发
+## 本地基础设施
 
-基础要求：
+环境要求：JDK 21、Docker Desktop、Node.js/Corepack、Python 3.12、uv 0.12.18 和 PowerShell。
 
-- JDK 21；
-- Node.js 及 Corepack，使用仓库固定的 pnpm 版本；
-- Python 3.12 与 uv 0.12.18；
-- Windows PowerShell 7 或 Windows PowerShell 5.1。
-
-安装前端与解析依赖：
+先从示例创建仅供本机使用的环境文件：
 
 ```powershell
-corepack pnpm install --frozen-lockfile
-uv sync --project workers/document-parser --extra parsing --locked
+Set-Location 'E:\git_repo\Elite-RAG'
+Copy-Item infra/compose/.env.example infra/compose/.env
 ```
 
-执行统一验证：
+`.env` 不得提交。示例值只用于隔离开发；部署或共享环境必须从密钥系统注入独立随机凭据。数据库迁移账号与运行账号必须分离；AIStor 根账号只负责初始化，Core API 使用仅限 `rag-documents` 桶的应用账号，禁止把根账号提供给应用。
+
+启动和检查：
+
+```powershell
+docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml up -d --wait
+docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml ps
+```
+
+停止并保留数据卷：
+
+```powershell
+docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml down
+```
+
+仅在确认可以丢弃本地开发数据时才删除卷：
+
+```powershell
+docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml down --volumes
+```
+
+## Core API 本地启动与健康检查
+
+基础设施健康后，只把 Core API 所需的迁移/运行账号和应用级 AIStor 变量从 `.env` 导入当前进程，再启动 `local` profile。不要把 `MINIO_ROOT_*` 或许可证变量传给 Core API：
+
+```powershell
+$localSettings = @{}
+Get-Content infra/compose/.env | ForEach-Object {
+    $line = $_.Trim()
+    if ($line -and -not $line.StartsWith('#')) {
+        $name, $value = $line -split '=', 2
+        $localSettings[$name.Trim()] = $value.Trim()
+    }
+}
+@(
+    'RAG_DB_MIGRATION_USER', 'RAG_DB_MIGRATION_PASSWORD',
+    'RAG_DB_RUNTIME_USER', 'RAG_DB_RUNTIME_PASSWORD',
+    'RAG_MINIO_ACCESS_KEY', 'RAG_MINIO_SECRET_KEY', 'RAG_MINIO_BUCKET'
+) | ForEach-Object {
+    if (-not $localSettings.ContainsKey($_)) { throw "infra/compose/.env 缺少变量：$_" }
+    [Environment]::SetEnvironmentVariable($_, $localSettings[$_], 'Process')
+}
+$env:SPRING_PROFILES_ACTIVE = 'local'
+./mvnw.cmd -pl apps/core-api spring-boot:run
+```
+
+探针：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8080/actuator/health/liveness
+Invoke-RestMethod http://127.0.0.1:8080/actuator/health/readiness
+```
+
+`liveness` 只说明 JVM 可响应；`readiness` 同时检查应用接流量状态、PostgreSQL 只读探针和 AIStor 专用随机探针。任一依赖不可用时 readiness 为 `DOWN`，但 liveness 保持 `UP`。AIStor 探针只使用 `__system/readiness/` 随机键并在 `finally` 清理，不读取或改写业务对象。
+
+## 统一验证
 
 ```powershell
 $env:JAVA_HOME = 'C:\Program Files\Zulu\zulu-21'
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
-corepack pnpm --dir apps/web exec playwright test e2e/knowledge-foundation.spec.ts
+corepack pnpm --dir apps/web exec playwright test
 ```
 
-单独启动解析 Worker：
+统一脚本会先明确检查 Docker CLI、Docker daemon 和仓库外许可证，再运行 Java（含真实基础设施验收）、Vue、前端构建与 lint、Python pytest、ruff 和 mypy。详细迁移、租约恢复、清理候选和故障排查见[知识底座运行与恢复手册](docs/runbooks/knowledge-foundation.md)。
 
-```powershell
-uv run --project workers/document-parser uvicorn parser_worker.app:app `
-  --app-dir workers/document-parser/src --host 127.0.0.1 --port 8001
+## 架构边界
+
+```text
+钉钉 ──身份/组织──> Java / Spring Boot ──业务状态、ACL、审计──> PostgreSQL
+                         │
+Web / Vue ──业务 API────┤
+                         ├──不可变原始文件──────────────> AIStor（S3 API）
+                         │
+                         └──受控字节流 + 版本化任务──────> Python / FastAPI Worker
 ```
 
-健康检查地址为 `http://127.0.0.1:8001/health`。前端开发服务器可用下列命令启动：
-
-```powershell
-corepack pnpm --dir apps/web dev
-```
-
-Core API 目前没有 PostgreSQL/Flyway/MinIO 的可运行装配，不能仅凭 `spring-boot:run` 得到完整业务系统。应先完成实施计划 Task 0 和 Task 2，再按[知识底座运行手册](docs/runbooks/knowledge-foundation.md)进行联调和准入。
+Java 服务是业务事实、权限与事务边界的唯一所有者。PostgreSQL 是权威数据源，AIStor 只保存不可变对象。领域对象不依赖 JDBC、数据库行模型、MinIO SDK 或配置类型。详细原因见 [ADR-0001](docs/adr/0001-java-business-python-parser-boundary.md)。
 
 ## 安全底线
 
-- 未发布内容不进入普通用户查询范围；
-- 授权失败与资源不存在对外统一为 404；
-- Python 解析 Worker 不获得对象存储和数据库凭据；
-- 任何云端模型调用必须经过审批、出网代理、字段脱敏和审计；
-- 禁止在日志、配置、Git 历史或审计元数据中写入文件正文、Token、密钥和个人敏感信息；
-- 物理删除内容寻址对象前，必须在数据库中原子确认无已提交引用和上传预留。
-
-## 下一步
-
-恢复 Task 0 与 Task 2：确认负责人和准入材料，在具备 Docker 或等价测试环境后补齐 PostgreSQL/Flyway、MinIO、真实仓储适配器、模型网关、应用装配及前后端联调。只有全部投产门禁通过后，才可评估创建相应试点标签。
+- 未发布内容不进入普通用户查询；未授权与资源不存在统一隐藏；
+- 所有写操作默认拒绝，正式管理员授权边界必须在后续 API/身份批次明确实现；
+- 日志和审计不得记录正文、节点文本、文件字节、未脱敏文件名、Token、Cookie 或数据库/AIStor 密钥；
+- Flyway 校验失败时拒绝启动，不修改已经发布的迁移；
+- Blob 数据库事务失败后只登记清理候选，请求线程不得直接删除对象；
+- 本批没有物理删除 Worker，清理候选只能检查，不能据此手工删除对象。

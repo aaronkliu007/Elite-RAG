@@ -1,8 +1,14 @@
 spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration
+      - org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration
   datasource:
     url: ${RAG_DB_URL:jdbc:postgresql://127.0.0.1:5432/rag_local}
     username: ${RAG_DB_RUNTIME_USER}
     password: ${RAG_DB_RUNTIME_PASSWORD}
+    hikari:
+      initialization-fail-timeout: 0
   flyway:
     enabled: true
     url: ${RAG_DB_URL:jdbc:postgresql://127.0.0.1:5432/rag_local}
@@ -10,13 +16,22 @@ spring:
     password: ${RAG_DB_MIGRATION_PASSWORD}
     locations: classpath:db/migration
     validate-on-migrate: true
-  jpa:
-    hibernate:
-      ddl-auto: validate
-
 rag:
   minio:
     endpoint: ${RAG_MINIO_ENDPOINT:http://127.0.0.1:9000}
     access-key: ${RAG_MINIO_ACCESS_KEY}
     secret-key: ${RAG_MINIO_SECRET_KEY}
     bucket: ${RAG_MINIO_BUCKET:rag-documents}
+
+management:
+  endpoint:
+    health:
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,db,minio
+  endpoints:
+    web:
+      exposure:
+        include: health

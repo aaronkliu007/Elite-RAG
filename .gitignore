@@ -1,5 +1,8 @@
 .superpowers/
 
+# Local infrastructure credentials
+infra/compose/.env
+
 # Java
 target/
 
