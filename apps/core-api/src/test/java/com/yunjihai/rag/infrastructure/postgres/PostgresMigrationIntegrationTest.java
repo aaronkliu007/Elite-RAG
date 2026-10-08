@@ -57,7 +57,9 @@ class PostgresMigrationIntegrationTest {
         assertEquals(Set.of("app_user", "org_unit", "org_membership", "knowledge_space", "document",
                 "document_version", "active_blob_reservation", "acl_entry", "ingestion_job",
                 "canonical_document", "canonical_node", "audit_event", "blob_cleanup_candidate",
-                "retrieval_projection_event", "document_retrieval_metadata"),
+                "retrieval_projection_event", "document_retrieval_metadata", "external_identity",
+                "local_credential", "login_source_attempt", "system_role_assignment",
+                "space_role_assignment", "idempotency_record", "document_review"),
                 values("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'"));
         assertColumnType("app_user", "id", "uuid");
         assertColumnType("app_user", "created_at", "timestamp with time zone");
@@ -183,6 +185,64 @@ class PostgresMigrationIntegrationTest {
     }
 
     @Test
+    void createsCoreManagementTablesAndConstraints() throws SQLException {
+        migrate();
+
+        assertTrue(values("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").containsAll(Set.of(
+                "external_identity", "local_credential", "login_source_attempt",
+                "system_role_assignment", "space_role_assignment", "idempotency_record",
+                "document_review")));
+        assertColumnType("external_identity", "user_id", "uuid");
+        assertColumnType("local_credential", "locked_until", "timestamp with time zone");
+        assertColumnType("login_source_attempt", "source_hash", "text");
+        assertColumnType("knowledge_space", "revision", "bigint");
+        assertColumnType("document", "classification", "text");
+        assertColumnType("document", "tags", "ARRAY");
+        assertConstraint("external_identity", "FOREIGN KEY (user_id) REFERENCES app_user(id)");
+        assertConstraint("space_role_assignment", "FOREIGN KEY (space_id) REFERENCES knowledge_space(id)");
+        assertConstraint("document_review", "FOREIGN KEY (document_id, version_id) REFERENCES document_version(document_id, id)");
+        assertIndex("system_role_assignment", "(user_id, role)", "revoked_at IS NULL");
+        assertIndex("space_role_assignment", "(space_id, user_id, role)", "revoked_at IS NULL");
+
+        for (String table : java.util.List.of(
+                "external_identity", "local_credential", "login_source_attempt",
+                "system_role_assignment", "space_role_assignment", "idempotency_record")) {
+            assertEquals("t", scalar("SELECT has_table_privilege('rag_runtime_test', '" + table
+                    + "', 'SELECT,INSERT,UPDATE,DELETE')"), table);
+        }
+        assertEquals("t", scalar("SELECT has_table_privilege('rag_runtime_test', 'document_review', 'SELECT,INSERT')"));
+        assertEquals("f", scalar("SELECT has_table_privilege('rag_runtime_test', 'document_review', 'UPDATE')"));
+        assertEquals("f", scalar("SELECT has_table_privilege('rag_runtime_test', 'document_review', 'DELETE')"));
+    }
+
+    @Test
+    void rejectsInvalidRoleAndDuplicateExternalIdentity() throws SQLException {
+        migrate();
+        UUID actor = UUID.randomUUID(), member = UUID.randomUUID(), space = UUID.randomUUID();
+        sql("INSERT INTO app_user (id, external_id, display_name) VALUES ('" + actor + "', 'actor', 'Actor')");
+        sql("INSERT INTO app_user (id, external_id, display_name) VALUES ('" + member + "', 'member', 'Member')");
+        sql("INSERT INTO knowledge_space (id, name, created_by) VALUES ('" + space + "', 'S', '" + actor + "')");
+
+        sql("INSERT INTO external_identity (id, user_id, provider, subject) VALUES ('" + UUID.randomUUID()
+                + "', '" + member + "', 'LOCAL', 'member')");
+        PSQLException duplicateIdentity = assertThrows(PSQLException.class, () -> sql(
+                "INSERT INTO external_identity (id, user_id, provider, subject) VALUES ('" + UUID.randomUUID()
+                        + "', '" + actor + "', 'LOCAL', 'member')"));
+        assertEquals("23505", duplicateIdentity.getSQLState());
+
+        assertCheckViolation("INSERT INTO system_role_assignment (id, user_id, role, granted_by) VALUES ('"
+                + UUID.randomUUID() + "', '" + member + "', 'UNKNOWN', '" + actor + "')");
+        assertCheckViolation("INSERT INTO space_role_assignment (id, space_id, user_id, role, granted_by) VALUES ('"
+                + UUID.randomUUID() + "', '" + space + "', '" + member + "', 'UNKNOWN', '" + actor + "')");
+        sql("INSERT INTO space_role_assignment (id, space_id, user_id, role, granted_by) VALUES ('"
+                + UUID.randomUUID() + "', '" + space + "', '" + member + "', 'READER', '" + actor + "')");
+        PSQLException duplicateRole = assertThrows(PSQLException.class, () -> sql(
+                "INSERT INTO space_role_assignment (id, space_id, user_id, role, granted_by) VALUES ('"
+                        + UUID.randomUUID() + "', '" + space + "', '" + member + "', 'READER', '" + actor + "')"));
+        assertEquals("space_role_active_unique", duplicateRole.getServerErrorMessage().getConstraint());
+    }
+
+    @Test
     void rejectsPublishedVersionFromAnotherDocument() throws SQLException {
         migrate();
         UUID user = UUID.randomUUID(), space = UUID.randomUUID(), first = UUID.randomUUID(), second = UUID.randomUUID(), version = UUID.randomUUID();
@@ -237,7 +297,7 @@ class PostgresMigrationIntegrationTest {
         migrate();
         Flyway restartedApplication = flyway("classpath:db/migration");
         assertDoesNotThrow(restartedApplication::validate);
-        assertEquals(2, restartedApplication.info().applied().length);
+        assertEquals(3, restartedApplication.info().applied().length);
     }
 
     @Test
@@ -267,7 +327,7 @@ class PostgresMigrationIntegrationTest {
     }
 
     private static void migrate() {
-        assertEquals(2, flyway("classpath:db/migration").migrate().migrationsExecuted);
+        assertEquals(3, flyway("classpath:db/migration").migrate().migrationsExecuted);
     }
 
     private static Connection ownerConnection() throws SQLException {
