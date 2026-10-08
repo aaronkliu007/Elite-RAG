@@ -8,6 +8,7 @@ import com.yunjihai.rag.access.PublicationState;
 import com.yunjihai.rag.knowledge.ConcurrentDocumentUpdateException;
 import com.yunjihai.rag.knowledge.DocumentAggregate;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
+import com.yunjihai.rag.knowledge.DocumentMetadata;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.DocumentVersionRef;
@@ -87,6 +88,8 @@ class UploadServiceTest {
 
         var first = service.accept(command("v1.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
         var parsedAt = Instant.parse("2026-09-24T08:01:00Z");
+        documents.updateMetadata(
+                first.documentId(), new DocumentMetadata("方案", List.of()), ACTOR_ID, parsedAt);
         documents.markParsingSucceeded(first.documentId(), first.versionId(), parsedAt);
         documents.submitForReview(
                 first.documentId(), first.versionId(), ACTOR_ID, parsedAt.plusSeconds(1));

@@ -14,7 +14,11 @@ public interface IngestionJobRepository {
      */
     Optional<IngestionLease> claimNext(String workerId, Instant now, Instant leaseUntil);
 
-    void complete(UUID jobId, UUID leaseToken, Instant at);
+    /**
+     * 原子终结当前租约。首次成功返回 {@code true}；任务已经成功时返回
+     * {@code false}，使响应丢失后的等价回调可以安全重放。其他状态或旧租约仍冲突。
+     */
+    boolean complete(UUID jobId, UUID leaseToken, Instant at);
 
     void retry(
             UUID jobId,

@@ -91,15 +91,17 @@ public class IngestionJobService {
     @Transactional
     public void complete(IngestionLease lease, CanonicalDocumentV1 result) {
         var now = Instant.now(clock);
-        requireActiveLease(lease, now);
+        Objects.requireNonNull(lease);
         var body = validateSuccess(lease, result);
-        parsedDocuments.replace(lease.request().documentVersion(), body, now);
-        documents.completeParsing(
+        if (!repository.complete(lease.jobId(), lease.leaseToken(), now)) {
+            return;
+        }
+        documents.completeParsingWithContent(
                 lease.request().documentVersion().documentId(),
                 lease.request().documentVersion().versionId(),
                 lease.request().actorId(),
-                now);
-        repository.complete(lease.jobId(), lease.leaseToken(), now);
+                now,
+                () -> parsedDocuments.replace(lease.request().documentVersion(), body, now));
         audit.record(new AuditCommand(
                 lease.request().actorId(),
                 AuditAction.PARSE,
@@ -128,11 +130,11 @@ public class IngestionJobService {
             recordParseFailure(lease, error);
             return;
         }
+        repository.fail(lease.jobId(), lease.leaseToken(), error, now);
         documents.markParsingFailedForIngestion(
                 lease.request().documentVersion().documentId(),
                 lease.request().documentVersion().versionId(),
                 now);
-        repository.fail(lease.jobId(), lease.leaseToken(), error, now);
         recordParseFailure(lease, error);
     }
 

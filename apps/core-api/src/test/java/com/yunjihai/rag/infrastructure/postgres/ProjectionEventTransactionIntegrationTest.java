@@ -11,6 +11,7 @@ import com.yunjihai.rag.audit.AuditEvent;
 import com.yunjihai.rag.audit.AuditSink;
 import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
+import com.yunjihai.rag.knowledge.DocumentMetadata;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.DocumentStatus;
@@ -108,6 +109,9 @@ class ProjectionEventTransactionIntegrationTest {
     @BeforeEach
     void seedScope() {
         audit.fail.set(false);
+        JdbcClient.create(new DriverManagerDataSource(
+                        POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()))
+                .sql("DELETE FROM document_review").update();
         jdbc.sql("DELETE FROM retrieval_projection_event").update();
         jdbc.sql("DELETE FROM acl_entry").update();
         jdbc.sql("DELETE FROM active_blob_reservation").update();
@@ -134,9 +138,9 @@ class ProjectionEventTransactionIntegrationTest {
         acl.grantSpace(actorId, spaceId, principal, null, NOW.plusSeconds(1));
         acl.grantDocument(actorId, spaceId, document.id(), principal, null, NOW.plusSeconds(2));
 
-        documents.completeParsing(document.id(), versionId, actorId, NOW.plusSeconds(3));
-        documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(4));
-        documents.archive(document.id(), actorId, NOW.plusSeconds(5));
+        prepareForReview(document.id(), versionId, NOW.plusSeconds(3));
+        documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(6));
+        documents.archive(document.id(), actorId, NOW.plusSeconds(7));
 
         var events = jdbc.sql("""
                 SELECT scope_type, space_id, document_id, version_id, document_revision
@@ -161,16 +165,17 @@ class ProjectionEventTransactionIntegrationTest {
     void auditFailureRollsBackPublishedStateAndProjectionEvent() {
         var document = documents.createDraft(spaceId, "方案", blobId(), actorId, NOW);
         var versionId = document.latestVersion().id();
-        documents.completeParsing(document.id(), versionId, actorId, NOW.plusSeconds(1));
+        prepareForReview(document.id(), versionId, NOW.plusSeconds(1));
         jdbc.sql("DELETE FROM retrieval_projection_event").update();
         audit.fail.set(true);
 
         assertThrows(IllegalStateException.class,
-                () -> documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(2)));
+                () -> documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(4)));
 
         var persisted = context.getBean(DocumentRepository.class).findById(document.id()).orElseThrow();
         assertTrue(persisted.currentPublishedVersionId().isEmpty());
         assertEquals(DocumentStatus.IN_REVIEW, persisted.version(versionId).status());
+        assertEquals(0L, jdbc.sql("SELECT count(*) FROM document_review").query(Long.class).single());
         assertEquals(0L, jdbc.sql("SELECT count(*) FROM retrieval_projection_event").query(Long.class).single());
     }
 
@@ -212,7 +217,7 @@ class ProjectionEventTransactionIntegrationTest {
     void businessMutationAcquiresProjectionLocksBeforeDocumentRowWrite() throws Exception {
         var document = documents.createDraft(spaceId, "锁顺序", blobId(), actorId, NOW);
         var versionId = document.latestVersion().id();
-        documents.completeParsing(document.id(), versionId, actorId, NOW.plusSeconds(1));
+        prepareForReview(document.id(), versionId, NOW.plusSeconds(1));
 
         var workerHasDocumentLock = new CountDownLatch(1);
         var businessStarted = new CountDownLatch(1);
@@ -238,7 +243,7 @@ class ProjectionEventTransactionIntegrationTest {
             assertTrue(workerHasDocumentLock.await(5, TimeUnit.SECONDS));
             var business = executor.submit(() -> {
                 businessStarted.countDown();
-                return documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(2));
+                return documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(4));
             });
 
             assertTrue(workerReadRow.await(3, TimeUnit.SECONDS),
@@ -253,7 +258,7 @@ class ProjectionEventTransactionIntegrationTest {
     void exclusiveCutoverCapturesFinalWatermarkBeforeConcurrentBusinessWrite() throws Exception {
         var document = documents.createDraft(spaceId, "切换水位", blobId(), actorId, NOW);
         var versionId = document.latestVersion().id();
-        documents.completeParsing(document.id(), versionId, actorId, NOW.plusSeconds(1));
+        prepareForReview(document.id(), versionId, NOW.plusSeconds(1));
         jdbc.sql("DELETE FROM retrieval_projection_event").update();
 
         var cutoverEntered = new CountDownLatch(1);
@@ -285,7 +290,7 @@ class ProjectionEventTransactionIntegrationTest {
             assertTrue(cutoverEntered.await(5, TimeUnit.SECONDS));
             var business = executor.submit(() -> {
                 businessStarted.countDown();
-                return documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(2));
+                return documents.publish(document.id(), versionId, actorId, NOW.plusSeconds(4));
             });
             assertFalse(business.isDone());
             releaseCutover.countDown();
@@ -306,6 +311,13 @@ class ProjectionEventTransactionIntegrationTest {
         }
     }
 
+    private void prepareForReview(UUID documentId, UUID versionId, Instant at) {
+        documents.updateMetadata(
+                documentId, new DocumentMetadata("方案", List.of()), actorId, at);
+        documents.completeParsing(documentId, versionId, actorId, at.plusSeconds(1));
+        documents.submitForReview(documentId, versionId, actorId, at.plusSeconds(2));
+    }
+
     private static String blobId() {
         return "sha256/aa/" + "a".repeat(64);
     }
@@ -319,6 +331,9 @@ class ProjectionEventTransactionIntegrationTest {
         @Bean JdbcClient jdbcClient(DataSource source) { return JdbcClient.create(source); }
         @Bean JdbcDocumentRepository documentRepository(JdbcClient client) {
             return new JdbcDocumentRepository(client);
+        }
+        @Bean JdbcDocumentReviewStore reviewStore(JdbcClient client) {
+            return new JdbcDocumentReviewStore(client);
         }
         @Bean JdbcAclCommandRepository aclRepository(JdbcClient client) {
             return new JdbcAclCommandRepository(client);
@@ -342,6 +357,7 @@ class ProjectionEventTransactionIntegrationTest {
         @Bean ToggleAuditSink auditSink() { return new ToggleAuditSink(); }
         @Bean DocumentService documentService(
                 JdbcDocumentRepository repository,
+                JdbcDocumentReviewStore reviews,
                 ProjectionChangePublisher projections,
                 ToggleAuditSink auditSink) {
             var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> {
@@ -350,7 +366,7 @@ class ProjectionEventTransactionIntegrationTest {
             AuthorizedDocumentQuery query = (userId, spaceId, at) -> List.of();
             return new DocumentService(repository, access, DocumentContentGateway.unavailable(), query,
                     KnowledgeSpaceReadAuthorization.denyAll(), KnowledgeWriteAuthorization.allowAll(),
-                    auditSink, projections);
+                    auditSink, projections, reviews);
         }
         @Bean AclService aclService(
                 JdbcAclCommandRepository repository,

@@ -11,6 +11,7 @@ import com.yunjihai.rag.audit.AuditService;
 import com.yunjihai.rag.knowledge.ConcurrentDocumentUpdateException;
 import com.yunjihai.rag.knowledge.DocumentAggregate;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
+import com.yunjihai.rag.knowledge.DocumentMetadata;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.DocumentStatus;
@@ -108,7 +109,7 @@ class IngestionJobServiceTest {
     }
 
     @Test
-    void completeStoresNodesAndMovesOnlyToInReview() {
+    void completeStoresNodesAndLeavesDocumentInDraft() {
         var fixture = new Fixture();
         fixture.jobs.enqueue(fixture.request);
         var lease = fixture.jobs.claimNext("worker-a").orElseThrow();
@@ -117,7 +118,7 @@ class IngestionJobServiceTest {
 
         var document = fixture.documents.findById(fixture.document.id()).orElseThrow();
         assertThat(document.latestVersion().parseStatus()).isEqualTo(ParseStatus.SUCCEEDED);
-        assertThat(document.latestVersion().status()).isEqualTo(DocumentStatus.IN_REVIEW);
+        assertThat(document.latestVersion().status()).isEqualTo(DocumentStatus.DRAFT);
         assertThat(document.currentPublishedVersionId()).isEmpty();
         assertThat(fixture.parsed.values.get(fixture.request.documentVersion()).nodes())
                 .singleElement()
@@ -139,6 +140,13 @@ class IngestionJobServiceTest {
         fixture.jobs.enqueue(fixture.request);
         var lease = fixture.jobs.claimNext("worker-a").orElseThrow();
         fixture.jobs.complete(lease, fixture.success(lease.jobId()));
+
+        fixture.documentService.updateMetadata(
+                fixture.document.id(), new DocumentMetadata("方案", List.of()),
+                ACTOR_ID, NOW.plusSeconds(1));
+        fixture.documentService.submitForReview(
+                fixture.document.id(), fixture.document.latestVersion().id(),
+                ACTOR_ID, NOW.plusSeconds(2));
 
         assertThat(fixture.documents.findById(fixture.document.id()).orElseThrow()
                 .latestVersion().status()).isEqualTo(DocumentStatus.IN_REVIEW);
@@ -420,8 +428,11 @@ class IngestionJobServiceTest {
         }
 
         @Override
-        public void complete(UUID jobId, UUID leaseToken, Instant at) {
+        public boolean complete(UUID jobId, UUID leaseToken, Instant at) {
+            var current = values.get(jobId);
+            if (current != null && current.state == IngestionState.SUCCEEDED) return false;
             transition(jobId, leaseToken, IngestionState.SUCCEEDED);
+            return true;
         }
 
         @Override

@@ -3,6 +3,7 @@ package com.yunjihai.rag.infrastructure.postgres;
 import com.yunjihai.rag.access.AccessDecisionService;
 import com.yunjihai.rag.access.EffectivePrincipalSet;
 import com.yunjihai.rag.audit.AuditService;
+import com.yunjihai.rag.audit.AuditSink;
 import com.yunjihai.rag.ingestion.CanonicalBoundingBox;
 import com.yunjihai.rag.ingestion.CanonicalDocumentBody;
 import com.yunjihai.rag.ingestion.CanonicalDocumentV1;
@@ -18,10 +19,16 @@ import com.yunjihai.rag.ingestion.ParserError;
 import com.yunjihai.rag.ingestion.ParserErrorCode;
 import com.yunjihai.rag.ingestion.ParserStatus;
 import com.yunjihai.rag.knowledge.DocumentLifecycleException;
+import com.yunjihai.rag.knowledge.ConcurrentDocumentUpdateException;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
+import com.yunjihai.rag.knowledge.DocumentMetadata;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceReadAuthorization;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
+import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
+import com.yunjihai.rag.retrieval.projection.ProjectionCutoverLock;
+import com.yunjihai.rag.retrieval.projection.ProjectionDocumentLock;
+import com.yunjihai.rag.retrieval.projection.ProjectionEventRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -36,12 +43,14 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
 
 import javax.sql.DataSource;
+import java.sql.DriverManager;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
@@ -150,7 +159,7 @@ class IngestionCompletionTransactionIntegrationTest extends IngestionPostgresFix
     }
 
     @Test
-    void successfulCompletionAtomicallyPersistsCanonicalReviewJobAndAuditState() {
+    void successfulCompletionAtomicallyPersistsCanonicalDraftJobAndAuditState() {
         UUID jobId = UUID.randomUUID();
         jobs.enqueue(jobId, request, AT);
         var lease = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
@@ -161,11 +170,170 @@ class IngestionCompletionTransactionIntegrationTest extends IngestionPostgresFix
 
         assertEquals(1L, count("canonical_document"));
         assertEquals(2L, count("canonical_node"));
-        assertEquals("IN_REVIEW", documentField("status"));
+        assertEquals("DRAFT", documentField("status"));
         assertEquals("SUCCEEDED", documentField("parse_status"));
         assertEquals(1L, documentRevision());
         assertEquals("SUCCEEDED", jobField(jobId, "status"));
         assertEquals(1L, count("audit_event"));
+    }
+
+    @Test
+    void duplicateWorkerCompletionIsAnEndToEndNoOp() {
+        UUID jobId = UUID.randomUUID();
+        jobs.enqueue(jobId, request, AT);
+        var lease = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
+        try (var context = serviceContext()) {
+            var service = context.getBean(IngestionJobService.class);
+            var repository = context.getBean(JdbcDocumentRepository.class);
+            service.complete(lease, result(jobId));
+            var before = repository.findById(document.id()).orElseThrow();
+            var canonicalBefore = ownerJdbc.sql("SELECT body_text FROM canonical_node ORDER BY stable_order")
+                    .query(String.class).list();
+
+            assertDoesNotThrow(() -> service.complete(lease, result(jobId)));
+
+            assertEquals(before, repository.findById(document.id()).orElseThrow());
+            assertEquals(canonicalBefore, ownerJdbc.sql(
+                    "SELECT body_text FROM canonical_node ORDER BY stable_order").query(String.class).list());
+            assertEquals(1L, count("canonical_document"));
+            assertEquals(1L, count("audit_event"));
+            assertEquals(1L, count("retrieval_projection_event"));
+        }
+    }
+
+    @Test
+    void lateCompletionForSupersededVersionCannotRewriteLatestDraft() {
+        UUID jobId = UUID.randomUUID();
+        jobs.enqueue(jobId, request, AT);
+        var lease = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
+        try (var context = serviceContext()) {
+            var service = context.getBean(IngestionJobService.class);
+            var documentService = context.getBean(DocumentService.class);
+            var repository = context.getBean(JdbcDocumentRepository.class);
+            documentService.createNextDraft(
+                    document.id(), "sha256/bb/" + "b".repeat(64), actor, AT.plusSeconds(1));
+            var before = repository.findById(document.id()).orElseThrow();
+
+            assertDoesNotThrow(() -> service.complete(lease, result(jobId)));
+
+            assertEquals(before, repository.findById(document.id()).orElseThrow());
+            assertEquals(0L, count("canonical_document"));
+            assertEquals("SUCCEEDED", jobField(jobId, "status"));
+            assertEquals(1L, count("audit_event"));
+        }
+    }
+
+    @Test
+    void lateCompletionAfterArchiveCannotRewriteHistory() {
+        UUID jobId = UUID.randomUUID();
+        jobs.enqueue(jobId, request, AT);
+        var lease = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
+        try (var context = serviceContext()) {
+            var service = context.getBean(IngestionJobService.class);
+            var documentService = context.getBean(DocumentService.class);
+            var repository = context.getBean(JdbcDocumentRepository.class);
+            var versionId = request.documentVersion().versionId();
+            documentService.updateMetadata(document.id(), new DocumentMetadata("制度", List.of()),
+                    actor, AT.plusSeconds(1));
+            documentService.completeParsing(document.id(), versionId, actor, AT.plusSeconds(2));
+            documentService.submitForReview(document.id(), versionId, actor, AT.plusSeconds(3));
+            documentService.publish(document.id(), versionId, actor, AT.plusSeconds(4));
+            documentService.archive(document.id(), actor, AT.plusSeconds(5));
+            var before = repository.findById(document.id()).orElseThrow();
+            long projectionEventsBefore = count("retrieval_projection_event");
+
+            assertDoesNotThrow(() -> service.complete(lease, result(jobId)));
+
+            assertEquals(before, repository.findById(document.id()).orElseThrow());
+            assertEquals(0L, count("canonical_document"));
+            assertEquals(projectionEventsBefore, count("retrieval_projection_event"));
+            assertEquals("SUCCEEDED", jobField(jobId, "status"));
+        }
+    }
+
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    void successfulCompletionUsesDocumentBeforeVersionRowLockOrder() throws Exception {
+        UUID jobId = UUID.randomUUID();
+        jobs.enqueue(jobId, request, AT);
+        var lease = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
+        try (var context = serviceContext();
+             var blocker = DriverManager.getConnection(
+                     POSTGRES.getJdbcUrl(), "rag_runtime_test", "runtime_test_only");
+             var executor = Executors.newFixedThreadPool(2)) {
+            var documents = context.getBean(DocumentService.class);
+            var ingestion = context.getBean(IngestionJobService.class);
+            documents.updateMetadata(
+                    document.id(), new DocumentMetadata("初始分类", List.of()), actor, AT);
+            blocker.setAutoCommit(false);
+            try (var statement = blocker.prepareStatement(
+                    "SELECT id FROM document_version WHERE id = ? FOR UPDATE")) {
+                statement.setObject(1, request.documentVersion().versionId());
+                statement.executeQuery();
+            }
+
+            var completion = executor.submit(() -> {
+                ingestion.complete(lease, result(jobId));
+                return null;
+            });
+            Thread.sleep(250);
+            var metadataMutation = executor.submit(() -> {
+                try {
+                    documents.updateMetadata(
+                            document.id(), new DocumentMetadata("并发分类", List.of()),
+                            actor, AT.plusSeconds(1));
+                    return (RuntimeException) null;
+                } catch (RuntimeException failure) {
+                    return failure;
+                }
+            });
+            Thread.sleep(250);
+            blocker.rollback();
+
+            assertNull(completion.get(5, TimeUnit.SECONDS));
+            assertInstanceOf(ConcurrentDocumentUpdateException.class,
+                    metadataMutation.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    @Timeout(value = 15, unit = TimeUnit.SECONDS)
+    void successAndTerminalFailureSerializeOnJobBeforeDocumentRows() throws Exception {
+        UUID jobId = UUID.randomUUID();
+        jobs.enqueue(jobId, request, AT);
+        var lease = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
+        try (var context = serviceContext();
+             var blocker = DriverManager.getConnection(
+                     POSTGRES.getJdbcUrl(), "rag_runtime_test", "runtime_test_only");
+             var executor = Executors.newFixedThreadPool(2)) {
+            var ingestion = context.getBean(IngestionJobService.class);
+            blocker.setAutoCommit(false);
+            try (var statement = blocker.prepareStatement(
+                    "SELECT id FROM ingestion_job WHERE id = ? FOR UPDATE")) {
+                statement.setObject(1, jobId);
+                statement.executeQuery();
+            }
+
+            var completion = executor.submit(() -> {
+                ingestion.complete(lease, result(jobId));
+                return null;
+            });
+            Thread.sleep(250);
+            var terminalFailure = executor.submit(() -> {
+                try {
+                    ingestion.fail(lease, terminalError());
+                    return (RuntimeException) null;
+                } catch (RuntimeException failure) {
+                    return failure;
+                }
+            });
+            Thread.sleep(250);
+            blocker.rollback();
+
+            assertNull(completion.get(5, TimeUnit.SECONDS));
+            assertInstanceOf(IngestionLeaseConflictException.class,
+                    terminalFailure.get(5, TimeUnit.SECONDS));
+        }
     }
 
     @Test
@@ -308,7 +476,9 @@ class IngestionCompletionTransactionIntegrationTest extends IngestionPostgresFix
         try (var context = serviceContext()) {
             var documents = context.getBean(DocumentService.class);
             var service = context.getBean(IngestionJobService.class);
+            documents.updateMetadata(document.id(), new DocumentMetadata("制度", List.of()), actor, AT);
             documents.completeParsing(document.id(), request.documentVersion().versionId(), actor, AT);
+            documents.submitForReview(document.id(), request.documentVersion().versionId(), actor, AT);
             UUID jobId = UUID.randomUUID();
             jobs.enqueue(jobId, request, AT);
             var lease = jobs.claimNext("worker", AT, AT.plusSeconds(30)).orElseThrow();
@@ -335,7 +505,9 @@ class IngestionCompletionTransactionIntegrationTest extends IngestionPostgresFix
         if (state.equals("SUPERSEDED")) {
             next = documents.createNextDraft(document.id(), blob, actor, AT);
         } else {
+            documents.updateMetadata(document.id(), new DocumentMetadata("制度", List.of()), actor, AT);
             documents.completeParsing(document.id(), request.documentVersion().versionId(), actor, AT);
+            documents.submitForReview(document.id(), request.documentVersion().versionId(), actor, AT);
             documents.publish(document.id(), request.documentVersion().versionId(), actor, AT);
             if (state.equals("ARCHIVED")) documents.archive(document.id(), actor, AT);
             next = documents.createDraft(space, "后续文档", blob, actor, AT);
@@ -458,15 +630,35 @@ class IngestionCompletionTransactionIntegrationTest extends IngestionPostgresFix
         @Bean JdbcIngestionJobRepository jobs(JdbcClient jdbc) { return new JdbcIngestionJobRepository(jdbc); }
         @Bean JdbcParsedDocumentStore parsed(JdbcClient jdbc) { return new JdbcParsedDocumentStore(jdbc); }
         @Bean JdbcDocumentRepository documents(JdbcClient jdbc) { return new JdbcDocumentRepository(jdbc); }
+        @Bean JdbcDocumentReviewStore reviews(JdbcClient jdbc) { return new JdbcDocumentReviewStore(jdbc); }
+        @Bean ProjectionEventRepository projectionEvents(JdbcClient jdbc) {
+            return new JdbcProjectionEventRepository(jdbc);
+        }
+        @Bean ProjectionDocumentLock projectionDocumentLock(JdbcClient jdbc) {
+            return new JdbcProjectionDocumentLock(jdbc);
+        }
+        @Bean ProjectionCutoverLock projectionCutoverLock(JdbcClient jdbc) {
+            return new JdbcProjectionCutoverLock(jdbc);
+        }
+        @Bean ProjectionChangePublisher projections(
+                JdbcClient jdbc,
+                ProjectionEventRepository events,
+                ProjectionDocumentLock documents,
+                ProjectionCutoverLock cutover) {
+            return new JdbcProjectionChangePublisher(jdbc, events, documents, cutover);
+        }
         @Bean JdbcAuditEventStore auditStore(JdbcClient jdbc) { return new JdbcAuditEventStore(jdbc); }
         @Bean Clock clock() { return Clock.fixed(AT.plusSeconds(1), ZoneOffset.UTC); }
-        @Bean DocumentService documentService(JdbcDocumentRepository documents) {
+        @Bean DocumentService documentService(
+                JdbcDocumentRepository documents,
+                JdbcDocumentReviewStore reviews,
+                ProjectionChangePublisher projections) {
             var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> {
                 throw new UnsupportedOperationException();
             }), (spaceId, documentId, principals, at) -> java.util.Optional.empty());
             return new DocumentService(documents, access, DocumentContentGateway.unavailable(),
                     (userId, spaceId, at) -> List.of(), KnowledgeSpaceReadAuthorization.denyAll(),
-                    KnowledgeWriteAuthorization.allowAll());
+                    KnowledgeWriteAuthorization.allowAll(), AuditSink.noop(), projections, reviews);
         }
         @Bean AuditService auditService(JdbcAuditEventStore store, Clock clock) {
             return new AuditService(store, clock);

@@ -26,6 +26,7 @@ public class DocumentService {
     private final KnowledgeWriteAuthorization writeAuthorization;
     private final AuditSink audit;
     private final ProjectionChangePublisher projections;
+    private final DocumentReviewStore reviews;
 
     public DocumentService(
             DocumentRepository repository,
@@ -36,6 +37,18 @@ public class DocumentService {
         this(repository, access, content, authorizedQuery,
                 KnowledgeSpaceReadAuthorization.denyAll(), writeAuthorization,
                 AuditSink.noop(), ProjectionChangePublisher.noop());
+    }
+
+    public DocumentService(
+            DocumentRepository repository,
+            AccessDecisionService access,
+            DocumentContentGateway content,
+            AuthorizedDocumentQuery authorizedQuery,
+            KnowledgeWriteAuthorization writeAuthorization,
+            DocumentReviewStore reviews) {
+        this(repository, access, content, authorizedQuery,
+                KnowledgeSpaceReadAuthorization.denyAll(), writeAuthorization,
+                AuditSink.noop(), ProjectionChangePublisher.noop(), reviews);
     }
 
     public DocumentService(
@@ -83,6 +96,20 @@ public class DocumentService {
             KnowledgeWriteAuthorization writeAuthorization,
             AuditSink audit,
             ProjectionChangePublisher projections) {
+        this(repository, access, content, authorizedQuery, spaceReadAuthorization,
+                writeAuthorization, audit, projections, DocumentReviewStore.noop());
+    }
+
+    public DocumentService(
+            DocumentRepository repository,
+            AccessDecisionService access,
+            DocumentContentGateway content,
+            AuthorizedDocumentQuery authorizedQuery,
+            KnowledgeSpaceReadAuthorization spaceReadAuthorization,
+            KnowledgeWriteAuthorization writeAuthorization,
+            AuditSink audit,
+            ProjectionChangePublisher projections,
+            DocumentReviewStore reviews) {
         this.repository = Objects.requireNonNull(repository);
         this.access = Objects.requireNonNull(access);
         this.content = Objects.requireNonNull(content);
@@ -91,6 +118,7 @@ public class DocumentService {
         this.writeAuthorization = Objects.requireNonNull(writeAuthorization);
         this.audit = Objects.requireNonNull(audit);
         this.projections = Objects.requireNonNull(projections);
+        this.reviews = Objects.requireNonNull(reviews);
     }
 
     @Transactional
@@ -123,6 +151,15 @@ public class DocumentService {
     }
 
     @Transactional
+    public DocumentAggregate updateMetadata(
+            UUID documentId, DocumentMetadata metadata, UUID actorId, Instant at) {
+        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.EDIT_DOCUMENT,
+                document -> document.updateMetadata(metadata));
+        record(actorId, AuditAction.EDIT, "DOCUMENT", documentId, updated);
+        return updated;
+    }
+
+    @Transactional
     public DocumentAggregate submitForReview(UUID documentId, UUID versionId, UUID actorId, Instant at) {
         var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.SUBMIT_FOR_REVIEW,
                 document -> document.submitForReview(versionId, actorId, at));
@@ -138,8 +175,29 @@ public class DocumentService {
     @Transactional
     public DocumentAggregate completeParsing(
             UUID documentId, UUID versionId, UUID actorId, Instant at) {
+        return completeParsingWithContent(documentId, versionId, actorId, at, () -> { });
+    }
+
+    @Transactional
+    public DocumentAggregate completeParsingWithContent(
+            UUID documentId,
+            UUID versionId,
+            UUID actorId,
+            Instant at,
+            Runnable persistParsedContent) {
+        Objects.requireNonNull(persistParsedContent);
         return projections.withDocumentChangeLock(documentId, () -> {
-            var updated = mutate(documentId, document -> document.completeParsing(versionId, actorId, at));
+            var current = findOrThrow(documentId);
+            var version = current.version(versionId);
+            if (current.archived() || !current.latestVersion().id().equals(versionId)
+                    || version.status() == DocumentStatus.PUBLISHED
+                    || version.status() == DocumentStatus.ARCHIVED
+                    || version.parseStatus() == ParseStatus.SUCCEEDED) {
+                return current;
+            }
+            var updated = current.completeParsing(versionId, actorId, at);
+            repository.replace(updated, current.revision());
+            persistParsedContent.run();
             projections.documentChanged(updated, versionId, at);
             return updated;
         });
@@ -170,10 +228,22 @@ public class DocumentService {
         return projections.withDocumentChangeLock(documentId, () -> {
             var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT,
                     document -> document.publish(versionId, actorId, at));
+            reviews.append(DocumentReview.published(documentId, versionId, actorId, at));
             record(actorId, AuditAction.PUBLISH, "DOCUMENT_VERSION", versionId, updated);
             projections.documentChanged(updated, versionId, at);
             return updated;
         });
+    }
+
+    @Transactional
+    public DocumentAggregate reject(
+            UUID documentId, UUID versionId, UUID reviewerId, String comment, Instant at) {
+        var review = DocumentReview.rejected(documentId, versionId, reviewerId, comment, at);
+        var updated = mutateAuthorized(documentId, reviewerId, KnowledgeWriteAuthorization.Action.REVIEW_DOCUMENT,
+                document -> document.reject(versionId, reviewerId, at));
+        reviews.append(review);
+        record(reviewerId, AuditAction.REVIEW, "DOCUMENT_VERSION", versionId, updated);
+        return updated;
     }
 
     @Transactional

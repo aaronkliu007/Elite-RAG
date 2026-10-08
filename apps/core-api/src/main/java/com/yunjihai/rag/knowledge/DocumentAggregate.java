@@ -13,6 +13,7 @@ public record DocumentAggregate(
         UUID id,
         UUID spaceId,
         String title,
+        DocumentMetadata metadata,
         List<DocumentVersion> versions,
         UUID publishedVersionId,
         boolean archived,
@@ -24,10 +25,23 @@ public record DocumentAggregate(
         if (title == null || title.isBlank()) {
             throw new IllegalArgumentException("文档标题不能为空");
         }
+        Objects.requireNonNull(metadata);
         versions = List.copyOf(versions);
         if (versions.isEmpty()) {
             throw new IllegalArgumentException("文档必须至少包含一个版本");
         }
+    }
+
+    public DocumentAggregate(
+            UUID id,
+            UUID spaceId,
+            String title,
+            List<DocumentVersion> versions,
+            UUID publishedVersionId,
+            boolean archived,
+            long revision) {
+        this(id, spaceId, title, DocumentMetadata.empty(), versions,
+                publishedVersionId, archived, revision);
     }
 
     static DocumentAggregate create(
@@ -37,7 +51,7 @@ public record DocumentAggregate(
             UUID actorId,
             Instant at) {
         return new DocumentAggregate(
-                UuidV7.generate(at), spaceId, title,
+                UuidV7.generate(at), spaceId, title, DocumentMetadata.empty(),
                 List.of(DocumentVersion.draft(1, sourceBlobId, actorId, at)),
                 null, false, 0);
     }
@@ -73,7 +87,20 @@ public record DocumentAggregate(
         if (current.parseStatus() != ParseStatus.SUCCEEDED) {
             throw new DocumentLifecycleException("文档解析成功后才能提交评审");
         }
+        if (!metadata.complete()) {
+            throw new DocumentLifecycleException("文档元数据完整后才能提交评审");
+        }
         return replaceVersion(current.withStatus(DocumentStatus.IN_REVIEW, actorId, at), publishedVersionId, false);
+    }
+
+    DocumentAggregate updateMetadata(DocumentMetadata nextMetadata) {
+        ensureNotArchived();
+        if (latestVersion().status() != DocumentStatus.DRAFT) {
+            throw new DocumentLifecycleException("只有草稿可以修改元数据");
+        }
+        return new DocumentAggregate(
+                id, spaceId, title, Objects.requireNonNull(nextMetadata), versions,
+                publishedVersionId, false, revision + 1);
     }
 
     DocumentAggregate markParsingSucceeded(UUID versionId, Instant at) {
@@ -86,11 +113,13 @@ public record DocumentAggregate(
 
     DocumentAggregate completeParsing(UUID versionId, UUID actorId, Instant at) {
         var current = mutableLatest(versionId);
-        if (current.status() != DocumentStatus.DRAFT) {
-            throw new DocumentLifecycleException("只有草稿可以完成解析并进入评审");
+        if (current.parseStatus() == ParseStatus.SUCCEEDED) {
+            return this;
         }
-        var completed = current.withParseStatus(ParseStatus.SUCCEEDED, at)
-                .withStatus(DocumentStatus.IN_REVIEW, actorId, at);
+        if (current.status() != DocumentStatus.DRAFT) {
+            throw new DocumentLifecycleException("只有草稿可以完成解析");
+        }
+        var completed = current.withParseStatus(ParseStatus.SUCCEEDED, at);
         return replaceVersion(completed, publishedVersionId, false);
     }
 
@@ -111,6 +140,14 @@ public record DocumentAggregate(
             throw new DocumentLifecycleException("文档解析成功后才能发布");
         }
         return replaceVersion(current.withStatus(DocumentStatus.PUBLISHED, actorId, at), versionId, false);
+    }
+
+    DocumentAggregate reject(UUID versionId, UUID reviewerId, Instant at) {
+        var current = mutableLatest(versionId);
+        if (current.status() != DocumentStatus.IN_REVIEW) {
+            throw new DocumentLifecycleException("只有评审中的版本可以驳回");
+        }
+        return replaceVersion(current.withStatus(DocumentStatus.DRAFT, reviewerId, at), publishedVersionId, false);
     }
 
     DocumentAggregate archive(UUID actorId, Instant at) {
@@ -148,6 +185,6 @@ public record DocumentAggregate(
 
     private DocumentAggregate copy(List<DocumentVersion> nextVersions, UUID publishedVersionId, boolean nextArchived) {
         return new DocumentAggregate(
-                id, spaceId, title, nextVersions, publishedVersionId, nextArchived, revision + 1);
+                id, spaceId, title, metadata, nextVersions, publishedVersionId, nextArchived, revision + 1);
     }
 }

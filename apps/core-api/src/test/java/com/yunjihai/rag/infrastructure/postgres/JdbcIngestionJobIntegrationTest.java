@@ -184,10 +184,10 @@ class JdbcIngestionJobIntegrationTest extends IngestionPostgresFixture {
         UUID jobId = UUID.randomUUID();
         jobs.enqueue(jobId, request, AT);
         var lease = jobs.claimNext("worker-a", AT, AT.plusSeconds(30)).orElseThrow();
-        jobs.complete(jobId, lease.leaseToken(), AT.plusSeconds(1));
+        assertTrue(jobs.complete(jobId, lease.leaseToken(), AT.plusSeconds(1)));
         assertEquals("SUCCEEDED", text(jobId, "status"));
         assertTrue(isNull(jobId, "lease_token"));
-        assertLeaseConflict(() -> jobs.complete(jobId, lease.leaseToken(), AT.plusSeconds(2)));
+        assertFalse(jobs.complete(jobId, lease.leaseToken(), AT.plusSeconds(2)));
     }
 
     private boolean isNull(UUID jobId, String column) {
@@ -282,6 +282,8 @@ abstract class IngestionPostgresFixture {
         ownerJdbc.sql("DROP TRIGGER IF EXISTS task6_failpoint ON audit_event").update();
         ownerJdbc.sql("DROP FUNCTION IF EXISTS task6_failpoint() CASCADE").update();
         ownerJdbc.sql("DELETE FROM audit_event").update();
+        ownerJdbc.sql("DELETE FROM document_review").update();
+        jdbc.sql("DELETE FROM retrieval_projection_event").update();
         jdbc.sql("DELETE FROM ingestion_job").update();
         jdbc.sql("DELETE FROM canonical_document").update();
         jdbc.sql("DELETE FROM active_blob_reservation").update();

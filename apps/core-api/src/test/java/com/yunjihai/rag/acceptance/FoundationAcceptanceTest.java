@@ -37,6 +37,7 @@ import com.yunjihai.rag.knowledge.ConcurrentDocumentUpdateException;
 import com.yunjihai.rag.knowledge.DocumentAggregate;
 import com.yunjihai.rag.knowledge.DocumentContent;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
+import com.yunjihai.rag.knowledge.DocumentMetadata;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.DocumentVersionRef;
@@ -118,14 +119,20 @@ class FoundationAcceptanceTest {
         var lease = fixture.jobs.claimNext("parser-acceptance-1").orElseThrow();
         fixture.jobs.complete(lease, fixture.parsedResult(lease.jobId()));
 
-        var reviewed = fixture.documents.findById(version.documentId()).orElseThrow();
-        assertThat(reviewed.latestVersion().status()).isEqualTo(DocumentStatus.IN_REVIEW);
-        assertThat(reviewed.currentPublishedVersionId()).isEmpty();
+        var parsedDraft = fixture.documents.findById(version.documentId()).orElseThrow();
+        assertThat(parsedDraft.latestVersion().status()).isEqualTo(DocumentStatus.DRAFT);
+        assertThat(parsedDraft.currentPublishedVersionId()).isEmpty();
         assertThat(fixture.documentService.listAuthorizedDocuments(
                 AUTHORIZED_USER, space.id(), NOW)).isEmpty();
 
+        fixture.documentService.updateMetadata(
+                version.documentId(), new DocumentMetadata("交付方案", List.of("客户方案")),
+                AUTHORIZED_USER, NOW.plusSeconds(1));
+        var reviewed = fixture.documentService.submitForReview(
+                version.documentId(), version.versionId(), AUTHORIZED_USER, NOW.plusSeconds(2));
+        assertThat(reviewed.latestVersion().status()).isEqualTo(DocumentStatus.IN_REVIEW);
         fixture.documentService.publish(
-                version.documentId(), version.versionId(), AUTHORIZED_USER, NOW.plusSeconds(1));
+                version.documentId(), version.versionId(), AUTHORIZED_USER, NOW.plusSeconds(3));
 
         assertThat(fixture.documentService.listAuthorizedDocuments(
                 AUTHORIZED_USER, space.id(), NOW.plusSeconds(2)))
@@ -494,8 +501,11 @@ class FoundationAcceptanceTest {
         }
 
         @Override
-        public void complete(UUID jobId, UUID leaseToken, Instant at) {
+        public boolean complete(UUID jobId, UUID leaseToken, Instant at) {
+            var current = values.get(jobId);
+            if (current != null && current.state == IngestionState.SUCCEEDED) return false;
             transition(jobId, leaseToken, IngestionState.SUCCEEDED);
+            return true;
         }
 
         @Override

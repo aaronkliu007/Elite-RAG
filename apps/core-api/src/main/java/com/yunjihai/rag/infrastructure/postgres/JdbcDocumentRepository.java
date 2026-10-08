@@ -2,6 +2,7 @@ package com.yunjihai.rag.infrastructure.postgres;
 
 import com.yunjihai.rag.knowledge.ConcurrentDocumentUpdateException;
 import com.yunjihai.rag.knowledge.DocumentAggregate;
+import com.yunjihai.rag.knowledge.DocumentMetadata;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentStatus;
 import com.yunjihai.rag.knowledge.DocumentVersion;
@@ -38,12 +39,18 @@ public class JdbcDocumentRepository implements DocumentRepository {
         validateVersionSources(document);
         try {
             jdbc.sql("""
-                    INSERT INTO document (id, space_id, title, archived, revision, created_at, updated_at)
-                    VALUES (:id, :spaceId, :title, :archived, :revision, :createdAt, :updatedAt)
+                    INSERT INTO document (
+                        id, space_id, title, classification, tags,
+                        archived, revision, created_at, updated_at)
+                    VALUES (
+                        :id, :spaceId, :title, :classification, :tags,
+                        :archived, :revision, :createdAt, :updatedAt)
                     """)
                     .param("id", document.id())
                     .param("spaceId", document.spaceId())
                     .param("title", document.title())
+                    .param("classification", document.metadata().classification())
+                    .param("tags", document.metadata().tags().toArray(String[]::new))
                     .param("archived", document.archived())
                     .param("revision", document.revision())
                     .param("createdAt", utc(document.versions().getFirst().createdAt()))
@@ -61,13 +68,16 @@ public class JdbcDocumentRepository implements DocumentRepository {
     public Optional<DocumentAggregate> findById(UUID documentId) {
         try {
             return jdbc.sql("""
-                    SELECT id, space_id, title, current_published_version_id, archived, revision
+                    SELECT id, space_id, title, classification, tags,
+                           current_published_version_id, archived, revision
                     FROM document WHERE id = :id
                     """)
                     .param("id", documentId)
                     .query((rs, row) -> new DocumentAggregate(
                             rs.getObject("id", UUID.class), rs.getObject("space_id", UUID.class),
-                            rs.getString("title"), readVersions(documentId),
+                            rs.getString("title"),
+                            new DocumentMetadata(rs.getString("classification"), readTags(rs)),
+                            readVersions(documentId),
                             rs.getObject("current_published_version_id", UUID.class),
                             rs.getBoolean("archived"), rs.getLong("revision")))
                     .optional();
@@ -107,11 +117,14 @@ public class JdbcDocumentRepository implements DocumentRepository {
         }
         try {
             int updated = jdbc.sql("""
-                    UPDATE document SET title = :title, archived = :archived, revision = :revision,
+                    UPDATE document SET title = :title, classification = :classification, tags = :tags,
+                        archived = :archived, revision = :revision,
                         updated_at = now()
                     WHERE id = :id AND space_id = :spaceId AND revision = :expectedRevision
                     """)
                     .param("title", document.title())
+                    .param("classification", document.metadata().classification())
+                    .param("tags", document.metadata().tags().toArray(String[]::new))
                     .param("archived", document.archived())
                     .param("revision", document.revision())
                     .param("id", document.id())
@@ -152,6 +165,19 @@ public class JdbcDocumentRepository implements DocumentRepository {
                 DocumentStatus.valueOf(rs.getString("status")), ParseStatus.valueOf(rs.getString("parse_status")),
                 rs.getObject("created_by", UUID.class), rs.getObject("created_at", OffsetDateTime.class).toInstant(),
                 rs.getObject("status_changed_by", UUID.class), changed == null ? null : changed.toInstant());
+    }
+
+    private static List<String> readTags(ResultSet rs) throws SQLException {
+        var array = rs.getArray("tags");
+        if (array == null) return List.of();
+        try {
+            Object value = array.getArray();
+            if (value instanceof String[] strings) return List.of(strings);
+            Object[] values = (Object[]) value;
+            return java.util.Arrays.stream(values).map(String.class::cast).toList();
+        } finally {
+            array.free();
+        }
     }
 
     private void insertVersion(UUID documentId, DocumentVersion version) {

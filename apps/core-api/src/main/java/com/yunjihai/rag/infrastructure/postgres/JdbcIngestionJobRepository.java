@@ -110,14 +110,32 @@ public final class JdbcIngestionJobRepository implements IngestionJobRepository 
     }
 
     @Override
-    public void complete(UUID jobId, UUID leaseToken, Instant at) {
-        transition(jobId, leaseToken, at, """
-                UPDATE ingestion_job
-                SET status = 'SUCCEEDED', lease_token = NULL, lease_worker = NULL,
-                    lease_expires_at = NULL, error_code = NULL, updated_at = :at
-                WHERE id = :id AND status = 'LEASED' AND lease_token = :leaseToken
-                  AND lease_expires_at > :at
-                """);
+    public boolean complete(UUID jobId, UUID leaseToken, Instant at) {
+        Objects.requireNonNull(jobId);
+        Objects.requireNonNull(leaseToken);
+        Objects.requireNonNull(at);
+        try {
+            int updated = jdbc.sql("""
+                    UPDATE ingestion_job
+                    SET status = 'SUCCEEDED', lease_token = NULL, lease_worker = NULL,
+                        lease_expires_at = NULL, error_code = NULL, updated_at = :at
+                    WHERE id = :id AND status = 'LEASED' AND lease_token = :leaseToken
+                      AND lease_expires_at > :at
+                    """)
+                    .param("id", jobId)
+                    .param("leaseToken", leaseToken)
+                    .param("at", utc(at))
+                    .update();
+            if (updated == 1) return true;
+            var status = jdbc.sql("SELECT status FROM ingestion_job WHERE id = :id")
+                    .param("id", jobId)
+                    .query(String.class)
+                    .optional();
+            if (status.filter("SUCCEEDED"::equals).isPresent()) return false;
+            throw new IngestionLeaseConflictException();
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
     }
 
     @Override

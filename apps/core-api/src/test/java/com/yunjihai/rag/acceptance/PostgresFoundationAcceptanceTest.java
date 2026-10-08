@@ -45,6 +45,7 @@ import com.yunjihai.rag.ingestion.ParserStatus;
 import com.yunjihai.rag.ingestion.ParsedDocumentStore;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.DocumentStatus;
+import com.yunjihai.rag.knowledge.DocumentMetadata;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceService;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
@@ -299,8 +300,14 @@ class PostgresFoundationAcceptanceTest {
                 "canonical-document-v1", jobId, ParserStatus.SUCCEEDED, body, List.of()));
 
         var persisted = context.getBean(DocumentRepository.class).findById(draft.id()).orElseThrow();
-        assertThat(persisted.latestVersion().status()).isEqualTo(DocumentStatus.IN_REVIEW);
+        assertThat(persisted.latestVersion().status()).isEqualTo(DocumentStatus.DRAFT);
         assertThat(documents.listAuthorizedDocuments(reader, space.id(), Instant.now())).isEmpty();
+        documents.updateMetadata(
+                draft.id(), new DocumentMetadata("交付方案", List.of("Spring")),
+                owner, Instant.now());
+        var reviewed = documents.submitForReview(
+                draft.id(), draft.latestVersion().id(), owner, Instant.now());
+        assertThat(reviewed.latestVersion().status()).isEqualTo(DocumentStatus.IN_REVIEW);
         var published = documents.publish(
                 draft.id(), draft.latestVersion().id(), owner, Instant.now());
         assertThat(published.latestVersion().status()).isEqualTo(DocumentStatus.PUBLISHED);

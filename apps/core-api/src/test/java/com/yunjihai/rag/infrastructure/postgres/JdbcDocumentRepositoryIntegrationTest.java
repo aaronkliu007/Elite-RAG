@@ -16,6 +16,10 @@ import com.yunjihai.rag.knowledge.KnowledgeSpace;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceReadAuthorization;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import com.yunjihai.rag.knowledge.ParseStatus;
+import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
+import com.yunjihai.rag.retrieval.projection.ProjectionCutoverLock;
+import com.yunjihai.rag.retrieval.projection.ProjectionDocumentLock;
+import com.yunjihai.rag.retrieval.projection.ProjectionEventRepository;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -325,6 +329,8 @@ abstract class DocumentPostgresFixture {
     @AfterEach
     void clearDatabase() {
         ownerJdbc.sql("DELETE FROM audit_event").update();
+        ownerJdbc.sql("DELETE FROM document_review").update();
+        jdbc.sql("DELETE FROM retrieval_projection_event").update();
         jdbc.sql("DELETE FROM active_blob_reservation").update();
         jdbc.sql("UPDATE document SET current_published_version_id = NULL").update();
         jdbc.sql("DELETE FROM document_version").update();
@@ -403,8 +409,23 @@ abstract class DocumentPostgresFixture {
         @Bean JdbcClient jdbcClient(DataSource dataSource) { return JdbcClient.create(dataSource); }
         @Bean JdbcKnowledgeSpaceRepository spaces(JdbcClient jdbc) { return new JdbcKnowledgeSpaceRepository(jdbc); }
         @Bean JdbcDocumentRepository documents(JdbcClient jdbc) { return new JdbcDocumentRepository(jdbc); }
+        @Bean JdbcDocumentReviewStore reviews(JdbcClient jdbc) { return new JdbcDocumentReviewStore(jdbc); }
+        @Bean ProjectionEventRepository events(JdbcClient jdbc) { return new JdbcProjectionEventRepository(jdbc); }
+        @Bean ProjectionDocumentLock documentLock(JdbcClient jdbc) { return new JdbcProjectionDocumentLock(jdbc); }
+        @Bean ProjectionCutoverLock cutoverLock(JdbcClient jdbc) { return new JdbcProjectionCutoverLock(jdbc); }
+        @Bean ProjectionChangePublisher projections(
+                JdbcClient jdbc,
+                ProjectionEventRepository events,
+                ProjectionDocumentLock documents,
+                ProjectionCutoverLock cutover) {
+            return new JdbcProjectionChangePublisher(jdbc, events, documents, cutover);
+        }
         @Bean JdbcAuditEventStore auditStore(JdbcClient jdbc) { return new JdbcAuditEventStore(jdbc); }
-        @Bean DocumentService documentService(JdbcDocumentRepository documents, JdbcAuditEventStore auditStore) {
+        @Bean DocumentService documentService(
+                JdbcDocumentRepository documents,
+                JdbcDocumentReviewStore reviews,
+                JdbcAuditEventStore auditStore,
+                ProjectionChangePublisher projections) {
             AuditSink fixedIdRealAudit = command -> {
                 var event = new AuditEvent(FIXED_AUDIT_ID, command.actorId(), command.action(),
                         command.resourceType(), command.resourceId(), AuditOutcome.SUCCEEDED,
@@ -417,7 +438,7 @@ abstract class DocumentPostgresFixture {
             }), (spaceId, documentId, principals, at) -> java.util.Optional.empty());
             return new DocumentService(documents, access, DocumentContentGateway.unavailable(),
                     (userId, spaceId, at) -> List.of(), KnowledgeSpaceReadAuthorization.denyAll(),
-                    KnowledgeWriteAuthorization.allowAll(), fixedIdRealAudit);
+                    KnowledgeWriteAuthorization.allowAll(), fixedIdRealAudit, projections, reviews);
         }
     }
 }

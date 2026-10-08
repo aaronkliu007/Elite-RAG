@@ -140,6 +140,9 @@ class KnowledgeAuthorizationTest {
                 KnowledgeWriteAuthorization.allowAll());
         var document = service.createDraft(SPACE_ID, "已发布制度", "blob-v1", USER_ID, NOW.minusSeconds(10));
         var versionId = document.latestVersion().id();
+        service.updateMetadata(
+                document.id(), new DocumentMetadata("制度", List.of()),
+                USER_ID, NOW.minusSeconds(9));
         service.markParsingSucceeded(document.id(), versionId, NOW.minusSeconds(9));
         service.submitForReview(document.id(), versionId, USER_ID, NOW.minusSeconds(8));
         service.publish(document.id(), versionId, USER_ID, NOW.minusSeconds(7));

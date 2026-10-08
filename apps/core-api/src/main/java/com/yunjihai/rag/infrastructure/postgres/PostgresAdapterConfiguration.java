@@ -38,6 +38,7 @@ import com.yunjihai.rag.ingestion.ParsedDocumentStore;
 import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
 import com.yunjihai.rag.knowledge.DocumentRepository;
+import com.yunjihai.rag.knowledge.DocumentReviewStore;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceReadAuthorization;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceRepository;
@@ -134,6 +135,11 @@ public class PostgresAdapterConfiguration {
     @Bean
     JdbcDocumentRepository jdbcDocumentRepository(JdbcClient jdbc) {
         return new JdbcDocumentRepository(jdbc);
+    }
+
+    @Bean
+    JdbcDocumentReviewStore jdbcDocumentReviewStore(JdbcClient jdbc) {
+        return new JdbcDocumentReviewStore(jdbc);
     }
 
     @Bean
@@ -410,9 +416,10 @@ public class PostgresAdapterConfiguration {
             KnowledgeSpaceReadAuthorization spaceAuthorization,
             KnowledgeWriteAuthorization writeAuthorization,
             AuditService audit,
-            ProjectionChangePublisher projections) {
+            ProjectionChangePublisher projections,
+            DocumentReviewStore reviews) {
         return new DocumentService(documents, access, content, authorizedQuery,
-                spaceAuthorization, writeAuthorization, audit, projections);
+                spaceAuthorization, writeAuthorization, audit, projections, reviews);
     }
 
     @Bean
