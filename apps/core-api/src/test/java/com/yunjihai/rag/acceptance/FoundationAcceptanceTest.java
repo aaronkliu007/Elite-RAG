@@ -13,6 +13,10 @@ import com.yunjihai.rag.access.PublicationState;
 import com.yunjihai.rag.audit.AuditAction;
 import com.yunjihai.rag.audit.AuditEvent;
 import com.yunjihai.rag.audit.AuditService;
+import com.yunjihai.rag.api.idempotency.IdempotencyScope;
+import com.yunjihai.rag.api.idempotency.IdempotencyService;
+import com.yunjihai.rag.api.idempotency.IdempotencyStore;
+import com.yunjihai.rag.api.idempotency.StoredHttpResult;
 import com.yunjihai.rag.ingestion.BlobStore;
 import com.yunjihai.rag.ingestion.CanonicalDocumentBody;
 import com.yunjihai.rag.ingestion.CanonicalDocumentV1;
@@ -69,6 +73,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import tools.jackson.databind.ObjectMapper;
+
 class FoundationAcceptanceTest {
 
     private static final Instant NOW = Instant.parse("2026-09-24T10:00:00Z");
@@ -98,7 +104,7 @@ class FoundationAcceptanceTest {
                 MediaType.APPLICATION_PDF,
                 REPRESENTATIVE_PDF.length,
                 new ByteArrayInputStream(REPRESENTATIVE_PDF),
-                AUTHORIZED_USER));
+                AUTHORIZED_USER), "foundation-upload");
         fixture.aclService.grantDocument(
                 AUTHORIZED_USER,
                 space.id(),
@@ -108,14 +114,6 @@ class FoundationAcceptanceTest {
                 NOW);
         fixture.contents.putSource(version, "客户方案.pdf", REPRESENTATIVE_PDF);
 
-        fixture.jobs.enqueue(new IngestionRequest(
-                version,
-                AUTHORIZED_USER,
-                fixture.blobs.onlyBlob().objectKey(),
-                "客户方案.pdf",
-                MediaType.APPLICATION_PDF_VALUE,
-                REPRESENTATIVE_PDF.length,
-                fixture.blobs.onlyBlob().sha256()));
         var lease = fixture.jobs.claimNext("parser-acceptance-1").orElseThrow();
         fixture.jobs.complete(lease, fixture.parsedResult(lease.jobId()));
 
@@ -248,13 +246,6 @@ class FoundationAcceptanceTest {
                             .orElse(false),
                     audit);
             var policy = UploadPolicy.defaults();
-            uploads = new UploadService(
-                    policy,
-                    new FileSystemUploadSpooler(temporaryDirectory.resolve("quarantine")),
-                    new DefaultUploadSecurityScanner(policy, file -> false),
-                    blobs,
-                    new DocumentServiceDraftGateway(documentService, clock),
-                    audit);
             jobs = new IngestionJobService(
                     ingestionJobs,
                     contents,
@@ -262,6 +253,16 @@ class FoundationAcceptanceTest {
                     audit,
                     clock,
                     Duration.ofMinutes(5));
+            uploads = new UploadService(
+                    policy,
+                    new FileSystemUploadSpooler(temporaryDirectory.resolve("quarantine")),
+                    new DefaultUploadSecurityScanner(policy, file -> false),
+                    blobs,
+                    new DocumentServiceDraftGateway(documentService, clock),
+                    jobs,
+                    new IdempotencyService(
+                            new MemoryIdempotencyStore(), new ObjectMapper(), clock, Duration.ofHours(24)),
+                    audit);
             controller = new KnowledgeController(spaces, documentService);
         }
 
@@ -295,6 +296,36 @@ class FoundationAcceptanceTest {
                                             "paragraph-1", "PARAGRAPH", "验收标准", "section-1", 1, null, null, 0.98))),
                     List.of());
         }
+    }
+
+    private static final class MemoryIdempotencyStore implements IdempotencyStore {
+        private final Map<IdempotencyScope, Entry> values = new HashMap<>();
+
+        @Override
+        public Claim claim(IdempotencyScope scope, String requestHash, Instant now, Instant expiresAt) {
+            var current = values.get(scope);
+            if (current == null) {
+                values.put(scope, new Entry(requestHash, null));
+                return new Claim.Acquired();
+            }
+            if (!current.requestHash.equals(requestHash)) return new Claim.HashMismatch();
+            return current.result == null
+                    ? new Claim.InProgress()
+                    : new Claim.Completed(current.result);
+        }
+
+        @Override
+        public void complete(
+                IdempotencyScope scope, String requestHash, StoredHttpResult result, Instant at) {
+            values.put(scope, new Entry(requestHash, result));
+        }
+
+        @Override
+        public void release(IdempotencyScope scope, String requestHash) {
+            values.remove(scope);
+        }
+
+        private record Entry(String requestHash, StoredHttpResult result) { }
     }
 
     private static final class MemoryDocumentRepository implements DocumentRepository {

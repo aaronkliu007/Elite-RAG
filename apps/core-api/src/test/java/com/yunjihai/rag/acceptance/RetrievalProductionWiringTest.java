@@ -14,6 +14,8 @@ import com.yunjihai.rag.retrieval.PrincipalResolverPort;
 import com.yunjihai.rag.retrieval.domain.DegradationReason;
 import com.yunjihai.rag.retrieval.domain.RetrievalFilter;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
+import com.yunjihai.rag.runtime.IngestionWorkerScheduler;
+import com.yunjihai.rag.runtime.ProjectionWorkerScheduler;
 import com.yunjihai.rag.retrieval.search.HybridRecallService;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import org.junit.jupiter.api.AfterAll;
@@ -81,6 +83,8 @@ class RetrievalProductionWiringTest {
             assertThat(context.getBean(ProjectionWorker.class)).isNotNull();
             assertThat(context.getBean(OpenSearchRebuildService.class)).isNotNull();
             assertThat(context.getBean(TrustedRetrievalService.class)).isNotNull();
+            assertThat(context.getBean(IngestionWorkerScheduler.class)).isNotNull();
+            assertThat(context.getBean(ProjectionWorkerScheduler.class)).isNotNull();
             assertThat(context.getBean(KnowledgeWriteAuthorization.class))
                     .isInstanceOf(RbacKnowledgeAuthorization.class);
 
@@ -137,6 +141,9 @@ class RetrievalProductionWiringTest {
                 Map.entry("rag.minio.secret-key", LocalFoundationInfrastructure.MINIO_APP_PASSWORD),
                 Map.entry("rag.minio.bucket", LocalFoundationInfrastructure.BUCKET),
                 Map.entry("rag.opensearch.enabled", "true"),
+                Map.entry("rag.workers.enabled", "true"),
+                Map.entry("rag.ingestion.worker.poll-delay", "PT1H"),
+                Map.entry("rag.opensearch.worker.poll-delay", "PT1H"),
                 Map.entry("rag.opensearch.endpoint", endpoint.toString()),
                 Map.entry("rag.retrieval.vector.enabled", "false"),
                 Map.entry("rag.bootstrap-admin.username", "wiring-admin"),

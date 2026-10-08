@@ -174,6 +174,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                 Map.entry("rag.minio.secret-key", LocalFoundationInfrastructure.MINIO_APP_PASSWORD),
                 Map.entry("rag.minio.bucket", LocalFoundationInfrastructure.BUCKET),
                 Map.entry("rag.opensearch.enabled", "true"),
+                Map.entry("rag.workers.enabled", "false"),
                 Map.entry("rag.opensearch.endpoint", endpoint.toString()),
                 Map.entry("rag.retrieval.vector.enabled", "false"),
                 Map.entry("rag.bootstrap-admin.username", "retrieval-admin"),

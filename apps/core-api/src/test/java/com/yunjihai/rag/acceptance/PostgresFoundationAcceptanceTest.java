@@ -7,6 +7,7 @@ import com.yunjihai.rag.access.PrincipalRef;
 import com.yunjihai.rag.access.PrincipalType;
 import com.yunjihai.rag.audit.AuditEventStore;
 import com.yunjihai.rag.audit.AuditService;
+import com.yunjihai.rag.api.idempotency.IdempotencyService;
 import com.yunjihai.rag.identity.ExternalDepartment;
 import com.yunjihai.rag.identity.ExternalUser;
 import com.yunjihai.rag.identity.OrganizationReconciliationPort;
@@ -98,7 +99,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-@SpringBootTest(properties = "spring.main.web-application-type=none")
+@SpringBootTest(properties = {
+        "spring.main.web-application-type=none",
+        "rag.workers.enabled=false"
+})
 @ActiveProfiles("local")
 @Import(PostgresFoundationAcceptanceTest.AcceptanceAuthorization.class)
 class PostgresFoundationAcceptanceTest {
@@ -374,6 +378,31 @@ class PostgresFoundationAcceptanceTest {
     }
 
     @Test
+    void uploadCreatesDraftAndQueuedIngestionJobInOneTransaction() {
+        synchronizeSpaceReaders(Instant.now());
+        var owner = userId("owner");
+        var space = spaces.createSpace("上传原子性验证", owner, Instant.now());
+        byte[] source = "%PDF-1.7 upload atomicity".getBytes(StandardCharsets.UTF_8);
+
+        var version = context.getBean(UploadService.class).accept(new UploadCommand(
+                space.id(), "原子上传", "atomic.pdf", MediaType.APPLICATION_PDF,
+                source.length, new ByteArrayInputStream(source), owner), "atomic-upload");
+
+        assertThat(jdbc.sql("SELECT count(*) FROM document_version WHERE id = :version")
+                .param("version", version.versionId()).query(Long.class).single()).isEqualTo(1);
+        assertThat(jdbc.sql("""
+                        SELECT count(*)
+                          FROM ingestion_job
+                         WHERE document_id = :document
+                           AND version_id = :version
+                           AND status = 'QUEUED'
+                        """)
+                .param("document", version.documentId())
+                .param("version", version.versionId())
+                .query(Long.class).single()).isEqualTo(1);
+    }
+
+    @Test
     void uploadDatabaseFailuresRetainCleanupOutsideTheAbortedTransaction() throws Exception {
         synchronizeSpaceReaders(Instant.now());
         UUID owner = userId("owner");
@@ -396,7 +425,8 @@ class PostgresFoundationAcceptanceTest {
                 var failure = assertThrows(RuntimeException.class,
                         () -> context.getBean(UploadService.class).accept(new UploadCommand(
                                 space.id(), "回滚文档", "recovery.pdf", MediaType.APPLICATION_PDF,
-                                source.length, new ByteArrayInputStream(source), owner)));
+                                source.length, new ByteArrayInputStream(source), owner),
+                                "rollback-" + stage));
                 assertThat(failure).hasMessage("DATABASE_FAILURE").hasNoCause();
                 assertThat(failure.getSuppressed()).isEmpty();
             } finally {
@@ -408,6 +438,7 @@ class PostgresFoundationAcceptanceTest {
             assertThat(scalar("SELECT count(*) FROM document")).isZero();
             assertThat(scalar("SELECT count(*) FROM document_version")).isZero();
             assertThat(scalar("SELECT count(*) FROM active_blob_reservation")).isZero();
+            assertThat(scalar("SELECT count(*) FROM ingestion_job")).isZero();
             assertThat(scalar("SELECT count(*) FROM audit_event")).isEqualTo(auditBefore);
             assertThat(jdbc.sql("SELECT status FROM blob_cleanup_candidate WHERE object_key = :key")
                     .param("key", key).query(String.class).optional()).contains("PENDING");
@@ -461,10 +492,17 @@ class PostgresFoundationAcceptanceTest {
     @TestConfiguration(proxyBeanMethods = false)
     static class AcceptanceAuthorization {
         @Bean
-        UploadService uploadService(BlobStore blobs, DocumentDraftGateway drafts, AuditService audit) {
+        @Primary
+        UploadService uploadService(
+                BlobStore blobs,
+                DocumentDraftGateway drafts,
+                IngestionJobService jobs,
+                IdempotencyService idempotency,
+                AuditService audit) {
             return new UploadService(new UploadPolicy(1024 * 1024, 100, 10_000, 50),
                     new FileSystemUploadSpooler(),
-                    (path, filename, mediaType) -> UploadInspection.safe(mediaType), blobs, drafts, audit);
+                    (path, filename, mediaType) -> UploadInspection.safe(mediaType),
+                    blobs, drafts, jobs, idempotency, audit);
         }
 
         @Bean

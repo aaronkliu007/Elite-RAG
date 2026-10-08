@@ -6,6 +6,7 @@ import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -19,11 +20,18 @@ public final class ParserContractValidator {
 
     public static ParserContractValidator from(Path schemaFile) {
         try (var input = Files.newInputStream(schemaFile)) {
-            return new ParserContractValidator(
-                    JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(input));
+            return from(input);
         } catch (IOException exception) {
             throw new IllegalStateException("无法加载解析响应契约", exception);
         }
+    }
+
+    public static ParserContractValidator from(InputStream schemaInput) {
+        if (schemaInput == null) {
+            throw new IllegalArgumentException("解析响应契约不能为空");
+        }
+        return new ParserContractValidator(
+                JsonSchemaFactory.getInstance(SpecVersion.VersionFlag.V202012).getSchema(schemaInput));
     }
 
     public void validate(String responseBody) {

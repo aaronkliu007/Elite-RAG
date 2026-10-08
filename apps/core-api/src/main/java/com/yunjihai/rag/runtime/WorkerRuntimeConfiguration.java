@@ -1,0 +1,140 @@
+package com.yunjihai.rag.runtime;
+
+import com.yunjihai.rag.api.idempotency.IdempotencyService;
+import com.yunjihai.rag.audit.AuditService;
+import com.yunjihai.rag.infrastructure.minio.MinioBlobReader;
+import com.yunjihai.rag.infrastructure.opensearch.OpenSearchIndexManager;
+import com.yunjihai.rag.ingestion.BlobStore;
+import com.yunjihai.rag.ingestion.DefaultUploadSecurityScanner;
+import com.yunjihai.rag.ingestion.DocumentDraftGateway;
+import com.yunjihai.rag.ingestion.FileSystemUploadSpooler;
+import com.yunjihai.rag.ingestion.HttpParserTransport;
+import com.yunjihai.rag.ingestion.IngestionJobService;
+import com.yunjihai.rag.ingestion.IngestionWorker;
+import com.yunjihai.rag.ingestion.IngestionWorkerPolicy;
+import com.yunjihai.rag.ingestion.MinioParserInvocation;
+import com.yunjihai.rag.ingestion.ParserClient;
+import com.yunjihai.rag.ingestion.ParserContractValidator;
+import com.yunjihai.rag.ingestion.UploadPolicy;
+import com.yunjihai.rag.ingestion.UploadService;
+import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.nio.file.Path;
+import java.time.Duration;
+
+@Configuration(proxyBeanMethods = false)
+@Profile("local")
+@EnableScheduling
+public class WorkerRuntimeConfiguration {
+
+    @Bean
+    IngestionWorkerPolicy ingestionWorkerPolicy(
+            @Value("${rag.ingestion.worker.lease-duration:PT10M}") Duration leaseDuration,
+            @Value("${rag.ingestion.worker.parser-timeout-seconds:300}") int parserTimeoutSeconds) {
+        return new IngestionWorkerPolicy(leaseDuration, parserTimeoutSeconds);
+    }
+
+    @Bean
+    UploadPolicy uploadPolicy() {
+        return UploadPolicy.defaults();
+    }
+
+    @Bean
+    FileSystemUploadSpooler uploadSpooler(
+            @Value("${rag.upload.quarantine-directory:}") String configuredDirectory) {
+        return configuredDirectory.isBlank()
+                ? new FileSystemUploadSpooler()
+                : new FileSystemUploadSpooler(Path.of(configuredDirectory));
+    }
+
+    @Bean
+    DefaultUploadSecurityScanner uploadSecurityScanner(UploadPolicy policy) {
+        // 本地开发仅启用格式、加密与压缩炸弹检查；正式试点前必须替换企业恶意文件扫描端口。
+        return new DefaultUploadSecurityScanner(policy, path -> false);
+    }
+
+    @Bean
+    HttpClient parserHttpClient(
+            @Value("${rag.parser.connect-timeout:PT3S}") Duration connectTimeout) {
+        return HttpClient.newBuilder().connectTimeout(connectTimeout).build();
+    }
+
+    @Bean
+    ParserContractValidator parserContractValidator() {
+        try (var input = new ClassPathResource(
+                "contracts/parser/canonical-document-v1.schema.json").getInputStream()) {
+            return ParserContractValidator.from(input);
+        } catch (IOException failure) {
+            throw new IllegalStateException("无法加载解析响应契约", failure);
+        }
+    }
+
+    @Bean
+    ParserClient parserClient(
+            HttpClient parserHttpClient,
+            ParserContractValidator validator,
+            @Value("${rag.parser.endpoint}") URI endpoint) {
+        return new ParserClient(new HttpParserTransport(endpoint, parserHttpClient), validator);
+    }
+
+    @Bean
+    MinioParserInvocation parserInvocation(
+            MinioBlobReader blobs,
+            ParserClient parser,
+            @Value("${rag.ingestion.worker.temp-directory:}") String configuredDirectory,
+            IngestionWorkerPolicy workerPolicy) {
+        var directory = configuredDirectory.isBlank()
+                ? Path.of(System.getProperty("java.io.tmpdir"), "yunect-rag-parser")
+                : Path.of(configuredDirectory);
+        return new MinioParserInvocation(
+                blobs, parser, directory, workerPolicy.parserTimeoutSeconds());
+    }
+
+    @Bean
+    IngestionWorker ingestionWorker(IngestionJobService jobs, MinioParserInvocation parser) {
+        return new IngestionWorker(jobs, parser);
+    }
+
+    @Bean(name = "runtimeUploadService")
+    UploadService uploadService(
+            UploadPolicy policy,
+            FileSystemUploadSpooler spooler,
+            DefaultUploadSecurityScanner scanner,
+            BlobStore blobs,
+            DocumentDraftGateway drafts,
+            IngestionJobService jobs,
+            IdempotencyService idempotency,
+            AuditService audit) {
+        return new UploadService(policy, spooler, scanner, blobs, drafts, jobs, idempotency, audit);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.workers.enabled", havingValue = "true")
+    IngestionWorkerScheduler ingestionWorkerScheduler(
+            IngestionWorker worker,
+            @Value("${rag.ingestion.worker.id:local-ingestion-worker}") String workerId) {
+        return new IngestionWorkerScheduler(worker, workerId);
+    }
+
+    @Bean
+    @ConditionalOnBean(ProjectionWorker.class)
+    @ConditionalOnProperty(name = "rag.workers.enabled", havingValue = "true")
+    ProjectionWorkerScheduler projectionWorkerScheduler(
+            ProjectionWorker worker,
+            @Value("${rag.opensearch.worker.id:local-projection-worker}") String workerId,
+            @Value("${rag.opensearch.worker.target-index:" + OpenSearchIndexManager.WRITE_ALIAS + "}")
+            String targetIndex) {
+        return new ProjectionWorkerScheduler(worker, workerId, targetIndex);
+    }
+}

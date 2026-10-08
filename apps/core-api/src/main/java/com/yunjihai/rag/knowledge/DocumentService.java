@@ -131,15 +131,23 @@ public class DocumentService {
     }
 
     @Transactional
-    public DocumentVersionRef createOrReuseDraft(
+    public DraftCreation createOrReuseDraft(
             UUID spaceId, String title, String sourceBlobId, UUID actorId, Instant at) {
         writeAuthorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.CREATE_DOCUMENT);
-        return repository.findActiveVersionBySpaceAndSourceBlob(spaceId, sourceBlobId)
-                .orElseGet(() -> {
-                    var document = DocumentAggregate.create(spaceId, title, sourceBlobId, actorId, at);
-                    repository.insert(document);
-                    return new DocumentVersionRef(document.id(), document.latestVersion().id());
-                });
+        var existing = repository.findActiveVersionBySpaceAndSourceBlob(spaceId, sourceBlobId);
+        if (existing.isPresent()) {
+            return new DraftCreation(existing.orElseThrow(), false);
+        }
+        var document = DocumentAggregate.create(spaceId, title, sourceBlobId, actorId, at);
+        repository.insert(document);
+        return new DraftCreation(
+                new DocumentVersionRef(document.id(), document.latestVersion().id()), true);
+    }
+
+    public record DraftCreation(DocumentVersionRef version, boolean created) {
+        public DraftCreation {
+            Objects.requireNonNull(version);
+        }
     }
 
     @Transactional

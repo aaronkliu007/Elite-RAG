@@ -5,6 +5,11 @@ import com.yunjihai.rag.access.AccessSnapshot;
 import com.yunjihai.rag.access.EffectivePrincipalSet;
 import com.yunjihai.rag.access.PrincipalMembershipSnapshot;
 import com.yunjihai.rag.access.PublicationState;
+import com.yunjihai.rag.api.idempotency.IdempotencyConflictException;
+import com.yunjihai.rag.api.idempotency.IdempotencyScope;
+import com.yunjihai.rag.api.idempotency.IdempotencyService;
+import com.yunjihai.rag.api.idempotency.IdempotencyStore;
+import com.yunjihai.rag.api.idempotency.StoredHttpResult;
 import com.yunjihai.rag.knowledge.ConcurrentDocumentUpdateException;
 import com.yunjihai.rag.knowledge.DocumentAggregate;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
@@ -22,6 +27,7 @@ import java.io.InputStream;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.Duration;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.List;
@@ -29,6 +35,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.function.Function;
+
+import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -56,14 +66,16 @@ class UploadServiceTest {
         var drafts = new DocumentServiceDraftGateway(
                 documents,
                 Clock.fixed(Instant.parse("2026-09-24T08:00:00Z"), ZoneOffset.UTC));
-        var service = service(blobs, drafts, UploadInspection.safe(MediaType.APPLICATION_PDF));
+        var jobs = new RecordingJobs();
+        var service = service(blobs, drafts, jobs, UploadInspection.safe(MediaType.APPLICATION_PDF));
 
-        var first = service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
-        var second = service.accept(command("b.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
+        var first = service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "upload-1");
+        var second = service.accept(command("b.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "upload-2");
 
         assertThat(first).isEqualTo(second);
         assertThat(blobs.values).hasSize(1);
         assertThat(repository.values).hasSize(1);
+        assertThat(jobs.requests).as("同一活跃版本只应有一个解析任务").hasSize(1);
     }
 
     @Test
@@ -86,7 +98,7 @@ class UploadServiceTest {
                 Clock.fixed(Instant.parse("2026-09-24T08:00:00Z"), ZoneOffset.UTC));
         var service = service(blobs, drafts, UploadInspection.safe(MediaType.APPLICATION_PDF));
 
-        var first = service.accept(command("v1.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
+        var first = service.accept(command("v1.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "upload-v1");
         var parsedAt = Instant.parse("2026-09-24T08:01:00Z");
         documents.updateMetadata(
                 first.documentId(), new DocumentMetadata("方案", List.of()), ACTOR_ID, parsedAt);
@@ -97,7 +109,7 @@ class UploadServiceTest {
         documents.createNextDraft(
                 first.documentId(), "blobs/sha256/different", ACTOR_ID, parsedAt.plusSeconds(3));
 
-        var repeated = service.accept(command("v1-again.pdf", MediaType.APPLICATION_PDF, pdfBytes()));
+        var repeated = service.accept(command("v1-again.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "upload-v1-again");
 
         assertThat(repeated).isEqualTo(first);
         assertThat(repository.values).hasSize(1);
@@ -110,19 +122,20 @@ class UploadServiceTest {
         var drafts = new RecordingDraftGateway();
         var service = new UploadService(
                 new UploadPolicy(8, 100, 10_000, 50), new FileSystemUploadSpooler(),
-                (path, filename, mediaType) -> UploadInspection.safe(mediaType), blobs, drafts);
+                (path, filename, mediaType) -> UploadInspection.safe(mediaType), blobs, drafts,
+                new RecordingJobs(), idempotency(), com.yunjihai.rag.audit.AuditSink.noop());
 
-        assertThatThrownBy(() -> service.accept(command("empty.md", MediaType.TEXT_MARKDOWN, new byte[0])))
+        assertThatThrownBy(() -> service.accept(command("empty.md", MediaType.TEXT_MARKDOWN, new byte[0]), "empty"))
                 .isInstanceOf(UploadRejectedException.class);
-        assertThatThrownBy(() -> service.accept(command("large.md", MediaType.TEXT_MARKDOWN, new byte[9])))
+        assertThatThrownBy(() -> service.accept(command("large.md", MediaType.TEXT_MARKDOWN, new byte[9]), "large"))
                 .isInstanceOf(UploadRejectedException.class);
         var deceptive = new UploadCommand(
                 SPACE_ID, "large.md", "large.md", MediaType.TEXT_MARKDOWN, 8,
                 new ByteArrayInputStream(new byte[9]), ACTOR_ID);
-        assertThatThrownBy(() -> service.accept(deceptive))
+        assertThatThrownBy(() -> service.accept(deceptive, "deceptive"))
                 .isInstanceOf(UploadRejectedException.class)
                 .hasMessageContaining("实际大小");
-        assertThatThrownBy(() -> service.accept(command("wrong.pdf", MediaType.IMAGE_PNG, pngBytes())))
+        assertThatThrownBy(() -> service.accept(command("wrong.pdf", MediaType.IMAGE_PNG, pngBytes()), "wrong"))
                 .isInstanceOf(UploadRejectedException.class);
         assertThat(blobs.values).isEmpty();
         assertThat(drafts.created).isZero();
@@ -154,7 +167,7 @@ class UploadServiceTest {
         };
         var service = service(blobs, failing, UploadInspection.safe(MediaType.APPLICATION_PDF));
 
-        assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes())))
+        assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "database-failure"))
                 .isInstanceOf(IllegalStateException.class);
         assertThat(blobs.values).hasSize(1);
         assertThat(blobs.cleanupCandidates).isEqualTo(1);
@@ -170,7 +183,7 @@ class UploadServiceTest {
             throw databaseFailure;
         }, UploadInspection.safe(MediaType.APPLICATION_PDF));
 
-        assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes())))
+        assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "cleanup-failure"))
                 .isSameAs(databaseFailure)
                 .satisfies(error -> assertThat(error.getSuppressed())
                         .extracting(Throwable::getMessage)
@@ -184,20 +197,63 @@ class UploadServiceTest {
         var drafts = new RecordingDraftGateway();
         var service = service(blobs, drafts, UploadInspection.safe(MediaType.ALL));
 
-        assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.ALL, pdfBytes())))
+        assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.ALL, pdfBytes()), "wildcard-declared"))
                 .isInstanceOf(UploadRejectedException.class)
                 .hasMessageContaining("MIME");
         var detectedWildcard = service(blobs, drafts, UploadInspection.safe(MediaType.parseMediaType("application/*")));
-        assertThatThrownBy(() -> detectedWildcard.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes())))
+        assertThatThrownBy(() -> detectedWildcard.accept(
+                command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "wildcard-detected"))
                 .isInstanceOf(UploadRejectedException.class)
                 .hasMessageContaining("MIME");
         assertThat(blobs.values).isEmpty();
     }
 
+    @Test
+    @DisplayName("上传草稿时在同一业务动作中登记解析任务")
+    void enqueuesIngestionForCreatedDraft() {
+        var blobs = new InMemoryBlobStore();
+        var drafts = new RecordingDraftGateway();
+        var jobs = new RecordingJobs();
+        var service = service(blobs, drafts, jobs, UploadInspection.safe(MediaType.APPLICATION_PDF));
+
+        var version = service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "enqueue-once");
+
+        assertThat(jobs.requests).singleElement().satisfies(request -> {
+            assertThat(request.documentVersion()).isEqualTo(version);
+            assertThat(request.actorId()).isEqualTo(ACTOR_ID);
+            assertThat(request.sourceBlobId()).isEqualTo("blobs/sha256/" + request.sha256());
+            assertThat(request.filename()).isEqualTo("a.pdf");
+            assertThat(request.mediaType()).isEqualTo(MediaType.APPLICATION_PDF_VALUE);
+            assertThat(request.sizeBytes()).isEqualTo(pdfBytes().length);
+        });
+    }
+
+    @Test
+    @DisplayName("相同幂等键与相同请求复用版本，异文件返回冲突且不重复入队")
+    void enforcesUploadIdempotencyAcrossFileContent() {
+        var blobs = new InMemoryBlobStore();
+        var drafts = new RecordingDraftGateway();
+        var jobs = new RecordingJobs();
+        var service = service(blobs, drafts, jobs, UploadInspection.safe(MediaType.APPLICATION_PDF));
+
+        var first = service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "same-key");
+        var replay = service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "same-key");
+
+        assertThat(replay).isEqualTo(first);
+        assertThat(drafts.created).isEqualTo(1);
+        assertThat(jobs.requests).hasSize(1);
+        assertThatThrownBy(() -> service.accept(
+                command("a.pdf", MediaType.APPLICATION_PDF, "%PDF-different".getBytes()), "same-key"))
+                .isInstanceOf(IdempotencyConflictException.class);
+        assertThat(drafts.created).isEqualTo(1);
+        assertThat(jobs.requests).hasSize(1);
+    }
+
     private static void assertRejectedWithoutBlob(UploadCommand command, UploadInspection inspection) {
         var blobs = new InMemoryBlobStore();
         var service = service(blobs, new RecordingDraftGateway(), inspection);
-        assertThatThrownBy(() -> service.accept(command)).isInstanceOf(UploadRejectedException.class);
+        assertThatThrownBy(() -> service.accept(command, "unsafe"))
+                .isInstanceOf(UploadRejectedException.class);
         assertThat(blobs.values).isEmpty();
     }
 
@@ -205,9 +261,25 @@ class UploadServiceTest {
             BlobStore blobs,
             DocumentDraftGateway drafts,
             UploadInspection inspection) {
+        return service(blobs, drafts, new RecordingJobs(), inspection);
+    }
+
+    private static UploadService service(
+            BlobStore blobs,
+            DocumentDraftGateway drafts,
+            RecordingJobs jobs,
+            UploadInspection inspection) {
         return new UploadService(
                 UploadPolicy.defaults(), new FileSystemUploadSpooler(),
-                (path, filename, mediaType) -> inspection, blobs, drafts);
+                (path, filename, mediaType) -> inspection, blobs, drafts,
+                jobs, idempotency(), com.yunjihai.rag.audit.AuditSink.noop());
+    }
+
+    private static IdempotencyService idempotency() {
+        return new IdempotencyService(
+                new InMemoryIdempotencyStore(), new ObjectMapper(),
+                Clock.fixed(Instant.parse("2026-09-24T08:00:00Z"), ZoneOffset.UTC),
+                Duration.ofHours(24));
     }
 
     private static UploadCommand command(String filename, MediaType mediaType, byte[] bytes) {
@@ -228,10 +300,50 @@ class UploadServiceTest {
         private int created;
 
         @Override
-        public DocumentVersionId createDraft(ValidatedUpload command) {
+        public DraftResult createDraft(ValidatedUpload command) {
             created++;
-            return new DocumentVersionId(UUID.randomUUID(), UUID.randomUUID());
+            return new DraftResult(
+                    new DocumentVersionId(UUID.randomUUID(), UUID.randomUUID()), true);
         }
+    }
+
+    private static final class RecordingJobs implements Function<IngestionRequest, UUID> {
+        private final List<IngestionRequest> requests = new ArrayList<>();
+
+        @Override
+        public UUID apply(IngestionRequest request) {
+            requests.add(request);
+            return UUID.randomUUID();
+        }
+    }
+
+    private static final class InMemoryIdempotencyStore implements IdempotencyStore {
+        private final Map<IdempotencyScope, Entry> entries = new HashMap<>();
+
+        @Override
+        public Claim claim(IdempotencyScope scope, String requestHash, Instant now, Instant expiresAt) {
+            var existing = entries.get(scope);
+            if (existing == null) {
+                entries.put(scope, new Entry(requestHash, null));
+                return new Claim.Acquired();
+            }
+            if (!existing.requestHash.equals(requestHash)) return new Claim.HashMismatch();
+            if (existing.result == null) return new Claim.InProgress();
+            return new Claim.Completed(existing.result);
+        }
+
+        @Override
+        public void complete(
+                IdempotencyScope scope, String requestHash, StoredHttpResult result, Instant at) {
+            entries.put(scope, new Entry(requestHash, result));
+        }
+
+        @Override
+        public void release(IdempotencyScope scope, String requestHash) {
+            entries.remove(scope);
+        }
+
+        private record Entry(String requestHash, StoredHttpResult result) { }
     }
 
     private static final class InMemoryBlobStore implements BlobStore {

@@ -38,6 +38,11 @@ public class MinioAdapterConfiguration {
         return new MinioBlobStore(properties.bucket(), objects, orphanRecorder);
     }
 
+    @Bean
+    MinioBlobReader minioBlobReader(MinioClient client, MinioClientProperties properties) {
+        return new MinioBlobReader(client, properties.bucket());
+    }
+
     @Bean(name = "minio")
     MinioReadinessHealthIndicator minioReadinessHealthIndicator(
             MinioClient client,

@@ -17,13 +17,16 @@ public final class DocumentServiceDraftGateway implements DocumentDraftGateway {
     }
 
     @Override
-    public DocumentVersionId createDraft(ValidatedUpload command) {
-        var version = documents.createOrReuseDraft(
+    public DraftResult createDraft(ValidatedUpload command) {
+        var result = documents.createOrReuseDraft(
                 command.spaceId(),
                 command.title(),
                 command.blob().objectKey(),
                 command.actorId(),
                 Instant.now(clock));
-        return new DocumentVersionId(version.documentId(), version.versionId());
+        var version = result.version();
+        return new DraftResult(
+                new DocumentVersionId(version.documentId(), version.versionId()),
+                result.created());
     }
 }

@@ -17,6 +17,20 @@ spring:
     locations: classpath:db/migration
     validate-on-migrate: true
 rag:
+  workers:
+    enabled: ${RAG_WORKERS_ENABLED:true}
+  upload:
+    quarantine-directory: ${RAG_UPLOAD_QUARANTINE_DIRECTORY:}
+  parser:
+    endpoint: ${RAG_PARSER_ENDPOINT:http://127.0.0.1:8010}
+    connect-timeout: ${RAG_PARSER_CONNECT_TIMEOUT:PT3S}
+  ingestion:
+    worker:
+      id: ${RAG_INGESTION_WORKER_ID:local-ingestion-worker}
+      poll-delay: ${RAG_INGESTION_POLL_DELAY:PT1S}
+      lease-duration: ${RAG_INGESTION_LEASE_DURATION:PT10M}
+      temp-directory: ${RAG_PARSER_TEMP_DIRECTORY:}
+      parser-timeout-seconds: ${RAG_PARSER_TIMEOUT_SECONDS:300}
   identity:
     login-source-hmac-key: ${RAG_LOGIN_SOURCE_HMAC_KEY:local-development-login-source-key}
   bootstrap-admin:
@@ -37,6 +51,9 @@ rag:
     connect-timeout: ${RAG_OPENSEARCH_CONNECT_TIMEOUT:PT3S}
     response-timeout: ${RAG_OPENSEARCH_RESPONSE_TIMEOUT:PT10S}
     worker:
+      id: ${RAG_OPENSEARCH_WORKER_ID:local-projection-worker}
+      target-index: ${RAG_OPENSEARCH_TARGET_INDEX:rag-chunks-write}
+      poll-delay: ${RAG_OPENSEARCH_POLL_DELAY:PT1S}
       batch-size: ${RAG_OPENSEARCH_WORKER_BATCH_SIZE:20}
       space-page-size: ${RAG_OPENSEARCH_SPACE_PAGE_SIZE:100}
       lease-duration: ${RAG_OPENSEARCH_LEASE_DURATION:PT2M}

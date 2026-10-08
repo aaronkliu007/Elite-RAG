@@ -33,8 +33,10 @@ import com.yunjihai.rag.ingestion.DocumentDraftGateway;
 import com.yunjihai.rag.ingestion.DocumentServiceDraftGateway;
 import com.yunjihai.rag.ingestion.IngestionJobRepository;
 import com.yunjihai.rag.ingestion.IngestionJobService;
+import com.yunjihai.rag.ingestion.IngestionWorkerPolicy;
 import com.yunjihai.rag.ingestion.OrphanBlobRecorder;
 import com.yunjihai.rag.ingestion.ParsedDocumentStore;
+import com.yunjihai.rag.infrastructure.minio.MinioBlobReader;
 import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
 import com.yunjihai.rag.knowledge.DocumentRepository;
@@ -403,8 +405,8 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
-    DocumentContentGateway documentContentGateway() {
-        return DocumentContentGateway.unavailable();
+    DocumentContentGateway documentContentGateway(JdbcClient jdbc, MinioBlobReader blobs) {
+        return new JdbcDocumentContentGateway(jdbc, blobs);
     }
 
     @Bean
@@ -443,8 +445,9 @@ public class PostgresAdapterConfiguration {
             ParsedDocumentStore parsedDocuments,
             DocumentService documents,
             AuditService audit,
-            Clock clock) {
+            Clock clock,
+            IngestionWorkerPolicy workerPolicy) {
         return new IngestionJobService(jobs, parsedDocuments, documents, audit,
-                clock, Duration.ofMinutes(2));
+                clock, workerPolicy.leaseDuration());
     }
 }
