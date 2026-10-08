@@ -2,7 +2,6 @@ package com.yunjihai.rag.identity.web;
 
 import com.yunjihai.rag.identity.SessionRevocationService;
 import com.yunjihai.rag.identity.local.LocalAuthenticationService;
-import com.yunjihai.rag.identity.local.AuthenticationRejectedException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -15,7 +14,6 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -92,11 +90,6 @@ public class SessionController {
     @GetMapping("/csrf")
     public CsrfView csrf(CsrfToken token) {
         return new CsrfView(token.getHeaderName(), token.getParameterName(), token.getToken());
-    }
-
-    @ExceptionHandler(AuthenticationRejectedException.class)
-    @ResponseStatus(HttpStatus.UNAUTHORIZED)
-    public void authenticationRejected() {
     }
 
     public record LoginRequest(String username, char[] password) {

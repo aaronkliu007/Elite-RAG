@@ -1,20 +1,26 @@
 package com.yunjihai.rag.identity.web;
 
+import com.yunjihai.rag.api.ApiExceptionHandler;
 import com.yunjihai.rag.identity.SessionRevocationService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.HttpSessionCsrfTokenRepository;
+import tools.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
 import java.time.Clock;
+import java.util.Map;
 
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "rag.session", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -39,7 +45,8 @@ public class SecurityConfiguration {
     SecurityFilterChain sessionSecurityFilterChain(
             HttpSecurity http,
             SecurityContextRepository securityContexts,
-            SessionVersionFilter sessionVersionFilter) throws Exception {
+            SessionVersionFilter sessionVersionFilter,
+            ObjectMapper json) throws Exception {
         var csrfTokens = new HttpSessionCsrfTokenRepository();
         csrfTokens.setHeaderName("X-CSRF-TOKEN");
         http
@@ -56,12 +63,31 @@ public class SecurityConfiguration {
                         .anyRequest().permitAll())
                 .exceptionHandling(exceptions -> exceptions
                         .authenticationEntryPoint((request, response, failure) ->
-                                response.sendError(HttpServletResponse.SC_UNAUTHORIZED)))
+                                writeError(request, response, json,
+                                        HttpServletResponse.SC_UNAUTHORIZED,
+                                        "UNAUTHORIZED", "请先登录"))
+                        .accessDeniedHandler((request, response, failure) ->
+                                writeError(request, response, json,
+                                        HttpServletResponse.SC_FORBIDDEN,
+                                        "FORBIDDEN", "无权执行此操作")))
                 .requestCache(cache -> cache.disable())
                 .httpBasic(basic -> basic.disable())
                 .formLogin(form -> form.disable())
                 .logout(logout -> logout.disable())
                 .addFilterAfter(sessionVersionFilter, SecurityContextHolderFilter.class);
         return http.build();
+    }
+
+    private static void writeError(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            ObjectMapper json,
+            int status,
+            String code,
+            String message) throws IOException {
+        response.setStatus(status);
+        response.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        json.writeValue(response.getOutputStream(), ApiExceptionHandler.error(code, message, request, Map.of()));
     }
 }

@@ -72,17 +72,18 @@ class SessionSecurityIntegrationTest {
 
     @Test
     void protectsApiWithCsrfAndIssuesHardenedRotatedSessionCookie() throws Exception {
-        assertThat(get("/api/v1/session/me", null).statusCode()).isEqualTo(401);
+        var unauthenticated = get("/api/v1/session/me", null);
+        assertError(unauthenticated, 401, "UNAUTHORIZED");
         CsrfSession csrf = csrf();
         assertThat(csrf.setCookie()).contains("HttpOnly", "Secure", "SameSite=Lax");
 
         var withoutCsrf = post("/api/v1/session/login", csrf.cookie(), null,
                 "{\"username\":\"alice\",\"password\":\"correct-password\"}");
-        assertThat(withoutCsrf.statusCode()).isEqualTo(403);
+        assertError(withoutCsrf, 403, "FORBIDDEN");
 
         var wrongPassword = post("/api/v1/session/login", csrf.cookie(), csrf,
                 "{\"username\":\"alice\",\"password\":\"wrong-password\"}");
-        assertThat(wrongPassword.statusCode()).isEqualTo(401);
+        assertError(wrongPassword, 401, "UNAUTHORIZED");
 
         var login = post("/api/v1/session/login", csrf.cookie(), csrf,
                 "{\"username\":\"alice\",\"password\":\"correct-password\"}");
@@ -144,6 +145,14 @@ class SessionSecurityIntegrationTest {
 
     private URI uri(String path) {
         return URI.create("http://127.0.0.1:" + port + path);
+    }
+
+    private void assertError(HttpResponse<String> response, int status, String code) {
+        assertThat(response.statusCode()).isEqualTo(status);
+        tools.jackson.databind.JsonNode json = objectMapper.readTree(response.body());
+        assertThat(json.get("code").asText()).isEqualTo(code);
+        assertThat(json.get("traceId").asText())
+                .isEqualTo(response.headers().firstValue("X-Request-Id").orElseThrow());
     }
 
     private static String cookie(HttpResponse<?> response) {

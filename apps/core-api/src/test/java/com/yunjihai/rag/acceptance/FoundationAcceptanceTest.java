@@ -150,8 +150,6 @@ class FoundationAcceptanceTest {
         assertThatThrownBy(() -> fixture.controller.downloadSource(
                 UNAUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
-        assertThat(fixture.controller.notFound().getStatusCode().value()).isEqualTo(404);
-
         fixture.aclService.revokeDocument(
                 AUTHORIZED_USER,
                 space.id(),

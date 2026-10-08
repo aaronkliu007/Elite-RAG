@@ -8,8 +8,6 @@ import com.yunjihai.rag.access.PrincipalMembershipSnapshot;
 import com.yunjihai.rag.access.PublicationState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.MediaType;
-import org.springframework.http.ProblemDetail;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.web.bind.annotation.PostMapping;
 
@@ -43,12 +41,6 @@ class KnowledgeAuthorizationTest {
         assertThatThrownBy(() -> fixture.controller.downloadSource(USER_ID, fixture.documentId, NOW))
                 .isExactlyInstanceOf(AccessDeniedAsNotFoundException.class);
         assertThat(fixture.contentGateway.readCount).isZero();
-        assertThat(fixture.controller.notFound())
-                .satisfies(response -> {
-                    assertThat(response.getHeaders().getContentType())
-                            .isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
-                    assertThat(response.getBody()).isInstanceOf(ProblemDetail.class);
-                });
     }
 
     @Test

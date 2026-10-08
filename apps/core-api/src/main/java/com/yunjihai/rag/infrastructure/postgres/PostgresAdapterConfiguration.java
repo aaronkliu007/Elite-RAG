@@ -13,6 +13,8 @@ import com.yunjihai.rag.audit.AuditService;
 import com.yunjihai.rag.access.role.RbacKnowledgeAuthorization;
 import com.yunjihai.rag.access.role.RoleAssignmentService;
 import com.yunjihai.rag.access.role.RoleAssignmentStore;
+import com.yunjihai.rag.api.idempotency.IdempotencyService;
+import com.yunjihai.rag.api.idempotency.IdempotencyStore;
 import com.yunjihai.rag.identity.local.BootstrapAdministrator;
 import com.yunjihai.rag.identity.local.BootstrapAdminProperties;
 import com.yunjihai.rag.identity.OrganizationReconciliationPort;
@@ -64,6 +66,7 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.StringJoiner;
+import tools.jackson.databind.ObjectMapper;
 
 @Configuration(proxyBeanMethods = false)
 @Profile("local")
@@ -104,6 +107,11 @@ public class PostgresAdapterConfiguration {
     @Bean
     JdbcRoleAssignmentStore jdbcRoleAssignmentStore(JdbcClient jdbc) {
         return new JdbcRoleAssignmentStore(jdbc);
+    }
+
+    @Bean
+    JdbcIdempotencyStore jdbcIdempotencyStore(JdbcClient jdbc) {
+        return new JdbcIdempotencyStore(jdbc);
     }
 
     @Bean
@@ -279,6 +287,15 @@ public class PostgresAdapterConfiguration {
             ProjectionChangePublisher projections,
             KnowledgeWriteAuthorization authorization) {
         return new RoleAssignmentService(roles, acl, audit, projections, authorization);
+    }
+
+    @Bean
+    IdempotencyService idempotencyService(
+            IdempotencyStore store,
+            ObjectMapper json,
+            Clock clock,
+            @Value("${rag.idempotency.retention:24h}") Duration retention) {
+        return new IdempotencyService(store, json, clock, retention);
     }
 
     @Bean

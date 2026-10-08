@@ -5,11 +5,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
-import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -91,16 +88,6 @@ public class KnowledgeController {
     @PostMapping("/documents/{documentId}/archive")
     public DocumentView archive(Authentication authentication, @PathVariable UUID documentId) {
         return DocumentView.management(documents.archive(documentId, userId(authentication), Instant.now()));
-    }
-
-    @ExceptionHandler({AccessDeniedAsNotFoundException.class, KnowledgeNotFoundException.class})
-    public ResponseEntity<ProblemDetail> notFound() {
-        var problem = ProblemDetail.forStatusAndDetail(
-                HttpStatus.NOT_FOUND, "资源不存在或无权访问");
-        problem.setTitle("资源不存在");
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(problem);
     }
 
     private static ResponseEntity<byte[]> response(DocumentContent content, boolean attachment) {
