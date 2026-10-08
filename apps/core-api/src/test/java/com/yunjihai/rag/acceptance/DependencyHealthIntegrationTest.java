@@ -85,6 +85,7 @@ class DependencyHealthIntegrationTest {
         properties.put("rag.minio.secret-key", LocalFoundationInfrastructure.MINIO_APP_PASSWORD);
         properties.put("rag.minio.bucket", LocalFoundationInfrastructure.BUCKET);
         properties.put("rag.opensearch.enabled", "false");
+        properties.put("rag.bootstrap-admin.enabled", "false");
         properties.put("management.endpoint.health.group.readiness.include", "readinessState,db,minio");
         properties.put("spring.autoconfigure.exclude", String.join(",",
                 "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration",

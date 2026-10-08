@@ -143,6 +143,9 @@ class PostgresFoundationAcceptanceTest {
     static void localProperties(DynamicPropertyRegistry properties) {
         LocalFoundationInfrastructure.start();
         LocalFoundationInfrastructure.register(properties);
+        properties.add("rag.bootstrap-admin.username", () -> "acceptance-admin");
+        properties.add("rag.bootstrap-admin.password", () -> "acceptance-admin-password");
+        properties.add("rag.bootstrap-admin.display-name", () -> "Acceptance Admin");
     }
 
     @BeforeEach

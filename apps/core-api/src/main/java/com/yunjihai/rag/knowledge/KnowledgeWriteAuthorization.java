@@ -13,6 +13,7 @@ public interface KnowledgeWriteAuthorization {
         CREATE_SPACE,
         CREATE_DOCUMENT,
         EDIT_DOCUMENT,
+        SUBMIT_FOR_REVIEW,
         REVIEW_DOCUMENT,
         PUBLISH_DOCUMENT,
         ARCHIVE_DOCUMENT,

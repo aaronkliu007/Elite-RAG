@@ -19,6 +19,11 @@ spring:
 rag:
   identity:
     login-source-hmac-key: ${RAG_LOGIN_SOURCE_HMAC_KEY:local-development-login-source-key}
+  bootstrap-admin:
+    enabled: ${RAG_BOOTSTRAP_ADMIN_ENABLED:true}
+    username: ${RAG_BOOTSTRAP_ADMIN_USERNAME:}
+    password: ${RAG_BOOTSTRAP_ADMIN_PASSWORD:}
+    display-name: ${RAG_BOOTSTRAP_ADMIN_DISPLAY_NAME:}
   minio:
     endpoint: ${RAG_MINIO_ENDPOINT:http://127.0.0.1:9000}
     access-key: ${RAG_MINIO_ACCESS_KEY}

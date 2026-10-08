@@ -124,7 +124,7 @@ public class DocumentService {
 
     @Transactional
     public DocumentAggregate submitForReview(UUID documentId, UUID versionId, UUID actorId, Instant at) {
-        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.REVIEW_DOCUMENT,
+        var updated = mutateAuthorized(documentId, actorId, KnowledgeWriteAuthorization.Action.SUBMIT_FOR_REVIEW,
                 document -> document.submitForReview(versionId, actorId, at));
         record(actorId, AuditAction.REVIEW, "DOCUMENT_VERSION", versionId, updated);
         return updated;

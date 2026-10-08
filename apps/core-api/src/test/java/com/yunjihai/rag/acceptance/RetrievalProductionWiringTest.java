@@ -3,6 +3,7 @@ package com.yunjihai.rag.acceptance;
 import com.yunjihai.rag.RagApplication;
 import com.yunjihai.rag.access.PrincipalRef;
 import com.yunjihai.rag.access.PrincipalType;
+import com.yunjihai.rag.access.role.RbacKnowledgeAuthorization;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchClientFactory;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchConnection;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchIndexManager;
@@ -14,6 +15,7 @@ import com.yunjihai.rag.retrieval.domain.DegradationReason;
 import com.yunjihai.rag.retrieval.domain.RetrievalFilter;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
 import com.yunjihai.rag.retrieval.search.HybridRecallService;
+import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -79,6 +81,8 @@ class RetrievalProductionWiringTest {
             assertThat(context.getBean(ProjectionWorker.class)).isNotNull();
             assertThat(context.getBean(OpenSearchRebuildService.class)).isNotNull();
             assertThat(context.getBean(TrustedRetrievalService.class)).isNotNull();
+            assertThat(context.getBean(KnowledgeWriteAuthorization.class))
+                    .isInstanceOf(RbacKnowledgeAuthorization.class);
 
             var health = context.getBean(HealthContributorRegistry.class);
             assertHealth(health, "opensearchRead", Status.UP);
@@ -135,6 +139,9 @@ class RetrievalProductionWiringTest {
                 Map.entry("rag.opensearch.enabled", "true"),
                 Map.entry("rag.opensearch.endpoint", endpoint.toString()),
                 Map.entry("rag.retrieval.vector.enabled", "false"),
+                Map.entry("rag.bootstrap-admin.username", "wiring-admin"),
+                Map.entry("rag.bootstrap-admin.password", "wiring-admin-password"),
+                Map.entry("rag.bootstrap-admin.display-name", "Wiring Admin"),
                 Map.entry("spring.autoconfigure.exclude", String.join(",",
                         "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration",
                         "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration",

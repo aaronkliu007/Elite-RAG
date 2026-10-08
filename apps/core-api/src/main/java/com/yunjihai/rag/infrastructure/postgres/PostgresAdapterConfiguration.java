@@ -10,6 +10,11 @@ import com.yunjihai.rag.access.EffectivePrincipalSet;
 import com.yunjihai.rag.access.PrincipalMembershipRepository;
 import com.yunjihai.rag.audit.AuditEventStore;
 import com.yunjihai.rag.audit.AuditService;
+import com.yunjihai.rag.access.role.RbacKnowledgeAuthorization;
+import com.yunjihai.rag.access.role.RoleAssignmentService;
+import com.yunjihai.rag.access.role.RoleAssignmentStore;
+import com.yunjihai.rag.identity.local.BootstrapAdministrator;
+import com.yunjihai.rag.identity.local.BootstrapAdminProperties;
 import com.yunjihai.rag.identity.OrganizationReconciliationPort;
 import com.yunjihai.rag.identity.OrganizationSyncService;
 import com.yunjihai.rag.identity.SessionRevocationService;
@@ -46,6 +51,8 @@ import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
@@ -61,6 +68,7 @@ import java.util.StringJoiner;
 @Configuration(proxyBeanMethods = false)
 @Profile("local")
 @EnableTransactionManagement(proxyTargetClass = true)
+@EnableConfigurationProperties(BootstrapAdminProperties.class)
 public class PostgresAdapterConfiguration {
 
     @Bean
@@ -91,6 +99,11 @@ public class PostgresAdapterConfiguration {
     @Bean
     JdbcLocalCredentialStore jdbcLocalCredentialStore(JdbcClient jdbc) {
         return new JdbcLocalCredentialStore(jdbc);
+    }
+
+    @Bean
+    JdbcRoleAssignmentStore jdbcRoleAssignmentStore(JdbcClient jdbc) {
+        return new JdbcRoleAssignmentStore(jdbc);
     }
 
     @Bean
@@ -254,8 +267,32 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
-    KnowledgeWriteAuthorization knowledgeWriteAuthorization() {
-        return KnowledgeWriteAuthorization.denyAll();
+    KnowledgeWriteAuthorization knowledgeWriteAuthorization(RoleAssignmentStore roles) {
+        return new RbacKnowledgeAuthorization(roles);
+    }
+
+    @Bean
+    RoleAssignmentService roleAssignmentService(
+            RoleAssignmentStore roles,
+            AclCommandRepository acl,
+            AuditService audit,
+            ProjectionChangePublisher projections,
+            KnowledgeWriteAuthorization authorization) {
+        return new RoleAssignmentService(roles, acl, audit, projections, authorization);
+    }
+
+    @Bean
+    @ConditionalOnProperty(
+            prefix = "rag.bootstrap-admin",
+            name = "enabled",
+            havingValue = "true",
+            matchIfMissing = true)
+    BootstrapAdministrator bootstrapAdministrator(
+            UserAdministrationService users,
+            RoleAssignmentService roles,
+            BootstrapAdminProperties properties,
+            Clock clock) {
+        return new BootstrapAdministrator(users, roles, properties, clock);
     }
 
     @Bean
