@@ -32,11 +32,6 @@ public class KnowledgeController {
         this.documents = documents;
     }
 
-    @PostMapping
-    public KnowledgeSpace createSpace(Authentication authentication, @RequestBody CreateSpaceRequest request) {
-        return spaces.createSpace(request.name(), userId(authentication), Instant.now());
-    }
-
     @GetMapping("/{spaceId}/documents")
     public List<DocumentView> listDocuments(Authentication authentication, @PathVariable UUID spaceId) {
         return documents.listAuthorizedDocuments(userId(authentication), spaceId, Instant.now()).stream()
@@ -110,9 +105,6 @@ public class KnowledgeController {
         } catch (IllegalArgumentException exception) {
             throw new AccessDeniedAsNotFoundException();
         }
-    }
-
-    public record CreateSpaceRequest(String name) {
     }
 
 }

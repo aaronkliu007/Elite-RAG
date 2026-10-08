@@ -6,7 +6,6 @@ import com.yunjihai.rag.api.idempotency.StoredHttpResult;
 import com.yunjihai.rag.common.UuidV7;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -22,7 +21,7 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
     public Claim claim(IdempotencyScope scope, String requestHash, Instant now, Instant expiresAt) {
         requireClaim(scope, requestHash, now, expiresAt);
         try {
@@ -75,7 +74,7 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
     public void complete(
             IdempotencyScope scope, String requestHash, StoredHttpResult result, Instant at) {
         Objects.requireNonNull(scope);
@@ -106,7 +105,7 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     }
 
     @Override
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Transactional
     public void release(IdempotencyScope scope, String requestHash) {
         Objects.requireNonNull(scope);
         Objects.requireNonNull(requestHash);

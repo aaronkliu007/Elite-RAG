@@ -10,12 +10,15 @@ import org.springframework.security.authentication.AuthenticationCredentialsNotF
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -68,6 +71,15 @@ class ApiExceptionHandlerTest {
         assertThat(result.getResponse().getContentAsString()).contains(traceId);
     }
 
+    @Test
+    void missingRequiredHeaderUsesStableBadRequestEnvelope() throws Exception {
+        mvc.perform(post("/failure/required-header"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"))
+                .andExpect(jsonPath("$.message").value("请求参数不正确"))
+                .andExpect(jsonPath("$.traceId").isNotEmpty());
+    }
+
     private void assertError(String path, int statusCode, String code, String message) throws Exception {
         mvc.perform(get(path))
                 .andExpect(status().is(statusCode))
@@ -100,5 +112,9 @@ class ApiExceptionHandlerTest {
                     new DataAccessResourceFailureException(
                             "jdbc:postgresql://internal-db/rag select * from secret"));
         }
+
+
+        @PostMapping("/failure/required-header")
+        void requiredHeader(@RequestHeader("Idempotency-Key") String ignored) { }
     }
 }

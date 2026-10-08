@@ -1,6 +1,7 @@
 package com.yunjihai.rag.infrastructure.postgres;
 
 import com.yunjihai.rag.api.idempotency.IdempotencyScope;
+import com.yunjihai.rag.api.idempotency.IdempotencyService;
 import com.yunjihai.rag.api.idempotency.IdempotencyStore;
 import com.yunjihai.rag.api.idempotency.StoredHttpResult;
 import org.flywaydb.core.Flyway;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -20,8 +22,11 @@ import org.testcontainers.containers.PostgreSQLContainer;
 
 import javax.sql.DataSource;
 import java.sql.DriverManager;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -29,10 +34,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JdbcIdempotencyIntegrationTest {
     private static final Instant NOW = Instant.parse("2026-10-08T09:00:00Z");
     private static final UUID ACTOR = UUID.fromString("00000000-0000-7000-8000-000000000001");
+    private static final UUID EFFECT_USER = UUID.fromString("00000000-0000-7000-8000-000000000002");
     private static final String HASH = "a".repeat(64);
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
             .withDatabaseName("rag_idempotency_test")
@@ -69,6 +76,7 @@ class JdbcIdempotencyIntegrationTest {
     @AfterEach
     void clearRecords() {
         jdbc.sql("DELETE FROM idempotency_record").update();
+        jdbc.sql("DELETE FROM app_user WHERE id = :id").param("id", EFFECT_USER).update();
     }
 
     @AfterAll
@@ -136,9 +144,34 @@ class JdbcIdempotencyIntegrationTest {
         }
     }
 
+    @Test
+    void businessWriteRollsBackWhenIdempotencyCompletionFails() {
+        var service = context.getBean(IdempotencyService.class);
+
+        assertThatThrownBy(() -> service.execute(
+                scope("atomic"), HASH, Effect.class, () -> {
+                    jdbc.sql("""
+                                    INSERT INTO app_user (id, external_id, display_name)
+                                    VALUES (:id, 'idempotency-effect', 'Idempotency Effect')
+                                    """)
+                            .param("id", EFFECT_USER)
+                            .update();
+                    return new Effect("saved");
+                }))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("simulated completion failure");
+
+        assertThat(jdbc.sql("SELECT count(*) FROM app_user WHERE id = :id")
+                .param("id", EFFECT_USER).query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM idempotency_record WHERE idempotency_key = 'atomic'")
+                .query(Long.class).single()).isZero();
+    }
+
     private static IdempotencyScope scope(String key) {
         return new IdempotencyScope(ACTOR, "document.upload", key);
     }
+
+    private record Effect(String value) {}
 
     @Configuration(proxyBeanMethods = false)
     @EnableTransactionManagement(proxyTargetClass = true)
@@ -150,5 +183,34 @@ class JdbcIdempotencyIntegrationTest {
         }
         @Bean JdbcClient jdbcClient(DataSource dataSource) { return JdbcClient.create(dataSource); }
         @Bean JdbcIdempotencyStore store(JdbcClient jdbc) { return new JdbcIdempotencyStore(jdbc); }
+        @Bean
+        @Primary
+        IdempotencyStore failingStore(JdbcIdempotencyStore delegate) {
+            return new IdempotencyStore() {
+                @Override
+                public Claim claim(IdempotencyScope scope, String requestHash, Instant now, Instant expiresAt) {
+                    return delegate.claim(scope, requestHash, now, expiresAt);
+                }
+
+                @Override
+                public void complete(
+                        IdempotencyScope scope, String requestHash, StoredHttpResult result, Instant at) {
+                    throw new IllegalStateException("simulated completion failure");
+                }
+
+                @Override
+                public void release(IdempotencyScope scope, String requestHash) {
+                    delegate.release(scope, requestHash);
+                }
+            };
+        }
+        @Bean
+        IdempotencyService idempotencyService(IdempotencyStore failingStore) {
+            return new IdempotencyService(
+                    failingStore,
+                    new tools.jackson.databind.ObjectMapper(),
+                    Clock.fixed(NOW, ZoneOffset.UTC),
+                    Duration.ofHours(24));
+        }
     }
 }

@@ -1,5 +1,6 @@
 package com.yunjihai.rag.api.idempotency;
 
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
 import java.security.MessageDigest;
@@ -11,7 +12,7 @@ import java.util.HexFormat;
 import java.util.Objects;
 import java.util.function.Supplier;
 
-public final class IdempotencyService {
+public class IdempotencyService {
     private static final Duration MINIMUM_RETENTION = Duration.ofHours(24);
     private final IdempotencyStore store;
     private final ObjectMapper json;
@@ -32,6 +33,7 @@ public final class IdempotencyService {
         }
     }
 
+    @Transactional
     public <T> T execute(
             IdempotencyScope scope,
             String requestHash,
