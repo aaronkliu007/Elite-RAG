@@ -10,6 +10,15 @@ spring:
     hibernate:
       ddl-auto: none
 
+server:
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        http-only: true
+        secure: true
+        same-site: lax
+
 management:
   endpoint:
     health:
@@ -17,6 +26,9 @@ management:
         enabled: true
 
 rag:
+  session:
+    enabled: true
+    absolute-timeout: 8h
   retrieval:
     vector:
       enabled: false

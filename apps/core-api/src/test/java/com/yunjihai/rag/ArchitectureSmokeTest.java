@@ -15,7 +15,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest(properties = {
         "spring.autoconfigure.exclude="
                 + "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration,"
-                + "org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration"
+                + "org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration",
+        "rag.session.enabled=false"
 })
 class ArchitectureSmokeTest {
 

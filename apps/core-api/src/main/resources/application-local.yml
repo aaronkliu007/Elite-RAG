@@ -17,6 +17,8 @@ spring:
     locations: classpath:db/migration
     validate-on-migrate: true
 rag:
+  identity:
+    login-source-hmac-key: ${RAG_LOGIN_SOURCE_HMAC_KEY:local-development-login-source-key}
   minio:
     endpoint: ${RAG_MINIO_ENDPOINT:http://127.0.0.1:9000}
     access-key: ${RAG_MINIO_ACCESS_KEY}

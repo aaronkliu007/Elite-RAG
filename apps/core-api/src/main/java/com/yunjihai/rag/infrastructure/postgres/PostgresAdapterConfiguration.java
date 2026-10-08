@@ -14,6 +14,13 @@ import com.yunjihai.rag.identity.OrganizationReconciliationPort;
 import com.yunjihai.rag.identity.OrganizationSyncService;
 import com.yunjihai.rag.identity.SessionRevocationService;
 import com.yunjihai.rag.identity.SessionVersionStore;
+import com.yunjihai.rag.identity.local.BCryptPasswordHasher;
+import com.yunjihai.rag.identity.local.LocalAuthenticationService;
+import com.yunjihai.rag.identity.local.LocalCredentialStore;
+import com.yunjihai.rag.identity.local.LoginSourceRateLimiter;
+import com.yunjihai.rag.identity.local.PasswordHasher;
+import com.yunjihai.rag.identity.local.UserAccountStore;
+import com.yunjihai.rag.identity.local.UserAdministrationService;
 import com.yunjihai.rag.ingestion.BlobCleanupEligibilityRepository;
 import com.yunjihai.rag.ingestion.DocumentDraftGateway;
 import com.yunjihai.rag.ingestion.DocumentServiceDraftGateway;
@@ -42,7 +49,9 @@ import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.beans.factory.annotation.Value;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -72,6 +81,28 @@ public class PostgresAdapterConfiguration {
     @Bean
     JdbcSessionVersionStore jdbcSessionVersionStore(JdbcClient jdbc) {
         return new JdbcSessionVersionStore(jdbc);
+    }
+
+    @Bean
+    JdbcUserAccountStore jdbcUserAccountStore(JdbcClient jdbc) {
+        return new JdbcUserAccountStore(jdbc);
+    }
+
+    @Bean
+    JdbcLocalCredentialStore jdbcLocalCredentialStore(JdbcClient jdbc) {
+        return new JdbcLocalCredentialStore(jdbc);
+    }
+
+    @Bean
+    JdbcLoginSourceRateLimiter jdbcLoginSourceRateLimiter(
+            JdbcClient jdbc,
+            @Value("${rag.identity.login-source-hmac-key}") String hmacKey) {
+        return new JdbcLoginSourceRateLimiter(jdbc, hmacKey.getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Bean
+    PasswordHasher localPasswordHasher() {
+        return new BCryptPasswordHasher();
     }
 
     @Bean
@@ -172,6 +203,35 @@ public class PostgresAdapterConfiguration {
     @Bean
     SessionRevocationService sessionRevocationService(SessionVersionStore sessions) {
         return new SessionRevocationService(sessions);
+    }
+
+    @Bean
+    LocalAuthenticationService localAuthenticationService(
+            UserAccountStore accounts,
+            LocalCredentialStore credentials,
+            LoginSourceRateLimiter sourceRateLimiter,
+            PasswordHasher passwordHasher,
+            Clock clock) {
+        char[] dummyPassword = "dummy-password-never-used".toCharArray();
+        try {
+            return new LocalAuthenticationService(
+                    accounts, credentials, sourceRateLimiter, passwordHasher, clock,
+                    passwordHasher.hash(dummyPassword));
+        } finally {
+            java.util.Arrays.fill(dummyPassword, '\0');
+        }
+    }
+
+    @Bean
+    UserAdministrationService userAdministrationService(
+            UserAccountStore accounts,
+            LocalCredentialStore credentials,
+            PasswordHasher passwordHasher,
+            SessionRevocationService sessions,
+            AuditService audit,
+            Clock clock) {
+        return new UserAdministrationService(
+                accounts, credentials, passwordHasher, sessions, audit, clock);
     }
 
     @Bean
