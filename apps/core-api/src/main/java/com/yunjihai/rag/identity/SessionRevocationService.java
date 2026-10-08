@@ -24,6 +24,11 @@ public final class SessionRevocationService {
         store.advanceVersion(userId);
     }
 
+    public void setEnabled(UUID userId, boolean enabled) {
+        store.setEnabled(userId, enabled);
+        store.advanceVersion(userId);
+    }
+
     public void assertActive(AuthenticatedSession session) {
         requireEnabled(session.userId());
         if (store.currentVersion(session.userId()) != session.version()) {
