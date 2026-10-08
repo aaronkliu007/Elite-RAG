@@ -1,4 +1,6 @@
 package com.yunjihai.rag.identity;
 
-public record AuthenticatedSession(String userExternalId, long version) {
+import java.util.UUID;
+
+public record AuthenticatedSession(UUID userId, long version) {
 }

@@ -1,5 +1,7 @@
 package com.yunjihai.rag.identity;
 
+import java.util.UUID;
+
 public final class SessionRevocationService {
 
     private final SessionVersionStore store;
@@ -8,29 +10,29 @@ public final class SessionRevocationService {
         this.store = store;
     }
 
-    public AuthenticatedSession issue(String userExternalId) {
-        requireEnabled(userExternalId);
-        return new AuthenticatedSession(userExternalId, store.currentVersion(userExternalId));
+    public AuthenticatedSession issue(UUID userId) {
+        requireEnabled(userId);
+        return new AuthenticatedSession(userId, store.currentVersion(userId));
     }
 
-    public void revokeAll(String userExternalId) {
-        store.advanceVersion(userExternalId);
+    public void revokeAll(UUID userId) {
+        store.advanceVersion(userId);
     }
 
-    public void disable(String userExternalId) {
-        store.setEnabled(userExternalId, false);
-        store.advanceVersion(userExternalId);
+    public void disable(UUID userId) {
+        store.setEnabled(userId, false);
+        store.advanceVersion(userId);
     }
 
     public void assertActive(AuthenticatedSession session) {
-        requireEnabled(session.userExternalId());
-        if (store.currentVersion(session.userExternalId()) != session.version()) {
+        requireEnabled(session.userId());
+        if (store.currentVersion(session.userId()) != session.version()) {
             throw new DisabledUserSessionException();
         }
     }
 
-    private void requireEnabled(String userExternalId) {
-        if (!store.isEnabled(userExternalId)) {
+    private void requireEnabled(UUID userId) {
+        if (!store.isEnabled(userId)) {
             throw new DisabledUserSessionException();
         }
     }

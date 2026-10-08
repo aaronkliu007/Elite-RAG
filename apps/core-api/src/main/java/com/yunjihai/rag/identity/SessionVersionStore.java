@@ -1,12 +1,14 @@
 package com.yunjihai.rag.identity;
 
+import java.util.UUID;
+
 public interface SessionVersionStore {
 
-    long currentVersion(String userExternalId);
+    long currentVersion(UUID userId);
 
-    long advanceVersion(String userExternalId);
+    long advanceVersion(UUID userId);
 
-    boolean isEnabled(String userExternalId);
+    boolean isEnabled(UUID userId);
 
-    void setEnabled(String userExternalId, boolean enabled);
+    void setEnabled(UUID userId, boolean enabled);
 }

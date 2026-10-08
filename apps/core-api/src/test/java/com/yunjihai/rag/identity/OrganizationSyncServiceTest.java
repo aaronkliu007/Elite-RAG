@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -15,10 +16,12 @@ class OrganizationSyncServiceTest {
     @Test
     @DisplayName("完整快照原子对账并撤销被停用用户的全部旧会话")
     void reconcilesCompleteSnapshotAndRevokesDisabledUsers() {
-        var organizationStore = new RecordingOrganizationStore(Set.of("u-disabled", "u-removed"));
+        UUID disabledUserId = UUID.randomUUID();
+        UUID removedUserId = UUID.randomUUID();
+        var organizationStore = new RecordingOrganizationStore(Set.of(disabledUserId, removedUserId));
         var sessionStore = new InMemorySessionVersionStore();
         var sessions = new SessionRevocationService(sessionStore);
-        var oldSession = sessions.issue("u-disabled");
+        var oldSession = sessions.issue(disabledUserId);
         var service = new OrganizationSyncService(organizationStore, sessions);
         var snapshot = new OrganizationSnapshot(
                 List.of(new ExternalDepartment("d-1", null, "研发中心")),
@@ -31,7 +34,7 @@ class OrganizationSyncServiceTest {
         assertThat(organizationStore.lastSnapshot).isEqualTo(snapshot);
         assertThatThrownBy(() -> sessions.assertActive(oldSession))
                 .isInstanceOf(DisabledUserSessionException.class);
-        assertThatThrownBy(() -> sessions.issue("u-disabled"))
+        assertThatThrownBy(() -> sessions.issue(disabledUserId))
                 .isInstanceOf(DisabledUserSessionException.class);
     }
 
@@ -100,10 +103,10 @@ class OrganizationSyncServiceTest {
     }
 
     private static final class RecordingOrganizationStore implements OrganizationReconciliationPort {
-        private final Set<String> disabledUserIds;
+        private final Set<UUID> disabledUserIds;
         private OrganizationSnapshot lastSnapshot;
 
-        private RecordingOrganizationStore(Set<String> disabledUserIds) {
+        private RecordingOrganizationStore(Set<UUID> disabledUserIds) {
             this.disabledUserIds = disabledUserIds;
         }
 

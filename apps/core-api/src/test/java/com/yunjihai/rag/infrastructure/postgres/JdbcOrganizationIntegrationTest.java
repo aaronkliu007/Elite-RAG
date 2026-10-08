@@ -109,18 +109,21 @@ class JdbcOrganizationIntegrationTest {
     void removedOrDisabledUsersAreDisabledAndTheirSessionVersionAdvances() {
         service.synchronize(snapshot(List.of(department("root", null)),
                 List.of(user("removed", true, "root"), user("disabled", true, "root"))));
+        UUID removedId = id("app_user", "removed");
+        UUID disabledId = id("app_user", "disabled");
         service.synchronize(snapshot(List.of(department("root", null)),
                 List.of(user("disabled", false, "root"), user("new-inactive", false, "root"))));
-        assertFalse(versions.isEnabled("removed"));
-        assertFalse(versions.isEnabled("disabled"));
-        assertEquals(1, versions.currentVersion("removed"));
-        assertEquals(1, versions.currentVersion("disabled"));
-        assertFalse(versions.isEnabled("new-inactive"));
-        assertEquals(0, versions.currentVersion("new-inactive"));
+        UUID newInactiveId = id("app_user", "new-inactive");
+        assertFalse(versions.isEnabled(removedId));
+        assertFalse(versions.isEnabled(disabledId));
+        assertEquals(1, versions.currentVersion(removedId));
+        assertEquals(1, versions.currentVersion(disabledId));
+        assertFalse(versions.isEnabled(newInactiveId));
+        assertEquals(0, versions.currentVersion(newInactiveId));
         assertEquals(0L, count("org_membership"));
         service.synchronize(snapshot(List.of(department("root", null)), List.of(user("disabled", false, "root"))));
-        assertEquals(1, versions.currentVersion("removed"));
-        assertEquals(1, versions.currentVersion("disabled"));
+        assertEquals(1, versions.currentVersion(removedId));
+        assertEquals(1, versions.currentVersion(disabledId));
     }
 
     @Test
@@ -179,7 +182,7 @@ class JdbcOrganizationIntegrationTest {
         assertEquals(existingUserId, id("app_user", "u-0"));
         assertEquals(existingDepartmentId, id("org_unit", "root"));
         assertEquals(7, id("app_user", "u-16384").version());
-        assertTrue(versions.isEnabled("u-16384"));
+        assertTrue(versions.isEnabled(id("app_user", "u-16384")));
         assertEquals(1L, jdbc.sql("SELECT count(*) FROM org_membership AS m "
                         + "JOIN app_user AS u ON u.id = m.user_id "
                         + "JOIN org_unit AS d ON d.id = m.org_unit_id "
@@ -215,6 +218,7 @@ class JdbcOrganizationIntegrationTest {
     @Test
     void sessionDisableFailureRollsBackReconciliationAndVersionAdvance() {
         service.synchronize(snapshot(List.of(department("root", null)), List.of(user("alice", true, "root"))));
+        UUID aliceId = id("app_user", "alice");
         jdbc.sql("UPDATE app_user SET session_version = :max WHERE external_id = 'alice'")
                 .param("max", Long.MAX_VALUE).update();
         var failure = assertThrows(PostgresPersistenceExceptionTranslator.Failure.class, () -> service.synchronize(
@@ -225,8 +229,8 @@ class JdbcOrganizationIntegrationTest {
         assertNull(failure.getCause());
         assertEquals("root", jdbc.sql("SELECT name FROM org_unit WHERE external_id = 'root'").query(String.class).single());
         assertEquals(1L, count("org_unit"));
-        assertTrue(versions.isEnabled("alice"));
-        assertEquals(Long.MAX_VALUE, versions.currentVersion("alice"));
+        assertTrue(versions.isEnabled(aliceId));
+        assertEquals(Long.MAX_VALUE, versions.currentVersion(aliceId));
         assertEquals(1L, count("org_membership"));
     }
 

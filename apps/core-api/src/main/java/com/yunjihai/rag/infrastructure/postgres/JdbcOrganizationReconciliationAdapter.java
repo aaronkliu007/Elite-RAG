@@ -39,8 +39,7 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
         try {
             // The lock lasts through OrganizationSyncService.disable, so two imports cannot interleave.
             jdbc.sql("SELECT pg_advisory_xact_lock(20260929, 3)").query((rs, row) -> 1).single();
-            var previouslyEnabled = new HashSet<>(jdbc.sql("SELECT external_id FROM app_user WHERE enabled")
-                    .query(String.class).list());
+            var previouslyEnabled = enabledUserIdsByExternalId();
             stageSnapshotIds(snapshot);
             upsertDepartments(snapshot);
             var departmentIds = ids("org_unit");
@@ -54,8 +53,8 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
             for (var user : snapshot.users()) {
                 if (user.active()) active.add(user.externalId());
             }
-            previouslyEnabled.removeAll(active);
-            return new ReconciliationResult(previouslyEnabled);
+            previouslyEnabled.keySet().removeAll(active);
+            return new ReconciliationResult(Set.copyOf(previouslyEnabled.values()));
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }
@@ -189,6 +188,15 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
     private Map<String, UUID> ids(String table) {
         var result = new HashMap<String, UUID>();
         jdbc.sql("SELECT external_id, id FROM " + table).query((rs, row) -> {
+            result.put(rs.getString("external_id"), rs.getObject("id", UUID.class));
+            return 1;
+        }).list();
+        return result;
+    }
+
+    private Map<String, UUID> enabledUserIdsByExternalId() {
+        var result = new HashMap<String, UUID>();
+        jdbc.sql("SELECT external_id, id FROM app_user WHERE enabled").query((rs, row) -> {
             result.put(rs.getString("external_id"), rs.getObject("id", UUID.class));
             return 1;
         }).list();
