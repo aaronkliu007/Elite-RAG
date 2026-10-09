@@ -469,8 +469,6 @@ class TrustedRetrievalServiceTest {
 
     private static void assertBodyFreeMetadata(AuditCommand command) {
         assertThat(command.metadata().keySet()).containsExactlyInAnyOrder(
-                "requestId",
-                "spaceId",
                 "queryHash",
                 "lexicalCount",
                 "vectorCount",

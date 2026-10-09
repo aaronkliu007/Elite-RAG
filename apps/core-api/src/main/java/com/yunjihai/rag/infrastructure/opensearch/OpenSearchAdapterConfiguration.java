@@ -152,7 +152,13 @@ public class OpenSearchAdapterConfiguration {
     VectorRetriever vectorRetriever(
             OpenSearchClient client, EmbeddingPort embeddings,
             OpenSearchRecallQueryFactory queries, OpenSearchCandidateMapper mapper,
+            @Value("${rag.retrieval.vector.enabled:false}") boolean enabled,
             @Value("${rag.retrieval.vector.dimension:1536}") int dimension) {
+        if (!enabled) {
+            return (queryText, filter, limit) -> {
+                throw new EmbeddingUnavailableException("EMBEDDING_DISABLED");
+            };
+        }
         return new OpenSearchVectorRetriever(
                 client, OpenSearchIndexManager.READ_ALIAS, embeddings, dimension, queries, mapper);
     }

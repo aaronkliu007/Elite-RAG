@@ -11,6 +11,8 @@ import com.yunjihai.rag.ingestion.UploadRejectedException;
 import com.yunjihai.rag.ingestion.UploadConflictException;
 import com.yunjihai.rag.knowledge.DocumentLifecycleException;
 import com.yunjihai.rag.knowledge.KnowledgeNotFoundException;
+import com.yunjihai.rag.retrieval.RetrievalAuthorizationUnavailableException;
+import com.yunjihai.rag.retrieval.search.RetrievalUnavailableException;
 import com.yunjihai.rag.solution.generation.GenerationRequestConflictException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -113,6 +115,16 @@ public class ApiExceptionHandler {
                 HttpStatus.SERVICE_UNAVAILABLE,
                 "SERVICE_UNAVAILABLE",
                 "服务暂时不可用",
+                request,
+                Map.of());
+    }
+
+    @ExceptionHandler({RetrievalUnavailableException.class, RetrievalAuthorizationUnavailableException.class})
+    ResponseEntity<ApiError> retrievalUnavailable(Exception failure, HttpServletRequest request) {
+        return response(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "RETRIEVAL_UNAVAILABLE",
+                "检索服务暂时不可用",
                 request,
                 Map.of());
     }

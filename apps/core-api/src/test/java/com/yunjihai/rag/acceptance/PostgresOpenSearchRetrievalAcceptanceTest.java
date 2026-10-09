@@ -9,6 +9,8 @@ import com.yunjihai.rag.retrieval.TrustedRetrievalService;
 import com.yunjihai.rag.retrieval.domain.DegradationReason;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
 import com.yunjihai.rag.retrieval.domain.RetrievalQuery;
+import com.yunjihai.rag.retrieval.embedding.EmbeddingPort;
+import com.yunjihai.rag.retrieval.embedding.EmbeddingUnavailableException;
 import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
 import org.junit.jupiter.api.AfterAll;
@@ -16,6 +18,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -33,6 +38,7 @@ import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -48,6 +54,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                     .withStartupTimeout(Duration.ofMinutes(3)));
     private static final String INDEX = "chunks-acceptance";
     private static URI endpoint;
+    private static final AtomicInteger EMBEDDING_CALLS = new AtomicInteger();
 
     @BeforeAll
     static void startInfrastructure() throws Exception {
@@ -69,7 +76,8 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
     }
 
     @Test
-    void staleOpenSearchGrantIsRemovedByFinalPostgresAuthorization() throws Exception {
+    void filtersStaleCandidateAfterRevocation() throws Exception {
+        EMBEDDING_CALLS.set(0);
         try (var context = startContext()) {
             var jdbc = context.getBean(JdbcClient.class);
             UUID user = UUID.randomUUID();
@@ -100,6 +108,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             assertThat(first.degradationReasons()).contains(
                     DegradationReason.VECTOR_UNAVAILABLE,
                     DegradationReason.RERANKER_UNAVAILABLE);
+            assertThat(EMBEDDING_CALLS).hasValue(0);
 
             jdbc.sql("UPDATE acl_entry SET revoked_at = :at WHERE id = :id")
                     .param("at", OffsetDateTime.now(ZoneOffset.UTC))
@@ -116,6 +125,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             assertThat(afterRevocation.stats().fusedCount()).isEqualTo(1);
             assertThat(afterRevocation.stats().reauthorizedCount()).isZero();
             assertThat(afterRevocation.evidence()).isEmpty();
+            assertThat(EMBEDDING_CALLS).hasValue(0);
         }
     }
 
@@ -185,10 +195,22 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                         "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration",
                         "org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration")),
                 Map.entry("logging.level.root", "ERROR"));
-        return new SpringApplicationBuilder(RagApplication.class)
+        return new SpringApplicationBuilder(RagApplication.class, CountingEmbeddingConfiguration.class)
                 .profiles("local")
                 .initializers(application -> application.getEnvironment().getPropertySources()
                         .addFirst(new MapPropertySource("retrieval-acceptance-test", properties)))
                 .run();
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    static class CountingEmbeddingConfiguration {
+        @Bean
+        @Primary
+        EmbeddingPort countingEmbeddingPort() {
+            return text -> {
+                EMBEDDING_CALLS.incrementAndGet();
+                throw new EmbeddingUnavailableException("test embedding must not be called");
+            };
+        }
     }
 }

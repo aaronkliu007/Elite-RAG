@@ -230,8 +230,6 @@ public final class TrustedRetrievalService implements RetrievalService {
                 .sorted()
                 .toList();
         var metadata = Map.ofEntries(
-                Map.entry("requestId", query.requestId().toString()),
-                Map.entry("spaceId", query.spaceId().toString()),
                 Map.entry("queryHash", sha256(query.queryText())),
                 Map.entry("lexicalCount", Integer.toString(stats.lexicalCount())),
                 Map.entry("vectorCount", Integer.toString(stats.vectorCount())),
