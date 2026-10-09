@@ -1,10 +1,13 @@
 import { createRouter, createWebHistory, type RouterHistory } from 'vue-router'
 
+import { adminApi } from '../api/admin'
 import { useSessionStore } from '../stores/session'
 import DocumentDetailView from '../views/DocumentDetailView.vue'
 import KnowledgeHomeView from '../views/KnowledgeHomeView.vue'
 import LoginView from '../views/LoginView.vue'
+import SpaceDetailView from '../views/SpaceDetailView.vue'
 import UploadView from '../views/UploadView.vue'
+import UserAdminView from '../views/UserAdminView.vue'
 
 export function createAppRouter(history: RouterHistory = createWebHistory()) {
   const router = createRouter({
@@ -31,6 +34,17 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
         name: 'document-upload',
         component: UploadView,
       },
+      {
+        path: '/spaces/:spaceId',
+        name: 'space-detail',
+        component: SpaceDetailView,
+      },
+      {
+        path: '/admin/users',
+        name: 'user-admin',
+        component: UserAdminView,
+        meta: { systemAdmin: true },
+      },
     ],
   })
 
@@ -45,6 +59,13 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
     }
     if (!session.authenticated) {
       return { name: 'login', query: { redirect: to.fullPath } }
+    }
+    if (to.meta.systemAdmin) {
+      try {
+        if (!(await adminApi.canManageUsers())) return { name: 'knowledge-home' }
+      } catch {
+        // Let the destination page render the service failure with a retry action.
+      }
     }
     return true
   })
