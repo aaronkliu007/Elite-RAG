@@ -39,9 +39,13 @@ import com.yunjihai.rag.ingestion.ParsedDocumentStore;
 import com.yunjihai.rag.infrastructure.minio.MinioBlobReader;
 import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
+import com.yunjihai.rag.knowledge.DocumentCreationAuthorization;
+import com.yunjihai.rag.knowledge.DocumentParseErrorQuery;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentReviewStore;
 import com.yunjihai.rag.knowledge.DocumentService;
+import com.yunjihai.rag.knowledge.DocumentStatus;
+import com.yunjihai.rag.knowledge.DocumentVersionStatusQuery;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceReadAuthorization;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceRepository;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceService;
@@ -288,6 +292,13 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
+    DocumentCreationAuthorization documentCreationAuthorization(
+            KnowledgeSpaceRepository spaces,
+            KnowledgeWriteAuthorization roles) {
+        return DocumentCreationAuthorization.backedBy(spaces, roles);
+    }
+
+    @Bean
     RoleAssignmentService roleAssignmentService(
             RoleAssignmentStore roles,
             AclCommandRepository acl,
@@ -338,22 +349,129 @@ public class PostgresAdapterConfiguration {
             JdbcClient jdbc,
             DocumentRepository documents,
             AccessDecisionService access) {
-        return (userId, spaceId, at) -> jdbc.sql("""
-                        SELECT id
-                          FROM document
-                         WHERE space_id = :spaceId
-                           AND archived = false
-                           AND current_published_version_id IS NOT NULL
-                         ORDER BY id
+        return new AuthorizedDocumentQuery() {
+            @Override
+            public java.util.List<com.yunjihai.rag.knowledge.DocumentAggregate> listAuthorized(
+                    java.util.UUID userId, java.util.UUID spaceId, java.time.Instant at) {
+                return listAuthorized(userId, spaceId, at, 0, 100);
+            }
+
+            @Override
+            public java.util.List<com.yunjihai.rag.knowledge.DocumentAggregate> listAuthorized(
+                    java.util.UUID userId,
+                    java.util.UUID spaceId,
+                    java.time.Instant at,
+                    int offset,
+                    int limit) {
+                if (offset < 0 || limit < 1 || limit > 100) {
+                    throw new IllegalArgumentException("分页参数不正确");
+                }
+                var ids = jdbc.sql("""
+                                WITH RECURSIVE enabled_reader(user_id) AS (
+                                    SELECT id FROM app_user WHERE id = :userId AND enabled
+                                ),
+                                department_tree(department_id, parent_id) AS (
+                                    SELECT department.id, department.parent_id
+                                      FROM enabled_reader reader
+                                      JOIN org_membership membership ON membership.user_id = reader.user_id
+                                      JOIN org_unit department
+                                        ON department.id = membership.org_unit_id AND department.enabled
+                                    UNION
+                                    SELECT parent.id, parent.parent_id
+                                      FROM department_tree child
+                                      JOIN org_unit parent ON parent.id = child.parent_id AND parent.enabled
+                                ),
+                                effective_principal(principal_type, principal_id) AS (
+                                    SELECT 'USER'::text, user_id FROM enabled_reader
+                                    UNION
+                                    SELECT 'DEPARTMENT'::text, department_id FROM department_tree
+                                )
+                                SELECT document.id
+                                  FROM document
+                                  JOIN document_version version
+                                    ON version.id = document.current_published_version_id
+                                   AND version.document_id = document.id
+                                   AND version.status = 'PUBLISHED'
+                                 WHERE document.space_id = :spaceId
+                                   AND NOT document.archived
+                                   AND EXISTS (
+                                       SELECT 1
+                                         FROM acl_entry acl
+                                         JOIN effective_principal principal
+                                           ON principal.principal_type = acl.principal_type
+                                          AND principal.principal_id = acl.principal_id
+                                        WHERE acl.space_id = :spaceId
+                                          AND acl.scope = 'SPACE'
+                                          AND acl.revoked_at IS NULL
+                                          AND (acl.expires_at IS NULL OR acl.expires_at > :checkedAt)
+                                   )
+                                   AND (
+                                       NOT EXISTS (
+                                           SELECT 1 FROM acl_entry history
+                                            WHERE history.space_id = :spaceId
+                                              AND history.document_id = document.id
+                                              AND history.scope = 'DOCUMENT'
+                                       )
+                                       OR EXISTS (
+                                           SELECT 1
+                                             FROM acl_entry acl
+                                             JOIN effective_principal principal
+                                               ON principal.principal_type = acl.principal_type
+                                              AND principal.principal_id = acl.principal_id
+                                            WHERE acl.space_id = :spaceId
+                                              AND acl.document_id = document.id
+                                              AND acl.scope = 'DOCUMENT'
+                                              AND acl.revoked_at IS NULL
+                                              AND (acl.expires_at IS NULL OR acl.expires_at > :checkedAt)
+                                       )
+                                   )
+                                 ORDER BY document.id
+                                 LIMIT :limit OFFSET :offset
+                                """)
+                        .param("userId", userId)
+                        .param("spaceId", spaceId)
+                        .param("checkedAt", OffsetDateTime.ofInstant(at, ZoneOffset.UTC))
+                        .param("limit", limit)
+                        .param("offset", offset)
+                        .query(java.util.UUID.class)
+                        .list();
+                return ids.stream()
+                        .map(documents::findById)
+                        .flatMap(java.util.Optional::stream)
+                        .toList();
+            }
+        };
+    }
+
+    @Bean
+    DocumentVersionStatusQuery documentVersionStatusQuery(JdbcClient jdbc) {
+        return version -> jdbc.sql("""
+                        SELECT status
+                          FROM document_version
+                         WHERE id = :versionId
+                           AND document_id = :documentId
                         """)
-                .param("spaceId", spaceId)
-                .query(java.util.UUID.class)
-                .list()
-                .stream()
-                .filter(documentId -> access.canRead(userId, spaceId, documentId, at))
-                .map(documents::findById)
-                .flatMap(java.util.Optional::stream)
-                .toList();
+                .param("versionId", version.versionId())
+                .param("documentId", version.documentId())
+                .query(String.class)
+                .optional()
+                .map(DocumentStatus::valueOf)
+                .orElseThrow(AccessDeniedAsNotFoundException::new);
+    }
+
+    @Bean
+    DocumentParseErrorQuery documentParseErrorQuery(JdbcClient jdbc) {
+        return versionId -> jdbc.sql("""
+                        SELECT error_code
+                          FROM ingestion_job
+                         WHERE version_id = :versionId
+                           AND error_code IS NOT NULL
+                         ORDER BY updated_at DESC, id DESC
+                         LIMIT 1
+                        """)
+                .param("versionId", versionId)
+                .query(String.class)
+                .optional();
     }
 
     @Bean
@@ -419,9 +537,11 @@ public class PostgresAdapterConfiguration {
             KnowledgeWriteAuthorization writeAuthorization,
             AuditService audit,
             ProjectionChangePublisher projections,
-            DocumentReviewStore reviews) {
+            DocumentReviewStore reviews,
+            DocumentCreationAuthorization creationAuthorization) {
         return new DocumentService(documents, access, content, authorizedQuery,
-                spaceAuthorization, writeAuthorization, audit, projections, reviews);
+                spaceAuthorization, writeAuthorization, audit, projections, reviews,
+                creationAuthorization);
     }
 
     @Bean

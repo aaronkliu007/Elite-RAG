@@ -69,13 +69,41 @@ class UploadServiceTest {
         var jobs = new RecordingJobs();
         var service = service(blobs, drafts, jobs, UploadInspection.safe(MediaType.APPLICATION_PDF));
 
-        var first = service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "upload-1");
-        var second = service.accept(command("b.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "upload-2");
+        var first = service.accept(command("同一文档", "a.pdf", null, List.of(),
+                MediaType.APPLICATION_PDF, pdfBytes()), "upload-1");
+        var second = service.accept(command("同一文档", "b.pdf", null, List.of(),
+                MediaType.APPLICATION_PDF, pdfBytes()), "upload-2");
 
         assertThat(first).isEqualTo(second);
         assertThat(blobs.values).hasSize(1);
         assertThat(repository.values).hasSize(1);
         assertThat(jobs.requests).as("同一活跃版本只应有一个解析任务").hasSize(1);
+    }
+
+    @Test
+    @DisplayName("相同 Blob 但业务元数据不同不能静默复用")
+    void rejectsBlobReuseWithDifferentBusinessMetadata() {
+        var blobs = new InMemoryBlobStore();
+        var repository = new MemoryDocumentRepository();
+        var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
+        var access = new AccessDecisionService(new EffectivePrincipalSet(userId -> membership),
+                (spaceId, documentId, refs, at) -> Optional.of(
+                        new AccessSnapshot(true, false, false, PublicationState.PUBLISHED, null)));
+        var documents = new DocumentService(
+                repository, access, DocumentContentGateway.unavailable(),
+                (userId, spaceId, at) -> List.of(), KnowledgeWriteAuthorization.allowAll());
+        var drafts = new DocumentServiceDraftGateway(
+                documents, Clock.fixed(Instant.parse("2026-09-24T08:00:00Z"), ZoneOffset.UTC));
+        var service = service(blobs, drafts, UploadInspection.safe(MediaType.APPLICATION_PDF));
+
+        service.accept(command("制度", "a.pdf", "管理", List.of("质量"),
+                MediaType.APPLICATION_PDF, pdfBytes()), "metadata-1");
+
+        assertThatThrownBy(() -> service.accept(command(
+                "制度", "b.pdf", "技术", List.of("架构"),
+                MediaType.APPLICATION_PDF, pdfBytes()), "metadata-2"))
+                .isInstanceOf(UploadConflictException.class);
+        assertThat(repository.values).hasSize(1);
     }
 
     @Test
@@ -109,7 +137,9 @@ class UploadServiceTest {
         documents.createNextDraft(
                 first.documentId(), "blobs/sha256/different", ACTOR_ID, parsedAt.plusSeconds(3));
 
-        var repeated = service.accept(command("v1-again.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "upload-v1-again");
+        var repeated = service.accept(command(
+                "v1.pdf", "v1-again.pdf", "方案", List.of(),
+                MediaType.APPLICATION_PDF, pdfBytes()), "upload-v1-again");
 
         assertThat(repeated).isEqualTo(first);
         assertThat(repository.values).hasSize(1);
@@ -162,9 +192,9 @@ class UploadServiceTest {
     @DisplayName("创建文档版本失败时登记延迟清理候选，不立即删除可能已被并发引用的 Blob")
     void schedulesSafeCleanupWhenDatabaseWriteFails() {
         var blobs = new InMemoryBlobStore();
-        DocumentDraftGateway failing = command -> {
+        DocumentDraftGateway failing = authorizedGateway(command -> {
             throw new IllegalStateException("database unavailable");
-        };
+        });
         var service = service(blobs, failing, UploadInspection.safe(MediaType.APPLICATION_PDF));
 
         assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "database-failure"))
@@ -179,9 +209,9 @@ class UploadServiceTest {
         var blobs = new InMemoryBlobStore();
         blobs.failCleanup = true;
         var databaseFailure = new IllegalStateException("database unavailable");
-        var service = service(blobs, command -> {
+        var service = service(blobs, authorizedGateway(command -> {
             throw databaseFailure;
-        }, UploadInspection.safe(MediaType.APPLICATION_PDF));
+        }), UploadInspection.safe(MediaType.APPLICATION_PDF));
 
         assertThatThrownBy(() -> service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "cleanup-failure"))
                 .isSameAs(databaseFailure)
@@ -249,6 +279,35 @@ class UploadServiceTest {
         assertThat(jobs.requests).hasSize(1);
     }
 
+    @Test
+    @DisplayName("未授权上传在读取请求体或写入 Blob 之前失败，幂等重放也重新鉴权")
+    void authorizesBeforeSpoolingAndOnEveryReplay() {
+        var blobs = new InMemoryBlobStore();
+        var drafts = new RecordingDraftGateway();
+        var allowed = new java.util.concurrent.atomic.AtomicBoolean(true);
+        drafts.authorization = () -> {
+            if (!allowed.get()) throw new com.yunjihai.rag.access.AccessDeniedAsNotFoundException();
+        };
+        var service = service(blobs, drafts, UploadInspection.safe(MediaType.APPLICATION_PDF));
+
+        service.accept(command("a.pdf", MediaType.APPLICATION_PDF, pdfBytes()), "authorize-replay");
+        allowed.set(false);
+        var bodyRead = new java.util.concurrent.atomic.AtomicBoolean();
+        var replay = new UploadCommand(
+                SPACE_ID, "a.pdf", "a.pdf", MediaType.APPLICATION_PDF, pdfBytes().length,
+                new ByteArrayInputStream(pdfBytes()) {
+                    @Override public int read(byte[] bytes, int offset, int length) {
+                        bodyRead.set(true);
+                        return super.read(bytes, offset, length);
+                    }
+                }, ACTOR_ID);
+
+        assertThatThrownBy(() -> service.accept(replay, "authorize-replay"))
+                .isExactlyInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
+        assertThat(bodyRead).isFalse();
+        assertThat(blobs.values).hasSize(1);
+    }
+
     private static void assertRejectedWithoutBlob(UploadCommand command, UploadInspection inspection) {
         var blobs = new InMemoryBlobStore();
         var service = service(blobs, new RecordingDraftGateway(), inspection);
@@ -262,6 +321,19 @@ class UploadServiceTest {
             DocumentDraftGateway drafts,
             UploadInspection inspection) {
         return service(blobs, drafts, new RecordingJobs(), inspection);
+    }
+
+    private static DocumentDraftGateway authorizedGateway(
+            Function<ValidatedUpload, DocumentDraftGateway.DraftResult> create) {
+        return new DocumentDraftGateway() {
+            @Override
+            public void authorize(UUID spaceId, UUID actorId) { }
+
+            @Override
+            public DraftResult createDraft(ValidatedUpload command) {
+                return create.apply(command);
+            }
+        };
     }
 
     private static UploadService service(
@@ -288,6 +360,18 @@ class UploadServiceTest {
                 new ByteArrayInputStream(bytes), ACTOR_ID);
     }
 
+    private static UploadCommand command(
+            String title,
+            String filename,
+            String classification,
+            List<String> tags,
+            MediaType mediaType,
+            byte[] bytes) {
+        return new UploadCommand(
+                SPACE_ID, title, classification, tags, filename, mediaType, bytes.length,
+                new ByteArrayInputStream(bytes), ACTOR_ID);
+    }
+
     private static byte[] pdfBytes() {
         return "%PDF-1.7 safe".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
@@ -298,6 +382,12 @@ class UploadServiceTest {
 
     private static final class RecordingDraftGateway implements DocumentDraftGateway {
         private int created;
+        private Runnable authorization = () -> { };
+
+        @Override
+        public void authorize(UUID spaceId, UUID actorId) {
+            authorization.run();
+        }
 
         @Override
         public DraftResult createDraft(ValidatedUpload command) {

@@ -46,7 +46,7 @@ import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.knowledge.DocumentStatus;
-import com.yunjihai.rag.knowledge.KnowledgeController;
+import com.yunjihai.rag.knowledge.DocumentView;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceService;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import org.junit.jupiter.api.Test;
@@ -136,23 +136,23 @@ class FoundationAcceptanceTest {
                 AUTHORIZED_USER, space.id(), NOW.plusSeconds(2)))
                 .extracting(DocumentAggregate::id)
                 .containsExactly(version.documentId());
-        assertThat(fixture.controller.getDocument(
-                AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)).title())
+        assertThat(DocumentView.published(fixture.documentService.getAuthorizedDocument(
+                AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2))).title())
                 .isEqualTo("某客户数字化转型方案");
-        assertThat(new String(fixture.controller.getParsedContent(
+        assertThat(new String(fixture.documentService.getAuthorizedParsedContent(
                 AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)).bytes(), StandardCharsets.UTF_8))
                 .contains("交付范围", "验收标准");
-        assertThat(fixture.controller.downloadSource(
+        assertThat(fixture.documentService.getAuthorizedSource(
                 AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)).bytes())
                 .isEqualTo(REPRESENTATIVE_PDF);
 
         assertThatThrownBy(() -> fixture.documentService.listAuthorizedDocuments(
                 UNAUTHORIZED_USER, space.id(), NOW.plusSeconds(2)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
-        assertThatThrownBy(() -> fixture.controller.getDocument(
+        assertThatThrownBy(() -> fixture.documentService.getAuthorizedDocument(
                 UNAUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
-        assertThatThrownBy(() -> fixture.controller.downloadSource(
+        assertThatThrownBy(() -> fixture.documentService.getAuthorizedSource(
                 UNAUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
         fixture.aclService.revokeDocument(
@@ -163,7 +163,7 @@ class FoundationAcceptanceTest {
                 NOW.plusSeconds(2));
         assertThat(fixture.documentService.listAuthorizedDocuments(
                 AUTHORIZED_USER, space.id(), NOW.plusSeconds(2))).isEmpty();
-        assertThatThrownBy(() -> fixture.controller.getDocument(
+        assertThatThrownBy(() -> fixture.documentService.getAuthorizedDocument(
                 AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(2)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
         fixture.aclService.grantDocument(
@@ -181,7 +181,7 @@ class FoundationAcceptanceTest {
         assertThatThrownBy(() -> fixture.documentService.listAuthorizedDocuments(
                 UNAUTHORIZED_USER, space.id(), NOW.plusSeconds(4)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
-        assertThatThrownBy(() -> fixture.controller.getDocument(
+        assertThatThrownBy(() -> fixture.documentService.getAuthorizedDocument(
                 AUTHORIZED_USER, version.documentId(), NOW.plusSeconds(4)))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
         assertThat(fixture.auditEvents)
@@ -216,7 +216,6 @@ class FoundationAcceptanceTest {
         private final AclService aclService;
         private final UploadService uploads;
         private final IngestionJobService jobs;
-        private final KnowledgeController controller;
 
         private Fixture(Path temporaryDirectory) {
             var membership = new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of());
@@ -263,7 +262,6 @@ class FoundationAcceptanceTest {
                     new IdempotencyService(
                             new MemoryIdempotencyStore(), new ObjectMapper(), clock, Duration.ofHours(24)),
                     audit);
-            controller = new KnowledgeController(spaces, documentService);
         }
 
         private Optional<AccessSnapshot> accessSnapshot(

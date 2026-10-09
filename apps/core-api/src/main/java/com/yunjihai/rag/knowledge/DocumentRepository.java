@@ -1,6 +1,7 @@
 package com.yunjihai.rag.knowledge;
 
 import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 
 public interface DocumentRepository {
@@ -8,6 +9,17 @@ public interface DocumentRepository {
     void insert(DocumentAggregate document);
 
     Optional<DocumentAggregate> findById(UUID documentId);
+
+    default List<DocumentAggregate> listBySpaceId(UUID spaceId) {
+        throw new UnsupportedOperationException("文档仓储不支持空间管理查询");
+    }
+
+    default List<DocumentAggregate> listBySpaceId(UUID spaceId, int offset, int limit) {
+        return listBySpaceId(spaceId).stream()
+                .skip(offset)
+                .limit(limit)
+                .toList();
+    }
 
     /**
      * 查找同一空间中未归档文档的任一版本所引用的同一内容寻址 Blob，并返回精确版本。

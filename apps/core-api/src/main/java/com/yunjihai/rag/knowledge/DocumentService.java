@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
 
@@ -24,6 +25,7 @@ public class DocumentService {
     private final AuthorizedDocumentQuery authorizedQuery;
     private final KnowledgeSpaceReadAuthorization spaceReadAuthorization;
     private final KnowledgeWriteAuthorization writeAuthorization;
+    private final DocumentCreationAuthorization creationAuthorization;
     private final AuditSink audit;
     private final ProjectionChangePublisher projections;
     private final DocumentReviewStore reviews;
@@ -110,12 +112,31 @@ public class DocumentService {
             AuditSink audit,
             ProjectionChangePublisher projections,
             DocumentReviewStore reviews) {
+        this(repository, access, content, authorizedQuery, spaceReadAuthorization,
+                writeAuthorization, audit, projections, reviews,
+                (actorId, spaceId) -> writeAuthorization.require(
+                        actorId, spaceId, null,
+                        KnowledgeWriteAuthorization.Action.CREATE_DOCUMENT));
+    }
+
+    public DocumentService(
+            DocumentRepository repository,
+            AccessDecisionService access,
+            DocumentContentGateway content,
+            AuthorizedDocumentQuery authorizedQuery,
+            KnowledgeSpaceReadAuthorization spaceReadAuthorization,
+            KnowledgeWriteAuthorization writeAuthorization,
+            AuditSink audit,
+            ProjectionChangePublisher projections,
+            DocumentReviewStore reviews,
+            DocumentCreationAuthorization creationAuthorization) {
         this.repository = Objects.requireNonNull(repository);
         this.access = Objects.requireNonNull(access);
         this.content = Objects.requireNonNull(content);
         this.authorizedQuery = Objects.requireNonNull(authorizedQuery);
         this.spaceReadAuthorization = Objects.requireNonNull(spaceReadAuthorization);
         this.writeAuthorization = Objects.requireNonNull(writeAuthorization);
+        this.creationAuthorization = Objects.requireNonNull(creationAuthorization);
         this.audit = Objects.requireNonNull(audit);
         this.projections = Objects.requireNonNull(projections);
         this.reviews = Objects.requireNonNull(reviews);
@@ -124,21 +145,53 @@ public class DocumentService {
     @Transactional
     public DocumentAggregate createDraft(
             UUID spaceId, String title, String sourceBlobId, UUID actorId, Instant at) {
-        writeAuthorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.CREATE_DOCUMENT);
+        requireCreateDocument(actorId, spaceId);
         var document = DocumentAggregate.create(spaceId, title, sourceBlobId, actorId, at);
         repository.insert(document);
         return document;
     }
 
     @Transactional
+    public void requireCreateDocument(UUID actorId, UUID spaceId) {
+        creationAuthorization.require(actorId, spaceId);
+    }
+
+    @Transactional(readOnly = true)
+    public void requireAction(
+            UUID actorId, UUID documentId, KnowledgeWriteAuthorization.Action action) {
+        var current = findOrHide(documentId);
+        writeAuthorization.require(actorId, current.spaceId(), current.id(), action);
+    }
+
+    @Transactional
     public DraftCreation createOrReuseDraft(
             UUID spaceId, String title, String sourceBlobId, UUID actorId, Instant at) {
-        writeAuthorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.CREATE_DOCUMENT);
+        return createOrReuseDraft(
+                spaceId, title, DocumentMetadata.empty(), sourceBlobId, actorId, at);
+    }
+
+    @Transactional
+    public DraftCreation createOrReuseDraft(
+            UUID spaceId,
+            String title,
+            DocumentMetadata metadata,
+            String sourceBlobId,
+            UUID actorId,
+            Instant at) {
+        requireCreateDocument(actorId, spaceId);
         var existing = repository.findActiveVersionBySpaceAndSourceBlob(spaceId, sourceBlobId);
         if (existing.isPresent()) {
-            return new DraftCreation(existing.orElseThrow(), false);
+            var reference = existing.orElseThrow();
+            var document = findOrThrow(reference.documentId());
+            if (!document.title().equals(title) || !document.metadata().equals(metadata)) {
+                throw new com.yunjihai.rag.ingestion.UploadConflictException();
+            }
+            return new DraftCreation(reference, false);
         }
         var document = DocumentAggregate.create(spaceId, title, sourceBlobId, actorId, at);
+        if (!metadata.equals(DocumentMetadata.empty())) {
+            document = document.updateMetadata(metadata);
+        }
         repository.insert(document);
         return new DraftCreation(
                 new DocumentVersionRef(document.id(), document.latestVersion().id()), true);
@@ -296,6 +349,44 @@ public class DocumentService {
     }
 
     @Transactional
+    public DocumentView getVisibleDocument(UUID userId, UUID documentId, Instant at) {
+        var document = findOrHide(documentId);
+        var view = visibleView(userId, document, at);
+        record(userId, AuditAction.VIEW, "DOCUMENT", documentId, document);
+        return view;
+    }
+
+    @Transactional(readOnly = true)
+    public List<DocumentView> listVisibleDocuments(UUID userId, UUID spaceId, Instant at) {
+        return listVisibleDocuments(userId, spaceId, at, 0, 20);
+    }
+
+    @Transactional(readOnly = true)
+    public List<DocumentView> listVisibleDocuments(
+            UUID userId, UUID spaceId, Instant at, int offset, int limit) {
+        if (offset < 0 || limit < 1 || limit > 100) {
+            throw new IllegalArgumentException("分页参数不正确");
+        }
+        spaceReadAuthorization.requireRead(userId, spaceId, at);
+        boolean management = hasManagementSpaceAccess(userId, spaceId);
+        var candidates = management
+                ? repository.listBySpaceId(spaceId, offset, limit)
+                : authorizedQuery.listAuthorized(userId, spaceId, at, offset, limit);
+        var visible = candidates.stream()
+                .filter(document -> document.spaceId().equals(spaceId))
+                .map(document -> {
+                    try {
+                        return visibleView(userId, document, at);
+                    } catch (AccessDeniedAsNotFoundException hidden) {
+                        return null;
+                    }
+                })
+                .filter(Objects::nonNull);
+        return visible
+                .toList();
+    }
+
+    @Transactional
     public DocumentContent getAuthorizedParsedContent(UUID userId, UUID documentId, Instant at) {
         var document = getAuthorizedDocument(userId, documentId, at);
         return content.readParsed(document.id(), document.currentPublishedVersionId().orElseThrow());
@@ -336,6 +427,35 @@ public class DocumentService {
     private DocumentAggregate findOrHide(UUID documentId) {
         return repository.findById(documentId)
                 .orElseThrow(AccessDeniedAsNotFoundException::new);
+    }
+
+    private DocumentView visibleView(UUID userId, DocumentAggregate document, Instant at) {
+        var actions = allowedWriteActions(userId, document.spaceId(), document.id());
+        if (!actions.isEmpty()) {
+            boolean readable = !document.archived()
+                    && document.currentPublishedVersionId().isPresent()
+                    && access.canRead(userId, document.spaceId(), document.id(), at);
+            return DocumentView.management(
+                    document, reviews.listByDocumentId(document.id()), actions, readable);
+        }
+        access.requireRead(userId, document.spaceId(), document.id(), at);
+        return DocumentView.published(document);
+    }
+
+    private boolean hasManagementSpaceAccess(UUID userId, UUID spaceId) {
+        return !allowedWriteActions(userId, spaceId, null).isEmpty();
+    }
+
+    private Set<KnowledgeWriteAuthorization.Action> allowedWriteActions(
+            UUID userId, UUID spaceId, UUID documentId) {
+        return java.util.Arrays.stream(KnowledgeWriteAuthorization.Action.values())
+                .filter(action -> action == KnowledgeWriteAuthorization.Action.EDIT_DOCUMENT
+                        || action == KnowledgeWriteAuthorization.Action.SUBMIT_FOR_REVIEW
+                        || action == KnowledgeWriteAuthorization.Action.REVIEW_DOCUMENT
+                        || action == KnowledgeWriteAuthorization.Action.PUBLISH_DOCUMENT
+                        || action == KnowledgeWriteAuthorization.Action.ARCHIVE_DOCUMENT)
+                .filter(action -> writeAuthorization.allows(userId, spaceId, documentId, action))
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     private void record(

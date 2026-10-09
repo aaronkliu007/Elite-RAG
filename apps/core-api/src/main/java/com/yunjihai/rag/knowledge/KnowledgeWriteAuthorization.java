@@ -9,6 +9,15 @@ public interface KnowledgeWriteAuthorization {
 
     void require(UUID actorId, UUID spaceId, UUID documentId, Action action);
 
+    default boolean allows(UUID actorId, UUID spaceId, UUID documentId, Action action) {
+        try {
+            require(actorId, spaceId, documentId, action);
+            return true;
+        } catch (AccessDeniedAsNotFoundException denied) {
+            return false;
+        }
+    }
+
     enum Action {
         CREATE_SPACE,
         CREATE_DOCUMENT,

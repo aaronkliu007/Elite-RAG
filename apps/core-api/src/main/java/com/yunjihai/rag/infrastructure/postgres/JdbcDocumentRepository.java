@@ -87,6 +87,38 @@ public class JdbcDocumentRepository implements DocumentRepository {
     }
 
     @Override
+    public List<DocumentAggregate> listBySpaceId(UUID spaceId) {
+        return listBySpaceId(spaceId, 0, Integer.MAX_VALUE);
+    }
+
+    @Override
+    public List<DocumentAggregate> listBySpaceId(UUID spaceId, int offset, int limit) {
+        Objects.requireNonNull(spaceId);
+        if (offset < 0 || limit < 1) throw new IllegalArgumentException("分页参数不正确");
+        try {
+            return jdbc.sql("""
+                    SELECT id
+                      FROM document
+                     WHERE space_id = :spaceId
+                       AND archived = false
+                     ORDER BY updated_at DESC, id
+                     LIMIT :limit OFFSET :offset
+                    """)
+                    .param("spaceId", spaceId)
+                    .param("limit", limit)
+                    .param("offset", offset)
+                    .query(UUID.class)
+                    .list()
+                    .stream()
+                    .map(this::findById)
+                    .flatMap(Optional::stream)
+                    .toList();
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
+    @Override
     public Optional<DocumentVersionRef> findActiveVersionBySpaceAndSourceBlob(UUID spaceId, String sourceBlobId) {
         try {
             return jdbc.sql("""

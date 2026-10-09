@@ -16,12 +16,18 @@ import com.yunjihai.rag.retrieval.domain.RetrievalFilter;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
 import com.yunjihai.rag.runtime.IngestionWorkerScheduler;
 import com.yunjihai.rag.runtime.ProjectionWorkerScheduler;
+import com.yunjihai.rag.ingestion.UploadService;
 import com.yunjihai.rag.retrieval.search.HybridRecallService;
+import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
+import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
+import com.yunjihai.rag.knowledge.web.DocumentController;
+import com.yunjihai.rag.knowledge.web.UploadController;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.boot.servlet.autoconfigure.MultipartProperties;
 import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.boot.health.contributor.Status;
 import org.springframework.boot.health.registry.HealthContributorRegistry;
@@ -85,8 +91,16 @@ class RetrievalProductionWiringTest {
             assertThat(context.getBean(TrustedRetrievalService.class)).isNotNull();
             assertThat(context.getBean(IngestionWorkerScheduler.class)).isNotNull();
             assertThat(context.getBean(ProjectionWorkerScheduler.class)).isNotNull();
+            assertThat(context.getBean(DocumentController.class)).isNotNull();
+            assertThat(context.getBean("runtimeUploadService", UploadService.class)).isNotNull();
+            assertThat(context.getBean(UploadController.class)).isNotNull();
+            var multipart = context.getBean(MultipartProperties.class);
+            assertThat(multipart.getMaxFileSize().toBytes()).isEqualTo(100L * 1024 * 1024);
+            assertThat(multipart.getMaxRequestSize().toBytes()).isGreaterThan(100L * 1024 * 1024);
             assertThat(context.getBean(KnowledgeWriteAuthorization.class))
                     .isInstanceOf(RbacKnowledgeAuthorization.class);
+            assertThat(context.getBean(AuthorizedDocumentQuery.class).listAuthorized(
+                    UUID.randomUUID(), UUID.randomUUID(), Instant.now(), 0, 20)).isEmpty();
 
             var health = context.getBean(HealthContributorRegistry.class);
             assertHealth(health, "opensearchRead", Status.UP);
@@ -115,6 +129,23 @@ class RetrievalProductionWiringTest {
             assertThat(result.degradationReasons()).containsExactly(DegradationReason.VECTOR_UNAVAILABLE);
 
             var jdbc = context.getBean(JdbcClient.class);
+            UUID bootstrapAdmin = jdbc.sql("""
+                            SELECT user_id
+                            FROM local_credential
+                            WHERE username_normalized = 'wiring-admin'
+                            """)
+                    .query(UUID.class)
+                    .single();
+            UUID writableSpace = UUID.randomUUID();
+            jdbc.sql("""
+                            INSERT INTO knowledge_space (id, name, created_by)
+                            VALUES (:id, 'Document creation transaction check', :createdBy)
+                            """)
+                    .param("id", writableSpace)
+                    .param("createdBy", bootstrapAdmin)
+                    .update();
+            context.getBean(DocumentService.class).requireCreateDocument(bootstrapAdmin, writableSpace);
+
             UUID disabledUser = UUID.randomUUID();
             jdbc.sql("INSERT INTO app_user (id, external_id, display_name) VALUES (:id, :external, 'Disabled')")
                     .param("id", disabledUser).param("external", disabledUser.toString()).update();

@@ -1,6 +1,10 @@
 spring:
   application:
     name: core-api
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 101MB
   flyway:
     enabled: false
     validate-on-migrate: true

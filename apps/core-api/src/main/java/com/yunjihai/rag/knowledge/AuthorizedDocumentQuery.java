@@ -8,4 +8,12 @@ import java.util.UUID;
 public interface AuthorizedDocumentQuery {
 
     List<DocumentAggregate> listAuthorized(UUID userId, UUID spaceId, Instant at);
+
+    default List<DocumentAggregate> listAuthorized(
+            UUID userId, UUID spaceId, Instant at, int offset, int limit) {
+        return listAuthorized(userId, spaceId, at).stream()
+                .skip(offset)
+                .limit(limit)
+                .toList();
+    }
 }

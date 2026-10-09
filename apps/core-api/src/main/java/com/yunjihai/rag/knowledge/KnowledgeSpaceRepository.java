@@ -12,6 +12,11 @@ public interface KnowledgeSpaceRepository {
         throw new UnsupportedOperationException("findById is unavailable");
     }
 
+    /** Holds a key-share lock until the current transaction ends when supported. */
+    default boolean lockForDocumentCreation(UUID spaceId) {
+        return findById(spaceId).isPresent();
+    }
+
     default List<KnowledgeSpace> listAuthorized(UUID userId, int offset, int limit) {
         throw new UnsupportedOperationException("listAuthorized is unavailable");
     }

@@ -1,5 +1,6 @@
 package com.yunjihai.rag.ingestion;
 
+import com.yunjihai.rag.knowledge.DocumentMetadata;
 import org.springframework.http.MediaType;
 
 import java.util.Locale;
@@ -50,6 +51,14 @@ public final class UploadPolicy {
         }
         if (command.declaredLength() <= 0 || command.declaredLength() > maxBytes) {
             throw new UploadRejectedException("文件为空或超过大小限制");
+        }
+        if (command.title() == null || command.title().isBlank()) {
+            throw new UploadRejectedException("文档标题不能为空");
+        }
+        try {
+            new DocumentMetadata(command.classification(), command.tags());
+        } catch (IllegalArgumentException invalidMetadata) {
+            throw new UploadRejectedException("文档元数据不正确");
         }
         var expected = expectedMediaType(command.originalFilename());
         if (!isExactMediaType(expected, command.declaredMediaType())) {

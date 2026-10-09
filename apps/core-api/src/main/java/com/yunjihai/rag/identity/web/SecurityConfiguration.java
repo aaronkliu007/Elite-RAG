@@ -2,6 +2,8 @@ package com.yunjihai.rag.identity.web;
 
 import com.yunjihai.rag.api.ApiExceptionHandler;
 import com.yunjihai.rag.identity.SessionRevocationService;
+import com.yunjihai.rag.knowledge.DocumentCreationAuthorization;
+import com.yunjihai.rag.knowledge.web.UploadAuthorizationFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -9,6 +11,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.MediaType;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
@@ -46,6 +49,7 @@ public class SecurityConfiguration {
             HttpSecurity http,
             SecurityContextRepository securityContexts,
             SessionVersionFilter sessionVersionFilter,
+            ObjectProvider<DocumentCreationAuthorization> documentCreation,
             ObjectMapper json) throws Exception {
         var csrfTokens = new HttpSessionCsrfTokenRepository();
         csrfTokens.setHeaderName("X-CSRF-TOKEN");
@@ -74,7 +78,10 @@ public class SecurityConfiguration {
                 .httpBasic(basic -> basic.disable())
                 .formLogin(form -> form.disable())
                 .logout(logout -> logout.disable())
-                .addFilterAfter(sessionVersionFilter, SecurityContextHolderFilter.class);
+                .addFilterAfter(sessionVersionFilter, SecurityContextHolderFilter.class)
+                .addFilterAfter(new UploadAuthorizationFilter(
+                        documentCreation.getIfAvailable(DocumentCreationAuthorization::denyAll), json),
+                        SessionVersionFilter.class);
         return http.build();
     }
 

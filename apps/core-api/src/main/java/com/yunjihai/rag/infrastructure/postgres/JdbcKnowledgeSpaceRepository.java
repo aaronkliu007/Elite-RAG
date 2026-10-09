@@ -56,6 +56,25 @@ public class JdbcKnowledgeSpaceRepository implements KnowledgeSpaceRepository {
     }
 
     @Override
+    public boolean lockForDocumentCreation(UUID spaceId) {
+        Objects.requireNonNull(spaceId);
+        try {
+            return jdbc.sql("""
+                            SELECT id
+                              FROM knowledge_space
+                             WHERE id = :spaceId
+                             FOR KEY SHARE
+                            """)
+                    .param("spaceId", spaceId)
+                    .query(UUID.class)
+                    .optional()
+                    .isPresent();
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
+    @Override
     public List<KnowledgeSpace> listAuthorized(UUID userId, int offset, int limit) {
         Objects.requireNonNull(userId);
         if (offset < 0 || limit < 1 || limit > 100) throw new IllegalArgumentException("invalid page bounds");

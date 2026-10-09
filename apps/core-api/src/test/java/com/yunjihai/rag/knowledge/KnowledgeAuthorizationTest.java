@@ -8,10 +8,11 @@ import com.yunjihai.rag.access.PrincipalMembershipSnapshot;
 import com.yunjihai.rag.access.PublicationState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.web.bind.annotation.PostMapping;
+import com.yunjihai.rag.ingestion.UploadCommand;
+import com.yunjihai.rag.ingestion.ValidatedUpload;
+import com.yunjihai.rag.knowledge.web.DocumentController;
+import com.yunjihai.rag.knowledge.web.UploadController;
 
-import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.Arrays;
 import java.util.List;
@@ -26,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class KnowledgeAuthorizationTest {
 
     private static final UUID USER_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final UUID AUTHOR_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");
     private static final UUID SPACE_ID = UUID.fromString("00000000-0000-0000-0000-000000000010");
     private static final Instant NOW = Instant.parse("2026-09-24T08:00:00Z");
 
@@ -34,11 +36,11 @@ class KnowledgeAuthorizationTest {
     void hidesExistenceAcrossEveryDocumentReadSurface() {
         var fixture = fixture(false);
 
-        assertThatThrownBy(() -> fixture.controller.getDocument(USER_ID, fixture.documentId, NOW))
+        assertThatThrownBy(() -> fixture.service.getAuthorizedDocument(USER_ID, fixture.documentId, NOW))
                 .isExactlyInstanceOf(AccessDeniedAsNotFoundException.class);
-        assertThatThrownBy(() -> fixture.controller.getParsedContent(USER_ID, fixture.documentId, NOW))
+        assertThatThrownBy(() -> fixture.service.getAuthorizedParsedContent(USER_ID, fixture.documentId, NOW))
                 .isExactlyInstanceOf(AccessDeniedAsNotFoundException.class);
-        assertThatThrownBy(() -> fixture.controller.downloadSource(USER_ID, fixture.documentId, NOW))
+        assertThatThrownBy(() -> fixture.service.getAuthorizedSource(USER_ID, fixture.documentId, NOW))
                 .isExactlyInstanceOf(AccessDeniedAsNotFoundException.class);
         assertThat(fixture.contentGateway.readCount).isZero();
     }
@@ -48,9 +50,9 @@ class KnowledgeAuthorizationTest {
     void readsOnlyCurrentPublishedVersionAfterAuthorization() {
         var fixture = fixture(true);
 
-        var view = fixture.controller.getDocument(USER_ID, fixture.documentId, NOW);
-        var parsed = fixture.controller.getParsedContent(USER_ID, fixture.documentId, NOW);
-        var source = fixture.controller.downloadSource(USER_ID, fixture.documentId, NOW);
+        var view = DocumentView.published(fixture.service.getAuthorizedDocument(USER_ID, fixture.documentId, NOW));
+        var parsed = fixture.service.getAuthorizedParsedContent(USER_ID, fixture.documentId, NOW);
+        var source = fixture.service.getAuthorizedSource(USER_ID, fixture.documentId, NOW);
 
         assertThat(view.currentPublishedVersionId()).isPresent();
         assertThat(view.versions())
@@ -68,11 +70,10 @@ class KnowledgeAuthorizationTest {
     @Test
     @DisplayName("外部控制器不得接受客户端提供的 Blob 标识直接创建草稿")
     void doesNotExposeRawBlobDraftEndpoint() {
-        assertThat(Arrays.stream(KnowledgeController.class.getDeclaredMethods())
-                .map(method -> method.getAnnotation(PostMapping.class))
-                .filter(java.util.Objects::nonNull)
-                .flatMap(annotation -> Arrays.stream(annotation.value())))
-                .doesNotContain("/{spaceId}/documents");
+        assertThat(List.of(DocumentController.class, UploadController.class).stream()
+                .flatMap(type -> Arrays.stream(type.getDeclaredMethods()))
+                .flatMap(method -> Arrays.stream(method.getParameterTypes())))
+                .doesNotContain(ValidatedUpload.class, UploadCommand.class);
     }
 
     @Test
@@ -87,13 +88,8 @@ class KnowledgeAuthorizationTest {
                 repository, access, DocumentContentGateway.unavailable(),
                 (userId, spaceId, at) -> List.of(), KnowledgeWriteAuthorization.allowAll());
         var document = service.createDraft(SPACE_ID, "待解析", "blob-pending", USER_ID, NOW);
-        var controller = new KnowledgeController(
-                new KnowledgeSpaceService(space -> { }, KnowledgeWriteAuthorization.allowAll()), service);
-        var authentication = new UsernamePasswordAuthenticationToken(
-                USER_ID.toString(), "n/a", List.of());
-
-        assertThatThrownBy(() -> controller.submitForReview(
-                authentication, document.id(), document.latestVersion().id()))
+        assertThatThrownBy(() -> service.submitForReview(
+                document.id(), document.latestVersion().id(), USER_ID, NOW))
                 .isInstanceOf(DocumentLifecycleException.class)
                 .hasMessageContaining("解析");
         assertThat(repository.findById(document.id()).orElseThrow().latestVersion().status())
@@ -135,23 +131,25 @@ class KnowledgeAuthorizationTest {
         var access = new AccessDecisionService(principals, (spaceId, documentId, refs, at) ->
                 Optional.of(new AccessSnapshot(granted, false, false, PublicationState.PUBLISHED, null)));
         var content = new RecordingContentGateway();
+        KnowledgeWriteAuthorization setupOnly = (actor, space, document, action) -> {
+            if (!AUTHOR_ID.equals(actor)) throw new AccessDeniedAsNotFoundException();
+        };
         var service = new DocumentService(
                 repository, access, content, (userId, spaceId, at) -> List.of(),
-                KnowledgeWriteAuthorization.allowAll());
-        var document = service.createDraft(SPACE_ID, "已发布制度", "blob-v1", USER_ID, NOW.minusSeconds(10));
+                setupOnly);
+        var document = service.createDraft(SPACE_ID, "已发布制度", "blob-v1", AUTHOR_ID, NOW.minusSeconds(10));
         var versionId = document.latestVersion().id();
         service.updateMetadata(
                 document.id(), new DocumentMetadata("制度", List.of()),
-                USER_ID, NOW.minusSeconds(9));
+                AUTHOR_ID, NOW.minusSeconds(9));
         service.markParsingSucceeded(document.id(), versionId, NOW.minusSeconds(9));
-        service.submitForReview(document.id(), versionId, USER_ID, NOW.minusSeconds(8));
-        service.publish(document.id(), versionId, USER_ID, NOW.minusSeconds(7));
-        service.createNextDraft(document.id(), "blob-v2-secret", USER_ID, NOW.minusSeconds(6));
-        var spaces = new KnowledgeSpaceService(space -> { }, KnowledgeWriteAuthorization.allowAll());
-        return new Fixture(new KnowledgeController(spaces, service), document.id(), content);
+        service.submitForReview(document.id(), versionId, AUTHOR_ID, NOW.minusSeconds(8));
+        service.publish(document.id(), versionId, AUTHOR_ID, NOW.minusSeconds(7));
+        service.createNextDraft(document.id(), "blob-v2-secret", AUTHOR_ID, NOW.minusSeconds(6));
+        return new Fixture(service, document.id(), content);
     }
 
-    private record Fixture(KnowledgeController controller, UUID documentId, RecordingContentGateway contentGateway) {
+    private record Fixture(DocumentService service, UUID documentId, RecordingContentGateway contentGateway) {
     }
 
     private static final class RecordingContentGateway implements DocumentContentGateway {

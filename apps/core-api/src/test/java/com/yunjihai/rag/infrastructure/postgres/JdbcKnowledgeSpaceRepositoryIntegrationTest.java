@@ -8,15 +8,18 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class JdbcKnowledgeSpaceRepositoryIntegrationTest {
     private static final Instant NOW = Instant.parse("2026-10-08T10:00:00Z");
@@ -105,6 +108,43 @@ class JdbcKnowledgeSpaceRepositoryIntegrationTest {
         assertThat(repository.listAuthorized(MEMBER, 1, 10))
                 .extracting(KnowledgeSpace::name).containsExactly("角色空间");
         assertThat(repository.listAuthorized(DISABLED, 0, 10)).isEmpty();
+    }
+
+    @Test
+    void documentCreationLockPreventsConcurrentSpaceDeletion() throws Exception {
+        insertUser(ADMIN, "admin", true);
+        var target = space(104, "上传锁定空间", "", 0);
+        repository.insert(target);
+
+        try (var lockConnection = DriverManager.getConnection(
+                    POSTGRES.getJdbcUrl(), "rag_runtime_test", "runtime_test_only");
+             var deleteConnection = DriverManager.getConnection(
+                    POSTGRES.getJdbcUrl(), "rag_runtime_test", "runtime_test_only")) {
+            lockConnection.setAutoCommit(false);
+            deleteConnection.setAutoCommit(false);
+            var lockedRepository = new JdbcKnowledgeSpaceRepository(
+                    JdbcClient.create(new SingleConnectionDataSource(lockConnection, true)));
+
+            assertThat(lockedRepository.lockForDocumentCreation(target.id())).isTrue();
+
+            try (var timeout = deleteConnection.createStatement()) {
+                timeout.execute("SET LOCAL statement_timeout = '300ms'");
+            }
+            assertThatThrownBy(() -> {
+                try (var delete = deleteConnection.prepareStatement(
+                        "DELETE FROM knowledge_space WHERE id = ?")) {
+                    delete.setObject(1, target.id());
+                    delete.executeUpdate();
+                }
+            }).isInstanceOf(SQLException.class)
+                    .satisfies(failure -> assertThat(((SQLException) failure).getSQLState())
+                            .isEqualTo("57014"));
+            deleteConnection.rollback();
+            lockConnection.commit();
+        }
+
+        assertThat(jdbc.sql("DELETE FROM knowledge_space WHERE id = :id")
+                .param("id", target.id()).update()).isOne();
     }
 
     private static void grantRole(UUID spaceId, UUID userId, String role, int suffix) {

@@ -7,6 +7,8 @@ import com.yunjihai.rag.identity.local.UsernameConflictException;
 import com.yunjihai.rag.infrastructure.postgres.PostgresPersistenceExceptionTranslator;
 import com.yunjihai.rag.ingestion.IngestionLeaseConflictException;
 import com.yunjihai.rag.ingestion.IngestionRequestConflictException;
+import com.yunjihai.rag.ingestion.UploadRejectedException;
+import com.yunjihai.rag.ingestion.UploadConflictException;
 import com.yunjihai.rag.knowledge.DocumentLifecycleException;
 import com.yunjihai.rag.knowledge.KnowledgeNotFoundException;
 import com.yunjihai.rag.solution.generation.GenerationRequestConflictException;
@@ -21,6 +23,8 @@ import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
@@ -33,15 +37,27 @@ import java.util.Map;
 public class ApiExceptionHandler {
     @ExceptionHandler({
             IllegalArgumentException.class,
+            UploadRejectedException.class,
             HttpMessageNotReadableException.class,
             MissingRequestHeaderException.class,
             MissingServletRequestParameterException.class,
+            MissingServletRequestPartException.class,
             MethodArgumentTypeMismatchException.class,
             ConstraintViolationException.class,
             HandlerMethodValidationException.class
     })
     ResponseEntity<ApiError> badRequest(Exception failure, HttpServletRequest request) {
         return response(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "请求参数不正确", request, Map.of());
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ApiError> uploadTooLarge(Exception failure, HttpServletRequest request) {
+        return response(
+                HttpStatus.PAYLOAD_TOO_LARGE,
+                "UPLOAD_TOO_LARGE",
+                "上传文件超过大小限制",
+                request,
+                Map.of());
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})
@@ -76,6 +92,7 @@ public class ApiExceptionHandler {
             GenerationRequestConflictException.class,
             IngestionRequestConflictException.class,
             IngestionLeaseConflictException.class,
+            UploadConflictException.class,
             IdempotencyConflictException.class
     })
     ResponseEntity<ApiError> conflict(Exception failure, HttpServletRequest request) {

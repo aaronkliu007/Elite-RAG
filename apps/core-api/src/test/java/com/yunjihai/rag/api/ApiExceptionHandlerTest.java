@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 
 import java.util.UUID;
 
@@ -37,6 +39,8 @@ class ApiExceptionHandlerTest {
         assertError("/failure/hidden", 404, "NOT_FOUND", "资源不存在或无权访问");
         assertError("/failure/conflict", 409, "CONFLICT", "请求与当前状态冲突");
         assertError("/failure/unavailable", 503, "SERVICE_UNAVAILABLE", "服务暂时不可用");
+        assertError("/failure/missing-part", 400, "BAD_REQUEST", "请求参数不正确");
+        assertError("/failure/upload-too-large", 413, "UPLOAD_TOO_LARGE", "上传文件超过大小限制");
     }
 
     @Test
@@ -116,5 +120,13 @@ class ApiExceptionHandlerTest {
 
         @PostMapping("/failure/required-header")
         void requiredHeader(@RequestHeader("Idempotency-Key") String ignored) { }
+
+        @GetMapping("/failure/missing-part")
+        void missingPart() throws MissingServletRequestPartException {
+            throw new MissingServletRequestPartException("file");
+        }
+
+        @GetMapping("/failure/upload-too-large")
+        void uploadTooLarge() { throw new MaxUploadSizeExceededException(100L * 1024 * 1024); }
     }
 }

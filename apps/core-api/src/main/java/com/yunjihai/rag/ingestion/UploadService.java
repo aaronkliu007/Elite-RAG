@@ -12,6 +12,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -61,6 +62,7 @@ public class UploadService {
 
     public DocumentVersionId accept(UploadCommand command, String idempotencyKey) {
         policy.validateMetadata(command);
+        drafts.authorize(command.spaceId(), command.actorId());
         try (var isolated = spooler.spool(command.stream(), policy.maxBytes())) {
             if (isolated.length() != command.declaredLength()) {
                 throw new UploadRejectedException("声明大小与实际大小不一致");
@@ -82,7 +84,8 @@ public class UploadService {
                         throw new IllegalStateException("读取隔离上传文件失败", exception);
                     }
                     var draft = drafts.createDraft(new ValidatedUpload(
-                            command.spaceId(), command.title(), command.originalFilename(), command.actorId(), blob));
+                            command.spaceId(), command.title(), command.classification(), command.tags(),
+                            command.originalFilename(), command.actorId(), blob));
                     var version = draft.version();
                     if (draft.created()) {
                         enqueue.apply(new IngestionRequest(
@@ -120,18 +123,20 @@ public class UploadService {
     }
 
     private static String requestHash(UploadCommand command, String sha256) {
-        var fields = new String[] {
-                command.spaceId().toString(),
-                command.title(),
-                command.originalFilename(),
-                command.declaredMediaType().toString(),
-                Long.toString(command.declaredLength()),
-                sha256
-        };
+        var fields = new ArrayList<String>();
+        fields.add(command.spaceId().toString());
+        fields.add(command.title());
+        fields.add(command.classification() == null ? "" : command.classification());
+        fields.add(Integer.toString(command.tags().size()));
+        fields.addAll(command.tags());
+        fields.add(command.originalFilename());
+        fields.add(command.declaredMediaType().toString());
+        fields.add(Long.toString(command.declaredLength()));
+        fields.add(sha256);
         int length = 0;
-        var encoded = new byte[fields.length][];
-        for (int index = 0; index < fields.length; index++) {
-            encoded[index] = Objects.requireNonNull(fields[index]).getBytes(StandardCharsets.UTF_8);
+        var encoded = new byte[fields.size()][];
+        for (int index = 0; index < fields.size(); index++) {
+            encoded[index] = Objects.requireNonNull(fields.get(index)).getBytes(StandardCharsets.UTF_8);
             length += Integer.BYTES + encoded[index].length;
         }
         var canonical = ByteBuffer.allocate(length);
