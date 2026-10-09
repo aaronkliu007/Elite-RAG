@@ -13,6 +13,7 @@ import com.yunjihai.rag.audit.AuditService;
 import com.yunjihai.rag.access.role.RbacKnowledgeAuthorization;
 import com.yunjihai.rag.access.role.RoleAssignmentService;
 import com.yunjihai.rag.access.role.RoleAssignmentStore;
+import com.yunjihai.rag.access.role.SpaceRole;
 import com.yunjihai.rag.api.idempotency.IdempotencyService;
 import com.yunjihai.rag.api.idempotency.IdempotencyStore;
 import com.yunjihai.rag.identity.local.BootstrapAdministrator;
@@ -99,6 +100,11 @@ public class PostgresAdapterConfiguration {
     @Bean
     JdbcSessionVersionStore jdbcSessionVersionStore(JdbcClient jdbc) {
         return new JdbcSessionVersionStore(jdbc);
+    }
+
+    @Bean
+    JdbcSystemAdministratorDisableProtection jdbcSystemAdministratorDisableProtection(JdbcClient jdbc) {
+        return new JdbcSystemAdministratorDisableProtection(jdbc);
     }
 
     @Bean
@@ -262,9 +268,10 @@ public class PostgresAdapterConfiguration {
             PasswordHasher passwordHasher,
             SessionRevocationService sessions,
             AuditService audit,
-            Clock clock) {
+            Clock clock,
+            JdbcSystemAdministratorDisableProtection administratorProtection) {
         return new UserAdministrationService(
-                accounts, credentials, passwordHasher, sessions, audit, clock);
+                accounts, credentials, passwordHasher, sessions, audit, clock, administratorProtection);
     }
 
     @Bean
@@ -518,8 +525,13 @@ public class PostgresAdapterConfiguration {
     @Bean
     KnowledgeSpaceService knowledgeSpaceService(
             KnowledgeSpaceRepository spaces,
-            KnowledgeWriteAuthorization authorization) {
-        return new KnowledgeSpaceService(spaces, authorization);
+            KnowledgeWriteAuthorization authorization,
+            RoleAssignmentService roles) {
+        return new KnowledgeSpaceService(
+                spaces,
+                authorization,
+                (spaceId, creatorId, at) -> roles.grantSpaceRole(
+                        creatorId, spaceId, creatorId, SpaceRole.SPACE_ADMIN, at));
     }
 
     @Bean

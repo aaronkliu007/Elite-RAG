@@ -5,6 +5,7 @@ import { createMemoryHistory } from 'vue-router'
 
 import { clearCsrfToken } from '../api/http'
 import { createAppRouter } from '../router'
+import { useSessionStore } from '../stores/session'
 import KnowledgeHomeView from './KnowledgeHomeView.vue'
 import UserAdminView from './UserAdminView.vue'
 
@@ -28,6 +29,7 @@ describe('用户管理页', () => {
   beforeEach(() => {
     clearCsrfToken()
     vi.restoreAllMocks()
+    setActivePinia(createPinia())
   })
 
   it('拒绝非系统管理员进入用户管理路由', async () => {
@@ -185,5 +187,17 @@ describe('用户管理页', () => {
     await wrapper.get('[data-action="retry-users"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('暂无用户')
+  })
+
+  it('不向当前登录用户提供停用自己的操作', async () => {
+    useSessionStore().establish({ userId: alice.id, username: 'alice', displayName: '爱丽丝' })
+    vi.stubGlobal('fetch', vi.fn(async () => json([alice])))
+
+    const wrapper = mount(UserAdminView)
+    await flushPromises()
+
+    const toggle = wrapper.get('[data-action="toggle-user"]')
+    expect(toggle.attributes('disabled')).toBeDefined()
+    expect(toggle.attributes('title')).toBe('不能停用当前登录用户')
   })
 })

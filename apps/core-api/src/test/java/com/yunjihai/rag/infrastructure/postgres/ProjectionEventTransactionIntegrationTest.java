@@ -67,6 +67,7 @@ class ProjectionEventTransactionIntegrationTest {
     private static ToggleAuditSink audit;
     private static ProjectionDocumentLock documentLock;
     private static ProjectionCutoverLock cutoverLock;
+    private static ProjectionChangePublisher projectionChanges;
     private static ProjectionEventRepository projectionEvents;
     private static PlatformTransactionManager transactions;
 
@@ -96,6 +97,7 @@ class ProjectionEventTransactionIntegrationTest {
         audit = context.getBean(ToggleAuditSink.class);
         documentLock = context.getBean(ProjectionDocumentLock.class);
         cutoverLock = context.getBean(ProjectionCutoverLock.class);
+        projectionChanges = context.getBean(ProjectionChangePublisher.class);
         projectionEvents = context.getBean(ProjectionEventRepository.class);
         transactions = context.getBean(PlatformTransactionManager.class);
     }
@@ -206,6 +208,40 @@ class ProjectionEventTransactionIntegrationTest {
             });
             assertTrue(secondStarted.await(5, TimeUnit.SECONDS));
             assertFalse(secondEntered.await(250, TimeUnit.MILLISECONDS));
+            releaseFirst.countDown();
+            first.get(5, TimeUnit.SECONDS);
+            second.get(5, TimeUnit.SECONDS);
+            assertTrue(secondEntered.await(1, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void spaceChangeLockSerializesConcurrentTransactionsForTheSameSpace() throws Exception {
+        var firstEntered = new CountDownLatch(1);
+        var releaseFirst = new CountDownLatch(1);
+        var secondStarted = new CountDownLatch(1);
+        var secondEntered = new CountDownLatch(1);
+        var transaction = new TransactionTemplate(transactions);
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var first = executor.submit(() -> transaction.executeWithoutResult(ignored ->
+                    projectionChanges.withSpaceChangeLock(spaceId, () -> {
+                        firstEntered.countDown();
+                        await(releaseFirst);
+                        return null;
+                    })));
+            assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
+            var second = executor.submit(() -> {
+                secondStarted.countDown();
+                transaction.executeWithoutResult(ignored ->
+                        projectionChanges.withSpaceChangeLock(spaceId, () -> {
+                            secondEntered.countDown();
+                            return null;
+                        }));
+            });
+            assertTrue(secondStarted.await(5, TimeUnit.SECONDS));
+            assertFalse(secondEntered.await(250, TimeUnit.MILLISECONDS),
+                    "同一空间的角色与 ACL 变更必须串行，避免最后两个角色并发撤销后残留 ACL");
             releaseFirst.countDown();
             first.get(5, TimeUnit.SECONDS);
             second.get(5, TimeUnit.SECONDS);

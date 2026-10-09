@@ -12,12 +12,15 @@ public class KnowledgeSpaceService {
 
     private final KnowledgeSpaceRepository repository;
     private final KnowledgeWriteAuthorization writeAuthorization;
+    private final CreatorAccess creatorAccess;
 
     public KnowledgeSpaceService(
             KnowledgeSpaceRepository repository,
-            KnowledgeWriteAuthorization writeAuthorization) {
+            KnowledgeWriteAuthorization writeAuthorization,
+            CreatorAccess creatorAccess) {
         this.repository = Objects.requireNonNull(repository);
         this.writeAuthorization = Objects.requireNonNull(writeAuthorization);
+        this.creatorAccess = Objects.requireNonNull(creatorAccess);
     }
 
     @Transactional
@@ -38,6 +41,7 @@ public class KnowledgeSpaceService {
         var space = new KnowledgeSpace(
                 UuidV7.generate(at), normalizedName, normalizedDescription, 0, actorId, at);
         repository.insert(space);
+        creatorAccess.grantSpaceAdministrator(space.id(), actorId, at);
         return space;
     }
 
@@ -50,5 +54,10 @@ public class KnowledgeSpaceService {
         long offset = (long) (page - 1) * pageSize;
         if (offset > Integer.MAX_VALUE) throw new IllegalArgumentException("page is too large");
         return List.copyOf(repository.listAuthorized(userId, (int) offset, pageSize));
+    }
+
+    @FunctionalInterface
+    public interface CreatorAccess {
+        void grantSpaceAdministrator(UUID spaceId, UUID creatorId, Instant at);
     }
 }

@@ -166,6 +166,8 @@ class CoreKnowledgeManagementAcceptanceTest {
         roles.grantSpaceRole(admin.userId(), space.id(), reviewer, SpaceRole.REVIEWER_PUBLISHER, now);
         roles.grantSpaceRole(admin.userId(), space.id(), reader, SpaceRole.READER, now);
 
+        assertThat(roles.activeSpaceRoles(admin.userId(), space.id()))
+                .containsExactly(SpaceRole.SPACE_ADMIN);
         assertThat(roles.activeSpaceRoles(spaceAdmin, space.id())).containsExactly(SpaceRole.SPACE_ADMIN);
         assertThat(roles.activeSpaceRoles(editor, space.id())).containsExactly(SpaceRole.EDITOR);
         assertThat(roles.activeSpaceRoles(reviewer, space.id()))
@@ -234,6 +236,8 @@ class CoreKnowledgeManagementAcceptanceTest {
                 DegradationReason.VECTOR_UNAVAILABLE,
                 DegradationReason.RERANKER_UNAVAILABLE);
         assertThat(documents.getAuthorizedSource(reader, version.documentId(), Instant.now()).bytes())
+                .isEqualTo(REPRESENTATIVE_MARKDOWN);
+        assertThat(documents.getAuthorizedSource(admin.userId(), version.documentId(), Instant.now()).bytes())
                 .isEqualTo(REPRESENTATIVE_MARKDOWN);
 
         roles.revokeSpaceRole(

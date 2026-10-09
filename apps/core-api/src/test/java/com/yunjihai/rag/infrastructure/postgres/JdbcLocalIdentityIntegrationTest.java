@@ -30,6 +30,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -73,6 +74,7 @@ class JdbcLocalIdentityIntegrationTest {
     @AfterEach
     void clearRows() {
         jdbc.sql("DELETE FROM login_source_attempt").update();
+        jdbc.sql("DELETE FROM system_role_assignment").update();
         jdbc.sql("DELETE FROM app_user").update();
     }
 
@@ -148,6 +150,57 @@ class JdbcLocalIdentityIntegrationTest {
                 .isEqualTo(NOW.plusSeconds(15 * 60));
     }
 
+    @Test
+    void concurrentAdministratorsCannotDisableEachOtherAndLeaveNoActiveAdministrator() throws Exception {
+        var first = administration.createUser(
+                "admin-a", "管理员甲", chars("long-password-1"), UUID.randomUUID());
+        var second = administration.createUser(
+                "admin-b", "管理员乙", chars("long-password-2"), first.id());
+        grantSystemAdministrator(first.id(), first.id());
+        grantSystemAdministrator(second.id(), first.id());
+        var start = new CountDownLatch(1);
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var firstAttempt = executor.submit(() -> disableAfter(start, second.id(), first.id()));
+            var secondAttempt = executor.submit(() -> disableAfter(start, first.id(), second.id()));
+            start.countDown();
+            firstAttempt.get();
+            secondAttempt.get();
+        }
+
+        assertThat(jdbc.sql("""
+                SELECT count(*)
+                FROM system_role_assignment assignment
+                JOIN app_user account ON account.id = assignment.user_id AND account.enabled
+                WHERE assignment.role = 'SYSTEM_ADMIN' AND assignment.revoked_at IS NULL
+                """).query(Long.class).single()).isEqualTo(1);
+    }
+
+    private static boolean disableAfter(CountDownLatch start, UUID targetUserId, UUID actorId) {
+        try {
+            start.await();
+            administration.setEnabled(targetUserId, false, actorId);
+            return true;
+        } catch (RuntimeException expected) {
+            return false;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(interrupted);
+        }
+    }
+
+    private static void grantSystemAdministrator(UUID userId, UUID actorId) {
+        jdbc.sql("""
+                INSERT INTO system_role_assignment (id, user_id, role, granted_by, granted_at)
+                VALUES (:id, :userId, 'SYSTEM_ADMIN', :actorId, :at)
+                """)
+                .param("id", UUID.randomUUID())
+                .param("userId", userId)
+                .param("actorId", actorId)
+                .param("at", java.time.OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC))
+                .update();
+    }
+
     private static char[] chars(String value) {
         return value.toCharArray();
     }
@@ -167,15 +220,20 @@ class JdbcLocalIdentityIntegrationTest {
             return new JdbcLoginSourceRateLimiter(jdbc, SOURCE_HMAC_KEY);
         }
         @Bean JdbcSessionVersionStore sessionVersions(JdbcClient jdbc) { return new JdbcSessionVersionStore(jdbc); }
+        @Bean JdbcSystemAdministratorDisableProtection administratorProtection(JdbcClient jdbc) {
+            return new JdbcSystemAdministratorDisableProtection(jdbc);
+        }
         @Bean PasswordHasher passwordHasher() { return new PlainHasher(); }
         @Bean UserAdministrationService administration(
                 JdbcUserAccountStore accounts,
                 JdbcLocalCredentialStore credentials,
                 PasswordHasher hasher,
                 JdbcSessionVersionStore versions,
+                JdbcSystemAdministratorDisableProtection protection,
                 Clock clock) {
             return new UserAdministrationService(
-                    accounts, credentials, hasher, new SessionRevocationService(versions), AuditSink.noop(), clock);
+                    accounts, credentials, hasher, new SessionRevocationService(versions),
+                    AuditSink.noop(), clock, protection);
         }
         @Bean LocalAuthenticationService authentication(
                 JdbcUserAccountStore accounts,

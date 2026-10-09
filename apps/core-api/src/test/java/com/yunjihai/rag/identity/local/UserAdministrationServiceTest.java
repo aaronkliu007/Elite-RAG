@@ -69,6 +69,20 @@ class UserAdministrationServiceTest {
     }
 
     @Test
+    void cannotDisableTheCurrentlyAuthenticatedAdministrator() {
+        var fixture = fixture();
+        UserAccount administrator = fixture.service.createUser(
+                "admin", "管理员", chars("long-password-1"), UUID.randomUUID());
+
+        assertThatThrownBy(() -> fixture.service.setEnabled(
+                administrator.id(), false, administrator.id()))
+                .isInstanceOf(LocalIdentityValidationException.class)
+                .hasMessage("不能停用当前登录用户");
+
+        assertThat(fixture.accounts.findById(administrator.id()).orElseThrow().enabled()).isTrue();
+    }
+
+    @Test
     void listsCreatedUsers() {
         var fixture = fixture();
         UserAccount alice = fixture.service.createUser(

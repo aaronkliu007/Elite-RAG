@@ -1,5 +1,6 @@
 package com.yunjihai.rag.infrastructure.postgres;
 
+import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.knowledge.DocumentAggregate;
 import com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher;
 import com.yunjihai.rag.retrieval.projection.ProjectionCutoverLock;
@@ -54,6 +55,7 @@ public final class JdbcProjectionChangePublisher implements ProjectionChangePubl
         Objects.requireNonNull(spaceId);
         Objects.requireNonNull(action);
         return cutover.withShared(() -> {
+            lockSpace(spaceId);
             spaceLockDepth.set(spaceLockDepth.get() + 1);
             try {
                 return action.get();
@@ -61,6 +63,18 @@ public final class JdbcProjectionChangePublisher implements ProjectionChangePubl
                 decrement(spaceLockDepth);
             }
         });
+    }
+
+    private void lockSpace(UUID spaceId) {
+        try {
+            jdbc.sql("SELECT id FROM knowledge_space WHERE id = :spaceId FOR UPDATE")
+                    .param("spaceId", spaceId)
+                    .query(UUID.class)
+                    .optional()
+                    .orElseThrow(AccessDeniedAsNotFoundException::new);
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
     }
 
     @Override

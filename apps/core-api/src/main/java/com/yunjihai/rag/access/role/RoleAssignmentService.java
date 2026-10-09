@@ -62,8 +62,8 @@ public class RoleAssignmentService {
     @Transactional
     public void grantSpaceRole(UUID actorId, UUID spaceId, UUID userId, SpaceRole role, Instant at) {
         requireSpaceCommand(actorId, spaceId, userId, role, at);
-        authorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.MANAGE_ACL);
         projections.withSpaceChangeLock(spaceId, () -> {
+            authorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.MANAGE_ACL);
             boolean firstRole = roles.activeSpaceRoles(userId, spaceId).isEmpty();
             roles.grantSpaceRole(spaceId, userId, role, actorId, at);
             if (firstRole) {
@@ -78,8 +78,8 @@ public class RoleAssignmentService {
     @Transactional
     public void revokeSpaceRole(UUID actorId, UUID spaceId, UUID userId, SpaceRole role, Instant at) {
         requireSpaceCommand(actorId, spaceId, userId, role, at);
-        authorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.MANAGE_ACL);
         projections.withSpaceChangeLock(spaceId, () -> {
+            authorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.MANAGE_ACL);
             roles.revokeSpaceRole(spaceId, userId, role, actorId, at);
             if (roles.activeSpaceRoles(userId, spaceId).isEmpty()) {
                 acl.revokeSpace(spaceId, user(userId), at);

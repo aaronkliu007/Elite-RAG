@@ -64,6 +64,8 @@ class KnowledgeSpaceControllerTest {
         assertThat(fixture.spaces.values).hasSize(2);
         assertThat(adminView.description()).isEqualTo("研发规范与项目资产");
         assertThat(adminView.allowedActions()).contains("MANAGE_ACL", "CREATE_DOCUMENT", "EDIT_SPACE");
+        assertThat(fixture.roleStore.activeSpaceRoles(ADMIN, adminView.id()))
+                .containsExactly(SpaceRole.SPACE_ADMIN);
 
         assertThat(fixture.controller.list(authentication(SPACE_ADMIN), 1, 100))
                 .singleElement()
@@ -144,7 +146,11 @@ class KnowledgeSpaceControllerTest {
                 roleStore, noopAcl(), command -> null, ProjectionChangePublisher.noop(), authorization);
         var spaces = new Spaces(roleStore);
         spaces.insert(new KnowledgeSpace(SPACE_ID, "既有空间", "说明", 0, ADMIN, NOW));
-        var spaceService = new KnowledgeSpaceService(spaces, authorization);
+        var spaceService = new KnowledgeSpaceService(
+                spaces,
+                authorization,
+                (spaceId, creatorId, at) -> roles.grantSpaceRole(
+                        creatorId, spaceId, creatorId, SpaceRole.SPACE_ADMIN, at));
         var accounts = new Accounts();
         accounts.add(ADMIN, "admin", "系统管理员");
         accounts.add(SPACE_ADMIN, "space-admin", "空间管理员");
@@ -160,7 +166,7 @@ class KnowledgeSpaceControllerTest {
         var controller = new KnowledgeSpaceController(
                 spaceService, roles, users, authorization, idempotency, json,
                 Clock.fixed(NOW, ZoneOffset.UTC));
-        return new Fixture(controller, spaces);
+        return new Fixture(controller, spaces, roleStore);
     }
 
     private static UsernamePasswordAuthenticationToken authentication(UUID userId) {
@@ -181,7 +187,7 @@ class KnowledgeSpaceControllerTest {
         };
     }
 
-    private record Fixture(KnowledgeSpaceController controller, Spaces spaces) { }
+    private record Fixture(KnowledgeSpaceController controller, Spaces spaces, Roles roleStore) { }
 
     private static final class Spaces implements KnowledgeSpaceRepository {
         private final Map<UUID, KnowledgeSpace> values = new LinkedHashMap<>();

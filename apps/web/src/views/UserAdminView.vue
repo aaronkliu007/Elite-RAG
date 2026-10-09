@@ -3,7 +3,9 @@ import { onMounted, reactive, ref } from 'vue'
 
 import { adminApi, type AdminUser } from '../api/admin'
 import { ApiRequestError } from '../api/http'
+import { useSessionStore } from '../stores/session'
 
+const session = useSessionStore()
 const users = ref<AdminUser[]>([])
 const loading = ref(true)
 const loadError = ref('')
@@ -23,6 +25,10 @@ function upsertUser(user: AdminUser) {
   if (index >= 0) users.value.splice(index, 1, user)
   else users.value.push(user)
   users.value.sort((left, right) => left.username.localeCompare(right.username))
+}
+
+function cannotDisableSelf(user: AdminUser) {
+  return user.enabled && user.id === session.user?.userId
 }
 
 async function loadUsers() {
@@ -228,7 +234,8 @@ onMounted(loadUsers)
                   <button
                     data-action="toggle-user"
                     type="button"
-                    :disabled="Boolean(pendingOperation)"
+                    :disabled="Boolean(pendingOperation) || cannotDisableSelf(user)"
+                    :title="cannotDisableSelf(user) ? '不能停用当前登录用户' : undefined"
                     @click="toggleUser(user)"
                   >
                     {{ user.enabled ? '停用' : '启用' }}

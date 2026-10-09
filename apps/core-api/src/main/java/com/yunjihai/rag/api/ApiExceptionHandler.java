@@ -3,6 +3,7 @@ package com.yunjihai.rag.api;
 import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.api.idempotency.IdempotencyConflictException;
 import com.yunjihai.rag.identity.local.AuthenticationRejectedException;
+import com.yunjihai.rag.identity.local.LocalIdentityValidationException;
 import com.yunjihai.rag.identity.local.UsernameConflictException;
 import com.yunjihai.rag.infrastructure.postgres.PostgresPersistenceExceptionTranslator;
 import com.yunjihai.rag.ingestion.IngestionLeaseConflictException;
@@ -39,6 +40,7 @@ import java.util.Map;
 public class ApiExceptionHandler {
     @ExceptionHandler({
             IllegalArgumentException.class,
+            LocalIdentityValidationException.class,
             UploadRejectedException.class,
             HttpMessageNotReadableException.class,
             MissingRequestHeaderException.class,

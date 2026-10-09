@@ -26,6 +26,7 @@ public class UserAdministrationService {
     private final SessionRevocationService sessions;
     private final AuditSink auditSink;
     private final Clock clock;
+    private final SystemAdministratorDisableProtection administratorProtection;
 
     public UserAdministrationService(
             UserAccountStore accounts,
@@ -34,12 +35,25 @@ public class UserAdministrationService {
             SessionRevocationService sessions,
             AuditSink auditSink,
             Clock clock) {
+        this(accounts, credentials, passwordHasher, sessions, auditSink, clock,
+                SystemAdministratorDisableProtection.allowAll());
+    }
+
+    public UserAdministrationService(
+            UserAccountStore accounts,
+            LocalCredentialStore credentials,
+            PasswordHasher passwordHasher,
+            SessionRevocationService sessions,
+            AuditSink auditSink,
+            Clock clock,
+            SystemAdministratorDisableProtection administratorProtection) {
         this.accounts = Objects.requireNonNull(accounts);
         this.credentials = Objects.requireNonNull(credentials);
         this.passwordHasher = Objects.requireNonNull(passwordHasher);
         this.sessions = Objects.requireNonNull(sessions);
         this.auditSink = Objects.requireNonNull(auditSink);
         this.clock = Objects.requireNonNull(clock);
+        this.administratorProtection = Objects.requireNonNull(administratorProtection);
     }
 
     @Transactional
@@ -64,10 +78,16 @@ public class UserAdministrationService {
 
     @Transactional
     public void setEnabled(UUID userId, boolean enabled, UUID actorId) {
+        Objects.requireNonNull(userId);
+        Objects.requireNonNull(actorId);
         Instant now = clock.instant();
         if (accounts.findById(userId).isEmpty()) {
             throw new UserAccountNotFoundException();
         }
+        if (!enabled && userId.equals(actorId)) {
+            throw new LocalIdentityValidationException("不能停用当前登录用户");
+        }
+        if (!enabled) administratorProtection.requireCanDisable(userId, actorId);
         accounts.setEnabled(userId, enabled, now);
         sessions.setEnabled(userId, enabled);
         audit(actorId, enabled ? AuditAction.USER_ENABLE : AuditAction.USER_DISABLE, userId, Map.of());

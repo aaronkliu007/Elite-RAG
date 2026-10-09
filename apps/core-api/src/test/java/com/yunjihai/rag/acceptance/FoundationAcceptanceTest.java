@@ -236,7 +236,7 @@ class FoundationAcceptanceTest {
                     },
                     writeAuthorization,
                     audit);
-            spaces = new KnowledgeSpaceService(space -> { }, writeAuthorization);
+            spaces = new KnowledgeSpaceService(space -> { }, writeAuthorization, (space, creator, at) -> { });
             aclService = new AclService(
                     acl,
                     writeAuthorization,

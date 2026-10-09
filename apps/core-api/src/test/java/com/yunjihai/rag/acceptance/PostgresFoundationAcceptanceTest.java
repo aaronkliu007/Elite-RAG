@@ -324,7 +324,17 @@ class PostgresFoundationAcceptanceTest {
 
         assertThat(scalar("SELECT count(*) FROM app_user")).isEqualTo(3L);
         assertThat(scalar("SELECT count(*) FROM org_membership")).isEqualTo(3L);
-        assertThat(scalar("SELECT count(*) FROM acl_entry WHERE revoked_at IS NULL")).isEqualTo(1L);
+        assertThat(scalar("SELECT count(*) FROM acl_entry WHERE revoked_at IS NULL")).isEqualTo(2L);
+        assertThat(jdbc.sql("""
+                SELECT count(*) FROM acl_entry
+                WHERE space_id = :spaceId
+                  AND principal_type = 'USER'
+                  AND principal_id = :ownerId
+                  AND revoked_at IS NULL
+                """)
+                .param("spaceId", space.id())
+                .param("ownerId", owner)
+                .query(Long.class).single()).isEqualTo(1L);
         assertThat(jdbc.sql("SELECT status FROM ingestion_job WHERE id = :id")
                 .param("id", jobId).query(String.class).single()).isEqualTo("SUCCEEDED");
         assertThat(jdbc.sql("SELECT status || '/' || parse_status FROM document_version WHERE id = :id")
