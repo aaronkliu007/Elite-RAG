@@ -1,28 +1,30 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 
+import type { KnowledgeSpace } from '../api/spaces'
+
 export interface UploadDraft {
+  spaceId: string
   title: string
-  ownerName: string
   classification: string
-  permissionScope: string
+  tags: string[]
   file: File
 }
 
+const props = defineProps<{ spaces: KnowledgeSpace[] }>()
 const emit = defineEmits<{ submit: [draft: UploadDraft] }>()
 
+const spaceId = ref('')
 const title = ref('')
-const ownerName = ref('')
 const classification = ref('')
-const permissionScope = ref('')
+const tags = ref('')
 const file = ref<File | null>(null)
+const allowedSpaces = computed(() => props.spaces.filter((space) => space.allowedActions.includes('CREATE_DOCUMENT')))
 
 const canSubmit = computed(
   () =>
-    title.value.trim().length > 0 &&
-    ownerName.value.trim().length > 0 &&
+    spaceId.value.length > 0 && title.value.trim().length > 0 &&
     classification.value.length > 0 &&
-    permissionScope.value.trim().length > 0 &&
     file.value !== null,
 )
 
@@ -33,10 +35,10 @@ function selectFile(event: Event) {
 function submit() {
   if (!canSubmit.value || file.value === null) return
   emit('submit', {
+    spaceId: spaceId.value,
     title: title.value.trim(),
-    ownerName: ownerName.value.trim(),
     classification: classification.value,
-    permissionScope: permissionScope.value.trim(),
+    tags: tags.value.split(',').map((tag) => tag.trim()).filter(Boolean),
     file: file.value,
   })
 }
@@ -63,6 +65,27 @@ function submit() {
       class="upload-form"
       @submit.prevent="submit"
     >
+      <p
+        v-if="allowedSpaces.length === 0"
+        class="permission-warning field-wide"
+        role="status"
+      >
+        没有可上传的知识空间，请联系空间管理员授予编辑权限。
+      </p>
+      <label class="field field-wide">
+        <span>知识空间 <em>必填</em></span>
+        <select
+          v-model="spaceId"
+          name="spaceId"
+        >
+          <option value="">请选择知识空间</option>
+          <option
+            v-for="space in allowedSpaces"
+            :key="space.id"
+            :value="space.id"
+          >{{ space.name }}</option>
+        </select>
+      </label>
       <label class="field field-wide">
         <span>文档标题 <em>必填</em></span>
         <input
@@ -70,16 +93,6 @@ function submit() {
           name="title"
           maxlength="160"
           placeholder="例如：制造行业智能运维解决方案"
-        >
-      </label>
-
-      <label class="field">
-        <span>责任人 <em>必填</em></span>
-        <input
-          v-model="ownerName"
-          name="ownerName"
-          maxlength="80"
-          placeholder="团队或负责人"
         >
       </label>
 
@@ -99,13 +112,13 @@ function submit() {
         </select>
       </label>
 
-      <label class="field field-wide">
-        <span>权限范围 <em>必填</em></span>
+      <label class="field">
+        <span>标签</span>
         <input
-          v-model="permissionScope"
-          name="permissionScope"
+          v-model="tags"
+          name="tags"
           maxlength="160"
-          placeholder="例如：解决方案中心及指定项目组"
+          placeholder="多个标签用逗号分隔"
         >
       </label>
 
@@ -225,6 +238,7 @@ input[type='file'] {
   color: var(--color-muted);
   line-height: 1.5;
 }
+.permission-warning { margin: 0; padding: 12px 14px; border-radius: var(--radius-control); color: #7a4a00; background: #fff1c7; }
 
 .form-actions {
   display: flex;

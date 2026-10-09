@@ -5,6 +5,7 @@ import { useSessionStore } from '../stores/session'
 import DocumentDetailView from '../views/DocumentDetailView.vue'
 import KnowledgeHomeView from '../views/KnowledgeHomeView.vue'
 import LoginView from '../views/LoginView.vue'
+import SearchView from '../views/SearchView.vue'
 import SpaceDetailView from '../views/SpaceDetailView.vue'
 import UploadView from '../views/UploadView.vue'
 import UserAdminView from '../views/UserAdminView.vue'
@@ -33,6 +34,11 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
         path: '/upload',
         name: 'document-upload',
         component: UploadView,
+      },
+      {
+        path: '/search',
+        name: 'search',
+        component: SearchView,
       },
       {
         path: '/spaces/:spaceId',

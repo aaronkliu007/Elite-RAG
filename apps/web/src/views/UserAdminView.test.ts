@@ -80,7 +80,7 @@ describe('用户管理页', () => {
       if (path === '/api/v1/knowledge-spaces' && method === 'POST') {
         return json({ code: 'CONFLICT', message: '空间已存在', traceId: 'trace-space-conflict', fieldErrors: {} }, 409)
       }
-      if (path.endsWith('/documents')) return json([])
+      if (path.includes('/documents?page=1&pageSize=100')) return json([])
       throw new Error(`unexpected request: ${method} ${path}`)
     }))
     const pinia = createPinia()

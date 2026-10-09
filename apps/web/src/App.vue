@@ -36,6 +36,9 @@ async function logout() {
         <RouterLink to="/upload">
           安全上传
         </RouterLink>
+        <RouterLink to="/search">
+          全文检索
+        </RouterLink>
       </nav>
       <div class="session-actions">
         <div class="session-chip">
