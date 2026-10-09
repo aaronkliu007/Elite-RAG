@@ -1,24 +1,77 @@
 import { defineStore } from 'pinia'
+import { computed, ref } from 'vue'
 
-export interface SessionUser {
-  id: string
-  name: string
-  departmentName: string
-}
+import { ApiRequestError, clearCsrfToken, configureUnauthorizedHandler } from '../api/http'
+import { sessionApi, type SessionUser } from '../api/session'
 
-export const useSessionStore = defineStore('session', {
-  state: () => ({
-    user: null as SessionUser | null,
-    authenticated: false,
-  }),
-  actions: {
-    establish(user: SessionUser) {
-      this.user = user
-      this.authenticated = true
-    },
-    revoke() {
-      this.user = null
-      this.authenticated = false
-    },
-  },
+export type { SessionUser } from '../api/session'
+
+export const useSessionStore = defineStore('session', () => {
+  const user = ref<SessionUser | null>(null)
+  const initialized = ref(false)
+  const bootstrapError = ref('')
+  let bootstrapRequest: Promise<void> | null = null
+
+  const authenticated = computed(() => user.value !== null)
+
+  function establish(currentUser: SessionUser) {
+    user.value = currentUser
+    initialized.value = true
+    bootstrapError.value = ''
+  }
+
+  function revoke() {
+    user.value = null
+  }
+
+  configureUnauthorizedHandler(revoke)
+
+  async function bootstrap() {
+    if (initialized.value) return
+    if (bootstrapRequest) return bootstrapRequest
+    bootstrapRequest = (async () => {
+      bootstrapError.value = ''
+      try {
+        await sessionApi.csrf()
+        establish(await sessionApi.current())
+      } catch (error) {
+        revoke()
+        if (!(error instanceof ApiRequestError && error.status === 401)) {
+          bootstrapError.value = error instanceof ApiRequestError
+            ? error.displayMessage
+            : '登录服务暂时不可用，请稍后重试'
+        }
+      } finally {
+        initialized.value = true
+        bootstrapRequest = null
+      }
+    })()
+    return bootstrapRequest
+  }
+
+  async function login(username: string, password: string) {
+    establish(await sessionApi.login(username, password))
+  }
+
+  async function logout() {
+    try {
+      await sessionApi.logout()
+    } finally {
+      revoke()
+      clearCsrfToken()
+      initialized.value = true
+    }
+  }
+
+  return {
+    user,
+    authenticated,
+    initialized,
+    bootstrapError,
+    establish,
+    revoke,
+    bootstrap,
+    login,
+    logout,
+  }
 })

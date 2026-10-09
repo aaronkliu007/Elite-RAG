@@ -1,14 +1,27 @@
 <script setup lang="ts">
 import { RouterLink, RouterView } from 'vue-router'
+import { useRouter } from 'vue-router'
 
 import { useSessionStore } from './stores/session'
 
 const session = useSessionStore()
+const router = useRouter()
+
+async function logout() {
+  try {
+    await session.logout()
+  } finally {
+    await router.replace('/login')
+  }
+}
 </script>
 
 <template>
   <div class="app-shell">
-    <header class="app-header">
+    <header
+      v-if="session.authenticated"
+      class="app-header"
+    >
       <RouterLink
         class="brand"
         to="/"
@@ -24,18 +37,27 @@ const session = useSessionStore()
           安全上传
         </RouterLink>
       </nav>
-      <div
-        class="session-chip"
-        title="钉钉组织身份"
-      >
-        <span class="session-avatar">企</span>
-        <span>
-          <strong>{{ session.user?.name ?? '内网用户' }}</strong>
-          <small>{{ session.user?.departmentName ?? '钉钉组织同步' }}</small>
-        </span>
+      <div class="session-actions">
+        <div class="session-chip">
+          <span class="session-avatar">企</span>
+          <span>
+            <strong :title="session.user?.displayName">{{ session.user?.displayName }}</strong>
+            <small :title="session.user?.username">{{ session.user?.username }}</small>
+          </span>
+        </div>
+        <button
+          class="logout-action"
+          data-action="logout"
+          type="button"
+          @click="logout"
+        >
+          退出登录
+        </button>
       </div>
     </header>
-    <main><RouterView /></main>
+    <main :class="{ 'login-main': !session.authenticated }">
+      <RouterView />
+    </main>
   </div>
 </template>
 
@@ -74,11 +96,18 @@ nav a { padding: 9px 12px; border-radius: 8px; color: rgb(255 255 255 / 76%); fo
 nav a:hover, nav a.router-link-active { color: #fff; background: rgb(255 255 255 / 11%); }
 .brand:focus-visible, nav a:focus-visible { outline: 3px solid rgb(129 224 237 / 55%); outline-offset: 2px; }
 .session-chip { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.session-actions { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .session-avatar { display: grid; width: 34px; height: 34px; flex: 0 0 auto; border-radius: 50%; color: #103f54; background: #d9f1f3; font-size: 13px; font-weight: 850; place-items: center; }
-.session-chip > span:last-child { display: grid; }
+.session-chip > span:last-child { display: grid; min-width: 0; max-width: 180px; }
+.session-chip strong, .session-chip small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-chip strong { font-size: 13px; }
 .session-chip small { font-size: 10px; opacity: 0.7; }
+.logout-action { min-height: 36px; padding: 0 13px; border: 1px solid rgb(255 255 255 / 38%); border-radius: 8px; color: #fff; background: transparent; -webkit-text-fill-color: #fff; appearance: none; font-size: 13px; font-weight: 750; cursor: pointer; }
+.logout-action:hover { border-color: rgb(255 255 255 / 65%); background: rgb(255 255 255 / 10%); }
+.logout-action:focus-visible { outline: 3px solid rgb(129 224 237 / 55%); outline-offset: 2px; }
+.logout-action:disabled { opacity: 0.55; cursor: not-allowed; }
 main { width: min(1500px, 100%); margin: 0 auto; padding: 34px clamp(18px, 4vw, 56px) 56px; }
-@media (max-width: 820px) { .app-header { grid-template-columns: minmax(0, 1fr) auto; gap: 14px; } nav { grid-column: 1 / -1; grid-row: 2; } .session-chip > span:last-child { display: none; } }
+.login-main { width: 100%; padding-top: 0; }
+@media (max-width: 820px) { .app-header { grid-template-columns: minmax(0, 1fr) auto; gap: 14px; } nav { grid-column: 1 / -1; grid-row: 2; } .session-chip > span:last-child { display: none; } .session-actions { gap: 9px; } }
 @media (max-width: 520px) { .brand small { display: none; } .brand strong { font-size: 16px; } }
 </style>
