@@ -75,7 +75,52 @@ services:
       retries: 18
       start_period: 30s
 
+  document-parser:
+    image: ghcr.io/astral-sh/uv:0.12.18-python3.12-trixie-slim
+    working_dir: /workspace
+    command:
+      - uv
+      - run
+      - --project
+      - /workspace
+      - --extra
+      - parsing
+      - --no-dev
+      - --frozen
+      - uvicorn
+      - parser_worker.app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      HOME: /tmp
+      UV_CACHE_DIR: /uv-cache
+      UV_LINK_MODE: copy
+      UV_PROJECT_ENVIRONMENT: /venv
+    ports:
+      - "127.0.0.1:8001:8000"
+    read_only: true
+    volumes:
+      - ../../workers/document-parser:/workspace:ro
+      - parser_uv_cache:/uv-cache
+      - parser_venv:/venv
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 180s
+
 volumes:
   postgres_data:
   minio_data:
   opensearch_data:
+  parser_uv_cache:
+  parser_venv:

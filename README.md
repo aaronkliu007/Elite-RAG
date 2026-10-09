@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-当前分支已完成知识底座持久化和第一批生产形态检索适配器，但仍是研发联调版本，不是可直接投产的系统：
+当前分支已完成知识库核心管理纵向闭环，定位为**受控测试可用、尚未生产准入**，不是可直接投产的系统：
 
 - PostgreSQL 17 + Flyway 管理组织、会话、知识空间、文档版本、ACL、入库租约、Canonical 解析结果、审计和 Blob 清理候选；
 - 官方 AIStor 以不可变 SHA-256 内容寻址方式保存原始文件；
@@ -12,6 +12,9 @@
 - PostgreSQL 事务投影事件、批量最终鉴权和权威投影读取已经落地；
 - OpenSearch 3.8.0 具备版本化映射、BM25/KNN 安全过滤、可恢复 Worker、无缝重建和读写别名；
 - 检索链路在 OpenSearch 召回后始终回到 PostgreSQL 做最终授权复核，ACL 紧急撤销不依赖索引先收敛；
+- 服务端 Session、本地账号、五类固定角色、知识空间成员管理和统一错误/幂等边界已经落地；
+- Vue 已提供中文登录、用户/空间/成员管理、六类文件上传、解析状态、审核发布、全文检索和来源入口；
+- 完整验收覆盖管理员引导、角色分配、上传、解析、驳回再提交、发布、投影、检索、来源下载和撤权即时拒绝；
 - 真实 PostgreSQL 与官方 AIStor 纵向验收覆盖组织同步、授权、上传、入库、待评审、发布、授权读取和审计；
 - Python Worker 仍只负责无状态解析，不持有数据库、AIStor 或模型凭据；
 - 真实 Embedding、真实 Reranker、黄金评测集、常驻投影调度/管理面、方案工作台生产持久化、真实钉钉租户、云模型网关和业务 API/UI 仍属后续批次。
@@ -47,11 +50,12 @@ Copy-Item infra/compose/.env.example infra/compose/.env
 
 `.env` 不得提交。示例值只用于隔离开发；部署或共享环境必须从密钥系统注入独立随机凭据。数据库迁移账号与运行账号必须分离；AIStor 根账号只负责初始化，Core API 使用仅限 `rag-documents` 桶的应用账号，禁止把根账号提供给应用。
 
-启动和检查：
+启动和检查（首次启动解析 Worker 会下载并缓存受控解析依赖，耗时会明显长于其他容器；PyTorch 固定使用 CPU wheel，不下载 CUDA 运行时）：
 
 ```powershell
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml up -d --wait
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml ps
+Invoke-RestMethod http://127.0.0.1:8001/health
 ```
 
 停止并保留数据卷：
@@ -90,6 +94,7 @@ Get-Content infra/compose/.env | ForEach-Object {
     if (-not $localSettings.ContainsKey($_)) { throw "infra/compose/.env 缺少变量：$_" }
     [Environment]::SetEnvironmentVariable($_, $localSettings[$_], 'Process')
 }
+$env:RAG_PARSER_ENDPOINT = 'http://127.0.0.1:8001'
 $env:SPRING_PROFILES_ACTIVE = 'local'
 ./mvnw.cmd -pl apps/core-api spring-boot:run
 ```
@@ -111,7 +116,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
 corepack pnpm --dir apps/web exec playwright test
 ```
 
-统一脚本会先明确检查 Docker CLI、Docker daemon 和仓库外许可证，再运行 Java（含真实基础设施验收）、Vue、前端构建与 lint、Python pytest、ruff 和 mypy。详细迁移、租约恢复、清理候选和故障排查见[知识底座运行与恢复手册](docs/runbooks/knowledge-foundation.md)；检索投影、别名、最终鉴权与降级处理见[检索生产适配器运行手册](docs/runbooks/retrieval-production-adapters.md)。
+统一脚本会先明确检查 Docker CLI、Docker daemon 和仓库外许可证，校验 Compose，再运行 Java `clean verify`（含真实 PostgreSQL、AIStor 和 OpenSearch 验收）、Vue、前端构建与 lint、Python pytest、ruff 和 mypy。核心闭环启动、管理员引导、账号恢复、任务重试、降级、重建和撤权验证见[核心知识管理运行手册](docs/runbooks/core-knowledge-management.md)；底层迁移与检索细节分别见[知识底座运行与恢复手册](docs/runbooks/knowledge-foundation.md)和[检索生产适配器运行手册](docs/runbooks/retrieval-production-adapters.md)。
 
 ## 架构边界
 
@@ -129,7 +134,7 @@ Java 服务是业务事实、权限与事务边界的唯一所有者。PostgreSQ
 ## 安全底线
 
 - 未发布内容不进入普通用户查询；未授权与资源不存在统一隐藏；
-- 所有写操作默认拒绝，正式管理员授权边界必须在后续 API/身份批次明确实现；
+- 所有写操作默认拒绝，固定角色由后端逐动作授权；前端按钮只用于体验，不构成安全边界；
 - 日志和审计不得记录正文、节点文本、文件字节、未脱敏文件名、Token、Cookie 或数据库/AIStor 密钥；
 - Flyway 校验失败时拒绝启动，不修改已经发布的迁移；
 - Blob 数据库事务失败后只登记清理候选，请求线程不得直接删除对象；

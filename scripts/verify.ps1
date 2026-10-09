@@ -5,6 +5,7 @@ $uvCandidate = Join-Path $env:APPDATA 'Python\Python312\Scripts\uv.exe'
 $uvCommand = Get-Command uv -ErrorAction SilentlyContinue
 $uvExecutable = if ($uvCommand) { $uvCommand.Source } elseif (Test-Path $uvCandidate) { $uvCandidate } else { $null }
 $dockerCommand = Get-Command docker -ErrorAction SilentlyContinue
+$mavenCommand = Get-Command mvn -ErrorAction SilentlyContinue
 $licenseFile = if ($env:RAG_MINIO_LICENSE_FILE) {
     $env:RAG_MINIO_LICENSE_FILE
 } else {
@@ -29,16 +30,23 @@ if ($LASTEXITCODE -ne 0) {
 Push-Location $projectRoot
 
 try {
-    & .\mvnw.cmd -B -pl apps/core-api test
+    & $dockerCommand.Source compose --env-file infra/compose/.env.example -f infra/compose/compose.yaml config --quiet
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    corepack pnpm --dir apps/web test --run
+    if ($mavenCommand) {
+        & $mavenCommand.Source -B clean verify
+    } else {
+        & .\mvnw.cmd -B clean verify
+    }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    corepack pnpm --dir apps/web build
+    corepack pnpm test
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    corepack pnpm --dir apps/web lint
+    corepack pnpm build
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    corepack pnpm lint
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     & $uvExecutable sync --project workers/document-parser --extra parsing --frozen
@@ -47,7 +55,7 @@ try {
     & $uvExecutable run --project workers/document-parser pytest -W error
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    & $uvExecutable run --project workers/document-parser ruff check .
+    & $uvExecutable run --project workers/document-parser ruff check workers/document-parser
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     & $uvExecutable run --project workers/document-parser mypy workers/document-parser/src
