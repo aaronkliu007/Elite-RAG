@@ -120,7 +120,7 @@ class RetrievalProductionWiringTest {
             var result = context.getBean(HybridRecallService.class).recall(
                     "部署方案",
                     new RetrievalFilter(
-                            UUID.randomUUID(),
+                            Set.of(UUID.randomUUID()),
                             Set.of(new PrincipalRef(PrincipalType.USER, userId)),
                             true,
                             Instant.parse("2026-09-30T10:00:00Z"),

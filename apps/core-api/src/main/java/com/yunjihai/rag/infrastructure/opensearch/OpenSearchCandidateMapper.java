@@ -23,6 +23,7 @@ public final class OpenSearchCandidateMapper {
                 JsonNode value = hit.path("_source");
                 Double score = hit.path("_score").isNumber() ? hit.path("_score").asDouble() : null;
                 result.add(new Candidate(
+                        UUID.fromString(required(value, "spaceId")),
                         UUID.fromString(required(value, "candidateId")),
                         UUID.fromString(required(value, "documentId")),
                         UUID.fromString(required(value, "versionId")),

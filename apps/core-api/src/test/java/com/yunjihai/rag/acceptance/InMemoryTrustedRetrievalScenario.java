@@ -137,9 +137,10 @@ final class InMemoryTrustedRetrievalScenario implements AutoCloseable {
                 (userId, at) -> Set.of(new PrincipalRef(PrincipalType.USER, userId)),
                 recall,
                 reranking,
-                (userId, spaceId, requested, checkedAt) -> requested.stream()
+                (userId, requestedBySpace, checkedAt) -> requestedBySpace.values().stream()
+                        .flatMap(Set::stream)
                         .filter(reference -> userId.equals(USER_ID))
-                        .filter(reference -> spaceId.equals(SPACE_ID))
+                        .filter(reference -> requestedBySpace.keySet().equals(Set.of(SPACE_ID)))
                         .filter(reference -> !revokedAfterRecall.contains(reference.documentId()))
                         .filter(reference -> reference.versionId().equals(
                                 currentPublishedVersions.get(reference.documentId())))
@@ -155,7 +156,7 @@ final class InMemoryTrustedRetrievalScenario implements AutoCloseable {
         return new RetrievalQuery(
                 REQUEST_ID,
                 USER_ID,
-                SPACE_ID,
+                Set.of(SPACE_ID),
                 "企业知识检索",
                 Map.of("industry", "software"),
                 8);
@@ -168,6 +169,7 @@ final class InMemoryTrustedRetrievalScenario implements AutoCloseable {
             int rank,
             String text) {
         return new Candidate(
+                SPACE_ID,
                 uuid(candidateSeed),
                 documentId,
                 uuid(1000 + candidateSeed),
@@ -182,6 +184,7 @@ final class InMemoryTrustedRetrievalScenario implements AutoCloseable {
 
     private static Candidate asVector(Candidate candidate, int rank) {
         return new Candidate(
+                candidate.spaceId(),
                 candidate.candidateId(),
                 candidate.documentId(),
                 candidate.versionId(),

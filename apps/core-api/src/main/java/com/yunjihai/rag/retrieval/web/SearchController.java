@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Clock;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 @RestController
@@ -48,7 +49,7 @@ public class SearchController {
         var query = new RetrievalQuery(
                 UuidV7.generate(at),
                 userId,
-                request.spaceId(),
+                Set.of(request.spaceId()),
                 request.queryText(),
                 request.metadataFilter() == null ? Map.of() : request.metadataFilter(),
                 request.requestedEvidenceCount());

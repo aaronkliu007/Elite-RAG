@@ -30,11 +30,13 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 public final class TrustedRetrievalService implements RetrievalService {
 
@@ -113,7 +115,7 @@ public final class TrustedRetrievalService implements RetrievalService {
                 startedAt,
                 resolvePrincipals(query, startedAt));
         var filter = new RetrievalFilter(
-                query.spaceId(),
+                query.spaceIds(),
                 context.effectivePrincipals(),
                 true,
                 context.startedAt(),
@@ -126,8 +128,8 @@ public final class TrustedRetrievalService implements RetrievalService {
         var reranked = rerankingService.rerank(query.queryText(), recalled.candidates());
         progress.reasons.addAll(reranked.degradationReasons());
         Instant checkedAt = clock.instant();
-        var requestedVersions = documentVersions(reranked.candidates());
-        var allowedVersions = authorize(query, requestedVersions, checkedAt);
+        var requestedVersionsBySpace = documentVersionsBySpace(query, reranked.candidates());
+        var allowedVersions = authorize(query, requestedVersionsBySpace, checkedAt);
         var authorizedCandidates = reranked.candidates().stream()
                 .filter(candidate -> allowedVersions.contains(new DocumentVersionRef(
                         candidate.candidate().documentId(), candidate.candidate().versionId())))
@@ -167,12 +169,15 @@ public final class TrustedRetrievalService implements RetrievalService {
 
     private Set<DocumentVersionRef> authorize(
             RetrievalQuery query,
-            Set<DocumentVersionRef> requestedVersions,
+            Map<UUID, Set<DocumentVersionRef>> requestedVersionsBySpace,
             Instant checkedAt) {
+        var requestedVersions = requestedVersionsBySpace.values().stream()
+                .flatMap(Set::stream)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
         final Set<DocumentVersionRef> allowed;
         try {
             var raw = authorization.authorize(
-                    query.userId(), query.spaceId(), requestedVersions, checkedAt);
+                    query.userId(), requestedVersionsBySpace, checkedAt);
             allowed = Set.copyOf(Objects.requireNonNull(raw));
         } catch (RuntimeException exception) {
             throw new RetrievalAuthorizationUnavailableException(
@@ -185,11 +190,22 @@ public final class TrustedRetrievalService implements RetrievalService {
         return allowed;
     }
 
-    private static Set<DocumentVersionRef> documentVersions(List<ScoredCandidate> candidates) {
-        var versions = new LinkedHashSet<DocumentVersionRef>();
-        candidates.forEach(candidate -> versions.add(new DocumentVersionRef(
-                candidate.candidate().documentId(), candidate.candidate().versionId())));
-        return Set.copyOf(versions);
+    private static Map<UUID, Set<DocumentVersionRef>> documentVersionsBySpace(
+            RetrievalQuery query,
+            List<ScoredCandidate> candidates) {
+        var mutable = new LinkedHashMap<UUID, LinkedHashSet<DocumentVersionRef>>();
+        for (var scored : candidates) {
+            var candidate = scored.candidate();
+            if (!query.spaceIds().contains(candidate.spaceId())) {
+                throw new RetrievalAuthorizationUnavailableException(
+                        "current authorization is unavailable");
+            }
+            mutable.computeIfAbsent(candidate.spaceId(), ignored -> new LinkedHashSet<>())
+                    .add(new DocumentVersionRef(candidate.documentId(), candidate.versionId()));
+        }
+        var immutable = new LinkedHashMap<UUID, Set<DocumentVersionRef>>();
+        mutable.forEach((spaceId, versions) -> immutable.put(spaceId, Set.copyOf(versions)));
+        return Map.copyOf(immutable);
     }
 
     private List<Evidence> toEvidence(List<ScoredCandidate> candidates, Instant completedAt) {
@@ -197,6 +213,7 @@ public final class TrustedRetrievalService implements RetrievalService {
         for (var scored : candidates) {
             var candidate = scored.candidate();
             evidence.add(new Evidence(
+                    candidate.spaceId(),
                     evidenceIdFactory.next(completedAt),
                     candidate.documentId(),
                     candidate.versionId(),

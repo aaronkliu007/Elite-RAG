@@ -2,12 +2,13 @@ package com.yunjihai.rag.retrieval.domain;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 public record RetrievalQuery(
         UUID requestId,
         UUID userId,
-        UUID spaceId,
+        Set<UUID> spaceIds,
         String queryText,
         Map<String, String> metadataFilter,
         int requestedEvidenceCount) {
@@ -15,7 +16,7 @@ public record RetrievalQuery(
     public RetrievalQuery {
         Objects.requireNonNull(requestId, "requestId must not be null");
         Objects.requireNonNull(userId, "userId must not be null");
-        Objects.requireNonNull(spaceId, "spaceId must not be null");
+        spaceIds = DomainValidation.immutableSpaceIds(spaceIds);
         queryText = DomainValidation.normalizeQuery(queryText);
         if (queryText.isEmpty() || DomainValidation.codePointLength(queryText) > 2000) {
             throw new IllegalArgumentException("query text length is invalid");

@@ -36,6 +36,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
+import java.util.Set;
 import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -99,7 +100,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
 
             var service = context.getBean(TrustedRetrievalService.class);
             var query = new RetrievalQuery(
-                    UUID.randomUUID(), user, space, "Kubernetes 灰度部署方案", Map.of(), 8);
+                    UUID.randomUUID(), user, Set.of(space), "Kubernetes 灰度部署方案", Map.of(), 8);
             var first = service.retrieve(query);
 
             assertThat(first.evidence()).hasSize(1);
@@ -121,7 +122,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                         .countNodes(OpenSearchIndexManager.READ_ALIAS)).isEqualTo(1);
             }
             var afterRevocation = service.retrieve(new RetrievalQuery(
-                    UUID.randomUUID(), user, space, "Kubernetes 灰度部署方案", Map.of(), 8));
+                    UUID.randomUUID(), user, Set.of(space), "Kubernetes 灰度部署方案", Map.of(), 8));
             assertThat(afterRevocation.stats().fusedCount()).isEqualTo(1);
             assertThat(afterRevocation.stats().reauthorizedCount()).isZero();
             assertThat(afterRevocation.evidence()).isEmpty();

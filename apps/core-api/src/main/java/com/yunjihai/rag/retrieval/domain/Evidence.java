@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 public record Evidence(
+        UUID spaceId,
         UUID evidenceId,
         UUID documentId,
         UUID versionId,
@@ -14,6 +15,7 @@ public record Evidence(
         SourceLocator locator) {
 
     public Evidence {
+        Objects.requireNonNull(spaceId, "spaceId must not be null");
         Objects.requireNonNull(evidenceId, "evidenceId must not be null");
         Objects.requireNonNull(documentId, "documentId must not be null");
         Objects.requireNonNull(versionId, "versionId must not be null");

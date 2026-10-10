@@ -18,6 +18,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -114,9 +115,25 @@ class JdbcRetrievalAuthorizationIntegrationTest {
         var requested = Set.of(direct, department, unrestricted);
         countingDataSource.reset();
 
-        var allowed = adapter.authorize(userId, spaceId, requested, CHECKED_AT);
+        var allowed = adapter.authorize(userId, Map.of(spaceId, requested), CHECKED_AT);
 
         assertEquals(requested, allowed);
+        assertEquals(1, countingDataSource.statementCount());
+    }
+
+    @Test
+    void authorizesMultipleSpacesInOneSqlRoundTrip() {
+        grant(otherSpaceId, null, "SPACE", "USER", userId, null, null);
+        var primary = publishedDocument(spaceId, false);
+        var secondary = publishedDocument(otherSpaceId, false);
+        countingDataSource.reset();
+
+        var allowed = adapter.authorize(
+                userId,
+                Map.of(spaceId, Set.of(primary), otherSpaceId, Set.of(secondary)),
+                CHECKED_AT);
+
+        assertEquals(Set.of(primary, secondary), allowed);
         assertEquals(1, countingDataSource.statementCount());
     }
 
@@ -136,7 +153,7 @@ class JdbcRetrievalAuthorizationIntegrationTest {
                 oldVersion, current);
         countingDataSource.reset();
 
-        var allowed = adapter.authorize(userId, spaceId, requested, CHECKED_AT);
+        var allowed = adapter.authorize(userId, Map.of(spaceId, requested), CHECKED_AT);
 
         assertEquals(Set.of(current), allowed);
         assertEquals(1, countingDataSource.statementCount());
@@ -151,20 +168,20 @@ class JdbcRetrievalAuthorizationIntegrationTest {
         var candidate = publishedDocument(departmentOnlySpace, false);
 
         assertEquals(Set.of(candidate),
-                adapter.authorize(userId, departmentOnlySpace, Set.of(candidate), CHECKED_AT));
+                adapter.authorize(userId, Map.of(departmentOnlySpace, Set.of(candidate)), CHECKED_AT));
         jdbc.sql("DELETE FROM org_membership WHERE user_id = :user").param("user", userId).update();
-        assertTrue(adapter.authorize(userId, departmentOnlySpace, Set.of(candidate), CHECKED_AT).isEmpty());
+        assertTrue(adapter.authorize(userId, Map.of(departmentOnlySpace, Set.of(candidate)), CHECKED_AT).isEmpty());
         jdbc.sql("INSERT INTO org_membership (user_id, org_unit_id, snapshot_at) VALUES (:user, :department, :at)")
                 .param("user", userId).param("department", childDepartmentId)
                 .param("at", java.time.OffsetDateTime.parse("2026-09-30T09:00:00Z")).update();
         jdbc.sql("UPDATE app_user SET enabled = false WHERE id = :user").param("user", userId).update();
-        assertTrue(adapter.authorize(userId, departmentOnlySpace, Set.of(candidate), CHECKED_AT).isEmpty());
+        assertTrue(adapter.authorize(userId, Map.of(departmentOnlySpace, Set.of(candidate)), CHECKED_AT).isEmpty());
     }
 
     @Test
     void emptyAndDuplicateInputsAreBoundedBeforeSql() {
         countingDataSource.reset();
-        assertTrue(adapter.authorize(userId, spaceId, Set.of(), CHECKED_AT).isEmpty());
+        assertTrue(adapter.authorize(userId, Map.of(spaceId, Set.of()), CHECKED_AT).isEmpty());
         assertEquals(0, countingDataSource.statementCount());
 
         var candidate = publishedDocument(spaceId, false);
@@ -172,7 +189,7 @@ class JdbcRetrievalAuthorizationIntegrationTest {
         duplicates.add(candidate);
         duplicates.add(candidate);
         countingDataSource.reset();
-        assertEquals(Set.of(candidate), adapter.authorize(userId, spaceId, duplicates, CHECKED_AT));
+        assertEquals(Set.of(candidate), adapter.authorize(userId, Map.of(spaceId, duplicates), CHECKED_AT));
         assertEquals(1, countingDataSource.statementCount());
 
         var tooMany = new LinkedHashSet<DocumentVersionRef>();
@@ -181,7 +198,7 @@ class JdbcRetrievalAuthorizationIntegrationTest {
         }
         countingDataSource.reset();
         assertThrows(IllegalArgumentException.class,
-                () -> adapter.authorize(userId, spaceId, tooMany, CHECKED_AT));
+                () -> adapter.authorize(userId, Map.of(spaceId, tooMany), CHECKED_AT));
         assertEquals(0, countingDataSource.statementCount());
     }
 
@@ -201,8 +218,8 @@ class JdbcRetrievalAuthorizationIntegrationTest {
         var failing = new JdbcRetrievalAuthorizationAdapter(JdbcClient.create(failingDataSource));
 
         assertThrows(PostgresPersistenceExceptionTranslator.Failure.class,
-                () -> failing.authorize(userId, spaceId,
-                        Set.of(new DocumentVersionRef(UUID.randomUUID(), UUID.randomUUID())), CHECKED_AT));
+                () -> failing.authorize(userId, Map.of(spaceId,
+                        Set.of(new DocumentVersionRef(UUID.randomUUID(), UUID.randomUUID()))), CHECKED_AT));
     }
 
     private DocumentVersionRef publishedDocument(UUID targetSpace, boolean archived) {

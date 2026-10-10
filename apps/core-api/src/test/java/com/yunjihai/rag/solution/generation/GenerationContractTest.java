@@ -393,7 +393,7 @@ class GenerationContractTest {
 
     private static Evidence evidence(String excerpt) {
         return new Evidence(
-                id(30), id(20), id(21), "node-1", "客户需求", excerpt, 0.9,
+                id(2), id(30), id(20), id(21), "node-1", "客户需求", excerpt, 0.9,
                 new MarkdownLocator(List.of("客户需求"), "node-1"));
     }
 

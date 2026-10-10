@@ -9,14 +9,14 @@ import java.util.Set;
 import java.util.UUID;
 
 public record RetrievalFilter(
-        UUID spaceId,
+        Set<UUID> spaceIds,
         Set<PrincipalRef> effectivePrincipals,
         boolean currentPublishedOnly,
         Instant effectiveAt,
         Map<String, String> metadataFilter) {
 
     public RetrievalFilter {
-        Objects.requireNonNull(spaceId, "spaceId must not be null");
+        spaceIds = DomainValidation.immutableSpaceIds(spaceIds);
         effectivePrincipals = Set.copyOf(
                 Objects.requireNonNull(effectivePrincipals, "effectivePrincipals must not be null"));
         if (!currentPublishedOnly) {

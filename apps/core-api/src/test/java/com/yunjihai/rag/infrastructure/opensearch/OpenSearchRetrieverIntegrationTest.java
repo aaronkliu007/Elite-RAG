@@ -201,7 +201,7 @@ class OpenSearchRetrieverIntegrationTest {
     }
 
     private static RetrievalFilter filter(Set<PrincipalRef> principals, Map<String, String> metadata) {
-        return new RetrievalFilter(SPACE, principals, true, EFFECTIVE_AT, metadata);
+        return new RetrievalFilter(Set.of(SPACE), principals, true, EFFECTIVE_AT, metadata);
     }
 
     private static PrincipalRef user() { return new PrincipalRef(PrincipalType.USER, USER); }

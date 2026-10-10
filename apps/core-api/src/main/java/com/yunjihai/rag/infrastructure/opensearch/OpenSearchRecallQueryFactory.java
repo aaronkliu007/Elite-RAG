@@ -13,7 +13,7 @@ public final class OpenSearchRecallQueryFactory {
     private static final Set<String> METADATA_KEYS = Set.of(
             "industry", "product", "solutionType", "year");
     private static final List<String> SOURCE_FIELDS = List.of(
-            "candidateId", "documentId", "versionId", "nodeId", "title", "bodyText",
+            "spaceId", "candidateId", "documentId", "versionId", "nodeId", "title", "bodyText",
             "headingPath", "locatorType", "pageNumber", "boundingBox", "slideNumber",
             "tableName", "startRow", "endRow", "startColumn", "endColumn", "markdownNodeId");
 
@@ -61,7 +61,10 @@ public final class OpenSearchRecallQueryFactory {
         ArrayNode filters = bool.putArray("filter");
         filters.add(term("recordType", "NODE"));
         filters.add(term("currentPublished", true));
-        filters.add(term("spaceId", filter.spaceId().toString()));
+        filters.add(terms("spaceId", filter.spaceIds().stream()
+                .map(Object::toString)
+                .sorted()
+                .toList()));
         filters.add(acl("spaceAcl", principalKeys, filter));
 
         ObjectNode authorization = json.createObjectNode();
@@ -109,6 +112,12 @@ public final class OpenSearchRecallQueryFactory {
     private ObjectNode term(String field, boolean value) {
         ObjectNode query = json.createObjectNode();
         query.putObject("term").put(field, value);
+        return query;
+    }
+
+    private ObjectNode terms(String field, List<String> values) {
+        ObjectNode query = json.createObjectNode();
+        query.putObject("terms").putPOJO(field, values);
         return query;
     }
 

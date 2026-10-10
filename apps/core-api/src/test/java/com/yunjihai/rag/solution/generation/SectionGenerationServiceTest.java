@@ -82,7 +82,7 @@ class SectionGenerationServiceTest {
                 "verify",
                 "section:insert");
         assertThat(fixture.query.userId()).isEqualTo(ACTOR_ID);
-        assertThat(fixture.query.spaceId()).isEqualTo(SPACE_ID);
+        assertThat(fixture.query.spaceIds()).containsExactly(SPACE_ID);
         assertThat(fixture.query.requestedEvidenceCount()).isEqualTo(8);
         assertThat(fixture.query.metadataFilter()).isEmpty();
         assertThat(fixture.query.queryText())
@@ -284,7 +284,7 @@ class SectionGenerationServiceTest {
         fixture.modelFailuresRemaining = 1;
         var first = fixture.service.generate(command(SECTION_ID));
         fixture.evidence = List.of(new Evidence(
-                id(140), id(41), id(42), "node-2", "客户需求",
+                SPACE_ID, id(140), id(41), id(42), "node-2", "客户需求",
                 "客户要求系统支持100名用户", 0.9,
                 new MarkdownLocator(List.of("客户需求"), "node-2")));
 
@@ -599,7 +599,7 @@ class SectionGenerationServiceTest {
 
     private static Evidence evidence() {
         return new Evidence(
-                EVIDENCE_ID, id(41), id(42), "node-1", "客户需求",
+                SPACE_ID, EVIDENCE_ID, id(41), id(42), "node-1", "客户需求",
                 "客户要求系统支持100名用户", 0.9,
                 new MarkdownLocator(List.of("客户需求"), "node-1"));
     }

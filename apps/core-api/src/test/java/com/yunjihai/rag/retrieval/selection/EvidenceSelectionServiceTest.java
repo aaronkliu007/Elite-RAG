@@ -90,6 +90,7 @@ class EvidenceSelectionServiceTest {
 
     private static ScoredCandidate scored(int candidateSeed, UUID documentId, String text) {
         var candidate = new Candidate(
+                uuid(9000),
                 uuid(candidateSeed),
                 documentId,
                 uuid(1000 + candidateSeed),

@@ -99,7 +99,7 @@ class SearchControllerTest {
 
         assertThat(captured.get().requestId().version()).isEqualTo(7);
         assertThat(captured.get().userId()).isEqualTo(USER);
-        assertThat(captured.get().spaceId()).isEqualTo(SPACE);
+        assertThat(captured.get().spaceIds()).containsExactly(SPACE);
         assertThat(captured.get().queryText()).isEqualTo("灰度 部署");
         assertThat(response.requestId()).isEqualTo(captured.get().requestId());
         assertThat(response.degraded()).isTrue();
@@ -181,7 +181,7 @@ class SearchControllerTest {
     }
 
     private static Evidence evidence(int suffix, com.yunjihai.rag.retrieval.domain.SourceLocator locator) {
-        return new Evidence(id(100 + suffix), id(200 + suffix), id(300 + suffix),
+        return new Evidence(SPACE, id(100 + suffix), id(200 + suffix), id(300 + suffix),
                 "node-" + suffix, "部署标题", "部署摘要", 0.8, locator);
     }
 

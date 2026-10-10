@@ -269,22 +269,22 @@ class HybridRecallServiceTest {
         var lexical = candidate(conflictId, 40, RecallSource.LEXICAL, 1, "全文正文");
         var conflicting = List.of(
                 new Candidate(
-                        conflictId, uuid(999), lexical.versionId(), lexical.nodeId(), lexical.title(),
+                        lexical.spaceId(), conflictId, uuid(999), lexical.versionId(), lexical.nodeId(), lexical.title(),
                         lexical.text(), lexical.locator(), RecallSource.VECTOR, 1, 0.9),
                 new Candidate(
-                        conflictId, lexical.documentId(), uuid(999), lexical.nodeId(), lexical.title(),
+                        lexical.spaceId(), conflictId, lexical.documentId(), uuid(999), lexical.nodeId(), lexical.title(),
                         lexical.text(), lexical.locator(), RecallSource.VECTOR, 1, 0.9),
                 new Candidate(
-                        conflictId, lexical.documentId(), lexical.versionId(), "other-node", lexical.title(),
+                        lexical.spaceId(), conflictId, lexical.documentId(), lexical.versionId(), "other-node", lexical.title(),
                         lexical.text(), lexical.locator(), RecallSource.VECTOR, 1, 0.9),
                 new Candidate(
-                        conflictId, lexical.documentId(), lexical.versionId(), lexical.nodeId(), "其他标题",
+                        lexical.spaceId(), conflictId, lexical.documentId(), lexical.versionId(), lexical.nodeId(), "其他标题",
                         lexical.text(), lexical.locator(), RecallSource.VECTOR, 1, 0.9),
                 new Candidate(
-                        conflictId, lexical.documentId(), lexical.versionId(), lexical.nodeId(), lexical.title(),
+                        lexical.spaceId(), conflictId, lexical.documentId(), lexical.versionId(), lexical.nodeId(), lexical.title(),
                         "向量正文", lexical.locator(), RecallSource.VECTOR, 1, 0.9),
                 new Candidate(
-                        conflictId, lexical.documentId(), lexical.versionId(), lexical.nodeId(), lexical.title(),
+                        lexical.spaceId(), conflictId, lexical.documentId(), lexical.versionId(), lexical.nodeId(), lexical.title(),
                         lexical.text(), new PageLocator(99, null), RecallSource.VECTOR, 1, 0.9));
         var executor = Executors.newFixedThreadPool(2);
         try {
@@ -386,7 +386,7 @@ class HybridRecallServiceTest {
 
     private static RetrievalFilter filter() {
         return new RetrievalFilter(
-                SPACE_ID,
+                Set.of(SPACE_ID),
                 Set.of(new PrincipalRef(PrincipalType.USER, USER_ID)),
                 true,
                 Instant.parse("2026-09-28T03:00:00Z"),
@@ -415,6 +415,7 @@ class HybridRecallServiceTest {
             int rank,
             String text) {
         return new Candidate(
+                SPACE_ID,
                 candidateId,
                 uuid(identitySeed),
                 uuid(identitySeed + 100),

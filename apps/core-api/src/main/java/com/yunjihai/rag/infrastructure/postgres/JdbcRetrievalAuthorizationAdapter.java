@@ -9,7 +9,8 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -26,29 +27,46 @@ public final class JdbcRetrievalAuthorizationAdapter implements RetrievalAuthori
     @Override
     public Set<DocumentVersionRef> authorize(
             UUID userId,
-            UUID spaceId,
-            Set<DocumentVersionRef> requested,
+            Map<UUID, Set<DocumentVersionRef>> versionsBySpace,
             Instant checkedAt) {
         Objects.requireNonNull(userId);
-        Objects.requireNonNull(spaceId);
-        Objects.requireNonNull(requested);
+        Objects.requireNonNull(versionsBySpace);
         Objects.requireNonNull(checkedAt);
+        var requested = new LinkedHashMap<DocumentVersionRef, UUID>();
+        int requestedCount = 0;
+        for (var entry : versionsBySpace.entrySet()) {
+            UUID spaceId = Objects.requireNonNull(entry.getKey(), "spaceId must not be null");
+            Set<DocumentVersionRef> versions = Objects.requireNonNull(
+                    entry.getValue(), "requested versions must not be null");
+            if (versions.stream().anyMatch(Objects::isNull)) {
+                throw new IllegalArgumentException("授权复核版本数量或内容无效");
+            }
+            requestedCount += versions.size();
+            for (var version : versions) {
+                UUID previousSpace = requested.putIfAbsent(version, spaceId);
+                if (previousSpace != null && !previousSpace.equals(spaceId)) {
+                    throw new IllegalArgumentException("同一版本不能属于多个空间");
+                }
+            }
+        }
         if (requested.isEmpty()) return Set.of();
-        if (requested.size() > MAX_REQUESTED_VERSIONS || requested.stream().anyMatch(Objects::isNull)) {
+        if (requestedCount > MAX_REQUESTED_VERSIONS || requested.size() > MAX_REQUESTED_VERSIONS) {
             throw new IllegalArgumentException("授权复核版本数量或内容无效");
         }
 
-        var ordered = requested.stream()
-                .sorted(Comparator.comparing(DocumentVersionRef::documentId)
-                        .thenComparing(DocumentVersionRef::versionId))
+        var ordered = requested.entrySet().stream()
+                .sorted(Map.Entry.<DocumentVersionRef, UUID>comparingByValue()
+                        .thenComparing(entry -> entry.getKey().documentId())
+                        .thenComparing(entry -> entry.getKey().versionId()))
                 .toList();
         var inputRows = new ArrayList<String>(ordered.size());
         for (int index = 0; index < ordered.size(); index++) {
-            inputRows.add("(CAST(:document" + index + " AS uuid), CAST(:version" + index + " AS uuid))");
+            inputRows.add("(CAST(:space" + index + " AS uuid), CAST(:document" + index
+                    + " AS uuid), CAST(:version" + index + " AS uuid))");
         }
 
         String sql = """
-                WITH RECURSIVE requested(document_id, version_id) AS (
+                WITH RECURSIVE requested(space_id, document_id, version_id) AS (
                     VALUES %s
                 ),
                 enabled_reader(user_id) AS (
@@ -74,7 +92,7 @@ public final class JdbcRetrievalAuthorizationAdapter implements RetrievalAuthori
                 FROM requested
                 JOIN document
                   ON document.id = requested.document_id
-                 AND document.space_id = :spaceId
+                 AND document.space_id = requested.space_id
                  AND NOT document.archived
                  AND document.current_published_version_id = requested.version_id
                 JOIN document_version version
@@ -87,7 +105,7 @@ public final class JdbcRetrievalAuthorizationAdapter implements RetrievalAuthori
                     JOIN effective_principal principal
                       ON principal.principal_type = acl.principal_type
                      AND principal.principal_id = acl.principal_id
-                    WHERE acl.space_id = :spaceId
+                    WHERE acl.space_id = requested.space_id
                       AND acl.scope = 'SPACE'
                       AND acl.revoked_at IS NULL
                       AND (acl.expires_at IS NULL OR acl.expires_at > :checkedAt)
@@ -96,7 +114,7 @@ public final class JdbcRetrievalAuthorizationAdapter implements RetrievalAuthori
                     NOT EXISTS (
                         SELECT 1
                         FROM acl_entry history
-                        WHERE history.space_id = :spaceId
+                        WHERE history.space_id = requested.space_id
                           AND history.document_id = requested.document_id
                           AND history.scope = 'DOCUMENT'
                     )
@@ -106,7 +124,7 @@ public final class JdbcRetrievalAuthorizationAdapter implements RetrievalAuthori
                         JOIN effective_principal principal
                           ON principal.principal_type = acl.principal_type
                          AND principal.principal_id = acl.principal_id
-                        WHERE acl.space_id = :spaceId
+                        WHERE acl.space_id = requested.space_id
                           AND acl.document_id = requested.document_id
                           AND acl.scope = 'DOCUMENT'
                           AND acl.revoked_at IS NULL
@@ -119,11 +137,11 @@ public final class JdbcRetrievalAuthorizationAdapter implements RetrievalAuthori
         try {
             var statement = jdbc.sql(sql)
                     .param("userId", userId)
-                    .param("spaceId", spaceId)
                     .param("checkedAt", OffsetDateTime.ofInstant(checkedAt, ZoneOffset.UTC));
             for (int index = 0; index < ordered.size(); index++) {
-                var reference = ordered.get(index);
+                var reference = ordered.get(index).getKey();
                 statement = statement
+                        .param("space" + index, ordered.get(index).getValue())
                         .param("document" + index, reference.documentId())
                         .param("version" + index, reference.versionId());
             }

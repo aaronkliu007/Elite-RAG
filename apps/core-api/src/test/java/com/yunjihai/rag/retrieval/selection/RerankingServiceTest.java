@@ -168,6 +168,7 @@ class RerankingServiceTest {
         var candidates = new ArrayList<ScoredCandidate>();
         for (int index = 0; index < count; index++) {
             var candidate = new Candidate(
+                    uuid(9000),
                     uuid(index),
                     uuid(1000 + index),
                     uuid(2000 + index),

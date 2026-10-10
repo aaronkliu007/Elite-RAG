@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.UUID;
 
 public record Candidate(
+        UUID spaceId,
         UUID candidateId,
         UUID documentId,
         UUID versionId,
@@ -16,6 +17,7 @@ public record Candidate(
         Double sourceScore) {
 
     public Candidate {
+        Objects.requireNonNull(spaceId, "spaceId must not be null");
         Objects.requireNonNull(candidateId, "candidateId must not be null");
         Objects.requireNonNull(documentId, "documentId must not be null");
         Objects.requireNonNull(versionId, "versionId must not be null");

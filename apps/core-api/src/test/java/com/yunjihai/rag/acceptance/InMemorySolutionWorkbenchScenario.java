@@ -291,7 +291,7 @@ final class InMemorySolutionWorkbenchScenario {
 
     private static Evidence evidence(UUID evidenceId, String excerpt) {
         return new Evidence(
-                evidenceId, id(80), id(81), "node-1", "客户材料", excerpt, 0.9,
+                SPACE_ID, evidenceId, id(80), id(81), "node-1", "客户材料", excerpt, 0.9,
                 new MarkdownLocator(List.of("客户材料"), "node-1"));
     }
 

@@ -165,6 +165,7 @@ class SectionVerificationServiceTest {
 
     private static Evidence evidence(UUID evidenceId, String excerpt) {
         return new Evidence(
+                id(2),
                 evidenceId,
                 id(200),
                 id(201),

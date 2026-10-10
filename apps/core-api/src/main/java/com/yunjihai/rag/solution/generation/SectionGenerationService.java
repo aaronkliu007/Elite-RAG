@@ -144,7 +144,7 @@ public final class SectionGenerationService {
         com.yunjihai.rag.retrieval.domain.EvidencePack pack;
         try {
             pack = retrieval.retrieve(new RetrievalQuery(
-                    command.retrievalRequestId(), command.actorId(), command.spaceId(),
+                    command.retrievalRequestId(), command.actorId(), Set.of(command.spaceId()),
                     queryText(context.requirements(), context.section()),
                     Map.of(), policy.requestedEvidenceCount()));
         } catch (RuntimeException unavailable) {

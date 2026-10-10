@@ -46,6 +46,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.OptionalInt;
 import java.util.UUID;
 
@@ -227,7 +228,7 @@ class CoreKnowledgeManagementAcceptanceTest {
                 .isEqualTo(2);
 
         var first = retrieval.retrieve(new RetrievalQuery(
-                UUID.randomUUID(), reader, space.id(), "Kubernetes 灰度发布回滚", Map.of(), 8));
+                UUID.randomUUID(), reader, Set.of(space.id()), "Kubernetes 灰度发布回滚", Map.of(), 8));
         assertThat(first.evidence()).isNotEmpty();
         assertThat(first.evidence().getFirst().documentId()).isEqualTo(version.documentId());
         assertThat(first.evidence().getFirst().versionId()).isEqualTo(version.versionId());
@@ -243,7 +244,7 @@ class CoreKnowledgeManagementAcceptanceTest {
         roles.revokeSpaceRole(
                 admin.userId(), space.id(), reader, SpaceRole.READER, Instant.now());
         var afterRevocation = retrieval.retrieve(new RetrievalQuery(
-                UUID.randomUUID(), reader, space.id(), "Kubernetes 灰度发布回滚", Map.of(), 8));
+                UUID.randomUUID(), reader, Set.of(space.id()), "Kubernetes 灰度发布回滚", Map.of(), 8));
         assertThat(afterRevocation.stats().fusedCount()).isPositive();
         assertThat(afterRevocation.stats().reauthorizedCount()).isZero();
         assertThat(afterRevocation.evidence()).isEmpty();

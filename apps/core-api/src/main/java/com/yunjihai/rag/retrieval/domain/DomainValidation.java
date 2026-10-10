@@ -4,6 +4,8 @@ import java.text.Normalizer;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
 
 final class DomainValidation {
 
@@ -55,5 +57,13 @@ final class DomainValidation {
             copy.put(key, value);
         });
         return Map.copyOf(copy);
+    }
+
+    static Set<UUID> immutableSpaceIds(Set<UUID> spaceIds) {
+        Objects.requireNonNull(spaceIds, "spaceIds must not be null");
+        if (spaceIds.isEmpty() || spaceIds.size() > 100 || spaceIds.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalArgumentException("spaceIds must contain between 1 and 100 values");
+        }
+        return Set.copyOf(spaceIds);
     }
 }

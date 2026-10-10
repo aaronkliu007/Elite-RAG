@@ -22,6 +22,47 @@ class RetrievalContractTest {
     private static final UUID SPACE_ID = UUID.fromString("00000000-0000-0000-0000-000000001003");
 
     @Test
+    void queryAndFilterRejectEmptyNullOrMoreThanOneHundredSpaces() {
+        var tooManySpaces = new java.util.LinkedHashSet<UUID>();
+        for (int index = 0; index < 101; index++) {
+            tooManySpaces.add(new UUID(0, index + 1L));
+        }
+
+        assertThatThrownBy(() -> new RetrievalQuery(
+                REQUEST_ID, USER_ID, Set.of(), "知识检索", Map.of(), 8))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RetrievalQuery(
+                REQUEST_ID, USER_ID, tooManySpaces, "知识检索", Map.of(), 8))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RetrievalFilter(
+                Set.of(), Set.of(new PrincipalRef(PrincipalType.USER, USER_ID)), true,
+                Instant.parse("2026-09-28T01:00:00Z"), Map.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new RetrievalFilter(
+                tooManySpaces, Set.of(new PrincipalRef(PrincipalType.USER, USER_ID)), true,
+                Instant.parse("2026-09-28T01:00:00Z"), Map.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void queryAndFilterOwnImmutableMultiSpaceScope() {
+        var secondSpace = UUID.fromString("00000000-0000-0000-0000-000000001004");
+        var spaces = new java.util.LinkedHashSet<>(Set.of(SPACE_ID, secondSpace));
+        var query = new RetrievalQuery(
+                REQUEST_ID, USER_ID, spaces, "知识检索", Map.of(), 8);
+        var filter = new RetrievalFilter(
+                spaces, Set.of(new PrincipalRef(PrincipalType.USER, USER_ID)), true,
+                Instant.parse("2026-09-28T01:00:00Z"), Map.of());
+
+        spaces.clear();
+
+        assertThat(query.spaceIds()).containsExactlyInAnyOrder(SPACE_ID, secondSpace);
+        assertThat(filter.spaceIds()).containsExactlyInAnyOrder(SPACE_ID, secondSpace);
+        assertThatThrownBy(() -> query.spaceIds().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
     void rejectsBlankOrOverlongQueryText() {
         assertThatThrownBy(() -> query(" \t\r\n ", Map.of(), 8))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -95,7 +136,7 @@ class RetrievalContractTest {
         var query = query("知识检索", metadata, 8);
         var startedAt = Instant.parse("2026-09-28T01:00:00Z");
         var context = new RetrievalContext(startedAt, principals);
-        var filter = new RetrievalFilter(SPACE_ID, principals, true, startedAt, metadata);
+        var filter = new RetrievalFilter(Set.of(SPACE_ID), principals, true, startedAt, metadata);
 
         metadata.put("industry", "software");
         principals.add(new PrincipalRef(PrincipalType.ROLE, UUID.randomUUID()));
@@ -109,7 +150,7 @@ class RetrievalContractTest {
         assertThatThrownBy(() -> filter.effectivePrincipals().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> new RetrievalFilter(
-                SPACE_ID, Set.of(new PrincipalRef(PrincipalType.USER, USER_ID)),
+                Set.of(SPACE_ID), Set.of(new PrincipalRef(PrincipalType.USER, USER_ID)),
                 false, startedAt, Map.of()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
@@ -186,7 +227,7 @@ class RetrievalContractTest {
         var locator = new PageLocator(1, null);
 
         assertThatThrownBy(() -> new Candidate(
-                null, UUID.randomUUID(), UUID.randomUUID(), "node", "标题", "正文",
+                SPACE_ID, null, UUID.randomUUID(), UUID.randomUUID(), "node", "标题", "正文",
                 locator, RecallSource.LEXICAL, 1, 0.8))
                 .isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> candidate(" ", "标题", "正文", 1, 0.8))
@@ -224,16 +265,16 @@ class RetrievalContractTest {
                 candidate, 0.5, 1, Set.of(RecallSource.VECTOR)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Evidence(
-                UUID.randomUUID(), candidate.documentId(), candidate.versionId(), candidate.nodeId(),
+                candidate.spaceId(), UUID.randomUUID(), candidate.documentId(), candidate.versionId(), candidate.nodeId(),
                 candidate.title(), "知".repeat(1201), 0.5, candidate.locator()))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new Evidence(
-                UUID.randomUUID(), candidate.documentId(), candidate.versionId(), candidate.nodeId(),
+                candidate.spaceId(), UUID.randomUUID(), candidate.documentId(), candidate.versionId(), candidate.nodeId(),
                 candidate.title(), "摘要", Double.NEGATIVE_INFINITY, candidate.locator()))
                 .isInstanceOf(IllegalArgumentException.class);
 
         var evidence = new Evidence(
-                UUID.randomUUID(), candidate.documentId(), candidate.versionId(), candidate.nodeId(),
+                candidate.spaceId(), UUID.randomUUID(), candidate.documentId(), candidate.versionId(), candidate.nodeId(),
                 candidate.title(), "😀".repeat(1200), 0.5, candidate.locator());
         assertThat(evidence.excerpt()).hasSize(2400);
     }
@@ -242,7 +283,7 @@ class RetrievalContractTest {
     void evidencePackOwnsResultsAndEnforcesStatusInvariants() {
         var candidate = candidate("node", "标题", "正文", 1, 0.8);
         var evidence = new Evidence(
-                UUID.randomUUID(), candidate.documentId(), candidate.versionId(), candidate.nodeId(),
+                candidate.spaceId(), UUID.randomUUID(), candidate.documentId(), candidate.versionId(), candidate.nodeId(),
                 candidate.title(), "摘要", 0.5, candidate.locator());
         var mutableEvidence = new java.util.ArrayList<>(List.of(evidence));
         var reasons = new java.util.LinkedHashSet<>(Set.of(DegradationReason.VECTOR_UNAVAILABLE));
@@ -277,7 +318,7 @@ class RetrievalContractTest {
         return new RetrievalQuery(
                 REQUEST_ID,
                 USER_ID,
-                SPACE_ID,
+                Set.of(SPACE_ID),
                 queryText,
                 metadata,
                 requestedEvidenceCount);
@@ -290,6 +331,7 @@ class RetrievalContractTest {
             int sourceRank,
             Double sourceScore) {
         return new Candidate(
+                SPACE_ID,
                 UUID.fromString("00000000-0000-0000-0000-000000001011"),
                 UUID.fromString("00000000-0000-0000-0000-000000001012"),
                 UUID.fromString("00000000-0000-0000-0000-000000001013"),

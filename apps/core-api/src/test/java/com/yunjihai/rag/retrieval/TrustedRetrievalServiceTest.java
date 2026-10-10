@@ -51,6 +51,64 @@ class TrustedRetrievalServiceTest {
     private static final Instant NOW = Instant.parse("2026-09-28T04:00:00Z");
 
     @Test
+    void groupsFinalAuthorizationByCandidateSpaceAndPreservesSpaceInEvidence() {
+        var secondSpace = uuid(4);
+        var first = new Candidate(
+                SPACE_ID, uuid(10), uuid(110), uuid(1110), "node-10", "标题-10", "正文甲",
+                new PageLocator(1, null), RecallSource.LEXICAL, 1, 1.0);
+        var second = new Candidate(
+                secondSpace, uuid(20), uuid(120), uuid(1120), "node-20", "标题-20", "正文乙",
+                new PageLocator(2, null), RecallSource.LEXICAL, 2, 0.8);
+        var authorizationRequest = new AtomicReference<Map<UUID, Set<DocumentVersionRef>>>();
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var policy = RetrievalPolicy.defaults();
+            var recall = new HybridRecallService(
+                    (query, filter, limit) -> List.of(first, second),
+                    (query, filter, limit) -> List.of(),
+                    executor,
+                    policy);
+            var reranking = new RerankingService(
+                    (query, candidates) -> candidates.stream()
+                            .map(candidate -> new RerankScore(
+                                    candidate.candidate().candidateId(), candidate.score()))
+                            .toList(),
+                    executor,
+                    policy);
+            var service = new TrustedRetrievalService(
+                    (userId, at) -> Set.of(new PrincipalRef(PrincipalType.USER, userId)),
+                    recall,
+                    reranking,
+                    (userId, versionsBySpace, checkedAt) -> {
+                        authorizationRequest.set(versionsBySpace);
+                        return versionsBySpace.values().stream()
+                                .flatMap(Set::stream)
+                                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                    },
+                    new EvidenceSelectionService(policy),
+                    at -> uuid(9000),
+                    policy,
+                    Clock.fixed(NOW, ZoneOffset.UTC),
+                    command -> null);
+
+            var result = service.retrieve(new RetrievalQuery(
+                    REQUEST_ID, USER_ID, Set.of(SPACE_ID, secondSpace),
+                    "企业知识检索", Map.of(), 8));
+
+            assertThat(authorizationRequest.get()).containsOnlyKeys(SPACE_ID, secondSpace);
+            assertThat(authorizationRequest.get().get(SPACE_ID)).containsExactly(
+                    new DocumentVersionRef(first.documentId(), first.versionId()));
+            assertThat(authorizationRequest.get().get(secondSpace)).containsExactly(
+                    new DocumentVersionRef(second.documentId(), second.versionId()));
+            assertThat(result.evidence())
+                    .extracting(evidence -> evidence.spaceId())
+                    .containsExactly(SPACE_ID, secondSpace);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void orchestratesHealthyRetrievalIntoAuthorizedEvidence() {
         var order = new ConcurrentLinkedQueue<String>();
         var authorizationRequest = new AtomicReference<Set<DocumentVersionRef>>();
@@ -82,8 +140,9 @@ class TrustedRetrievalServiceTest {
                     },
                     executor,
                     RetrievalPolicy.defaults());
-            RetrievalAuthorizationPort authorization = (userId, spaceId, requested, checkedAt) -> {
+            RetrievalAuthorizationPort authorization = (userId, requestedBySpace, checkedAt) -> {
                 order.add("authorize");
+                var requested = flatten(requestedBySpace);
                 authorizationRequest.set(requested);
                 authorizationTime.set(checkedAt);
                 return requested;
@@ -364,7 +423,7 @@ class TrustedRetrievalServiceTest {
                     (query, filter, limit) -> {
                         throw new IllegalStateException("向量供应商秘密错误");
                     },
-                    (userId, spaceId, requested, at) -> requested,
+                    (userId, requestedBySpace, at) -> flatten(requestedBySpace),
                     Clock.fixed(NOW, ZoneOffset.UTC),
                     command -> {
                         degradedAudits.add(command);
@@ -394,7 +453,7 @@ class TrustedRetrievalServiceTest {
                     (query, filter, limit) -> {
                         throw new IllegalStateException("向量秘密错误");
                     },
-                    (userId, spaceId, requested, at) -> requested,
+                    (userId, requestedBySpace, at) -> flatten(requestedBySpace),
                     Clock.fixed(NOW, ZoneOffset.UTC),
                     command -> {
                         failedAudits.add(command);
@@ -415,7 +474,7 @@ class TrustedRetrievalServiceTest {
             var successAuditFailure = trustedService(
                     (query, filter, limit) -> List.of(candidate),
                     (query, filter, limit) -> List.of(),
-                    (userId, spaceId, requested, at) -> requested,
+                    (userId, requestedBySpace, at) -> flatten(requestedBySpace),
                     Clock.fixed(NOW, ZoneOffset.UTC),
                     command -> {
                         throw new IllegalStateException("审计不可用");
@@ -432,7 +491,7 @@ class TrustedRetrievalServiceTest {
                     (query, filter, limit) -> {
                         throw new IllegalStateException("向量秘密错误");
                     },
-                    (userId, spaceId, requested, at) -> requested,
+                    (userId, requestedBySpace, at) -> flatten(requestedBySpace),
                     Clock.fixed(NOW, ZoneOffset.UTC),
                     command -> {
                         throw new IllegalStateException("失败审计不可用");
@@ -545,9 +604,9 @@ class TrustedRetrievalServiceTest {
                 resolver,
                 recall,
                 reranking,
-                (userId, spaceId, requested, checkedAt) -> {
+                (userId, requestedBySpace, checkedAt) -> {
                     authorizationCalls.incrementAndGet();
-                    return requested;
+                    return flatten(requestedBySpace);
                 },
                 new EvidenceSelectionService(RetrievalPolicy.defaults()),
                 at -> {
@@ -563,7 +622,7 @@ class TrustedRetrievalServiceTest {
         return new RetrievalQuery(
                 REQUEST_ID,
                 USER_ID,
-                SPACE_ID,
+                Set.of(SPACE_ID),
                 "  企业知识检索  ",
                 Map.of("year", "2026"),
                 8);
@@ -576,6 +635,7 @@ class TrustedRetrievalServiceTest {
             int rank,
             String text) {
         return new Candidate(
+                SPACE_ID,
                 uuid(candidateSeed),
                 uuid(documentSeed),
                 uuid(documentSeed + 1000),
@@ -590,6 +650,13 @@ class TrustedRetrievalServiceTest {
 
     private static UUID uuid(int suffix) {
         return UUID.fromString("00000000-0000-0000-0000-%012d".formatted(suffix));
+    }
+
+    private static Set<DocumentVersionRef> flatten(
+            Map<UUID, Set<DocumentVersionRef>> requestedBySpace) {
+        return requestedBySpace.values().stream()
+                .flatMap(Set::stream)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     private static final class MutableAuthority {
@@ -644,16 +711,17 @@ class TrustedRetrievalServiceTest {
 
         private Set<DocumentVersionRef> authorize(
                 UUID userId,
-                UUID spaceId,
-                Set<DocumentVersionRef> requested,
+                Map<UUID, Set<DocumentVersionRef>> requestedBySpace,
                 Instant checkedAt) {
             calls.incrementAndGet();
             lastUserId.set(userId);
-            lastSpaceId.set(spaceId);
+            lastSpaceId.set(requestedBySpace.keySet().stream().findFirst().orElse(null));
             lastCheckedAt.set(checkedAt);
-            if (!expectedUserId.equals(userId) || !expectedSpaceId.equals(spaceId)) {
+            if (!expectedUserId.equals(userId)
+                    || !requestedBySpace.keySet().equals(Set.of(expectedSpaceId))) {
                 return Set.of();
             }
+            var requested = flatten(requestedBySpace);
             var principals = new HashSet<PrincipalRef>();
             principals.add(new PrincipalRef(PrincipalType.USER, userId));
             if (roleMembershipActive) {
@@ -741,7 +809,8 @@ class TrustedRetrievalServiceTest {
                     (userId, at) -> Set.of(new PrincipalRef(PrincipalType.USER, userId)),
                     recall,
                     reranking,
-                    (userId, spaceId, requestedVersions, authorizationTime) -> {
+                    (userId, requestedBySpace, authorizationTime) -> {
+                        var requestedVersions = flatten(requestedBySpace);
                         authorizationCalls.incrementAndGet();
                         requested.set(requestedVersions);
                         checkedAt.set(authorizationTime);
