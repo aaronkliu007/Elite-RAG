@@ -8,10 +8,14 @@ import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
 import com.yunjihai.rag.retrieval.domain.SlideLocator;
 import com.yunjihai.rag.retrieval.domain.TableLocator;
+import com.yunjihai.rag.retrieval.embedding.EmbeddingPort;
+import com.yunjihai.rag.retrieval.embedding.EmbeddingVector;
 import com.yunjihai.rag.retrieval.projection.ProjectionAclGrant;
 import com.yunjihai.rag.retrieval.projection.ProjectionNode;
 import com.yunjihai.rag.retrieval.projection.RetrievalProjectionSnapshot;
 import com.yunjihai.rag.retrieval.projection.SearchProjectionWriter;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.opensearch.client.opensearch.generic.Body;
 import org.opensearch.client.opensearch.generic.Requests;
@@ -19,6 +23,7 @@ import org.opensearch.client.opensearch.generic.Requests;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -28,9 +33,25 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
     private final OpenSearchClient client;
     private final ObjectMapper json;
     private final Consumer<String> targetResolved;
+    private final SensitiveContentSanitizer sanitizer;
+    private final EmbeddingPort embeddings;
+    private final boolean vectorEnabled;
+    private final int vectorDimension;
 
     public OpenSearchProjectionWriter(OpenSearchClient client) {
-        this(client, new ObjectMapper(), ignored -> { });
+        this(client, new ObjectMapper(), ignored -> { },
+                new RegexSensitiveContentSanitizer(Set.of()),
+                texts -> { throw new IllegalStateException("EMBEDDING_DISABLED"); }, false, 0);
+    }
+
+    public OpenSearchProjectionWriter(
+            OpenSearchClient client,
+            SensitiveContentSanitizer sanitizer,
+            EmbeddingPort embeddings,
+            boolean vectorEnabled,
+            int vectorDimension) {
+        this(client, new ObjectMapper(), ignored -> { },
+                sanitizer, embeddings, vectorEnabled, vectorDimension);
     }
 
     OpenSearchProjectionWriter(OpenSearchClient client, ObjectMapper json) {
@@ -39,20 +60,41 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
 
     OpenSearchProjectionWriter(
             OpenSearchClient client, ObjectMapper json, Consumer<String> targetResolved) {
+        this(client, json, targetResolved,
+                new RegexSensitiveContentSanitizer(Set.of()),
+                texts -> { throw new IllegalStateException("EMBEDDING_DISABLED"); }, false, 0);
+    }
+
+    OpenSearchProjectionWriter(
+            OpenSearchClient client,
+            ObjectMapper json,
+            Consumer<String> targetResolved,
+            SensitiveContentSanitizer sanitizer,
+            EmbeddingPort embeddings,
+            boolean vectorEnabled,
+            int vectorDimension) {
         this.client = Objects.requireNonNull(client);
         this.json = Objects.requireNonNull(json);
         this.targetResolved = Objects.requireNonNull(targetResolved);
+        this.sanitizer = Objects.requireNonNull(sanitizer);
+        this.embeddings = Objects.requireNonNull(embeddings);
+        if (vectorEnabled && vectorDimension < 1) {
+            throw new IllegalArgumentException("vector dimension must be positive when enabled");
+        }
+        this.vectorEnabled = vectorEnabled;
+        this.vectorDimension = vectorDimension;
     }
 
     @Override
     public void apply(String targetIndex, RetrievalProjectionSnapshot snapshot) {
         OpenSearchIndexManager.validateIndex(targetIndex);
         Objects.requireNonNull(snapshot);
+        PreparedProjection prepared = snapshot.indexable() ? prepare(snapshot) : null;
         String concreteIndex = resolveConcreteTarget(targetIndex);
         targetResolved.accept(concreteIndex);
         if (!acceptTombstone(concreteIndex, snapshot)) return;
         if (snapshot.indexable()) {
-            writeNodes(concreteIndex, snapshot);
+            writeNodes(concreteIndex, snapshot, prepared);
             refresh(concreteIndex);
             deleteResidualNodes(concreteIndex, snapshot, snapshot.nodes().stream()
                     .map(ProjectionNode::indexDocumentId).collect(java.util.stream.Collectors.toSet()));
@@ -60,6 +102,48 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
             refresh(concreteIndex);
             deleteResidualNodes(concreteIndex, snapshot, Set.of());
         }
+    }
+
+    private PreparedProjection prepare(RetrievalProjectionSnapshot snapshot) {
+        var title = sanitizer.sanitizeText(snapshot.title());
+        if (title.blocked()) throw new IllegalStateException("PROJECTION_CONTENT_BLOCKED");
+
+        var preparedNodes = new ArrayList<PreparedNode>(snapshot.nodes().size());
+        var embeddingInputs = new ArrayList<String>(snapshot.nodes().size());
+        for (ProjectionNode node : snapshot.nodes()) {
+            var body = sanitizer.sanitizeText(node.bodyText());
+            if (body.blocked()) throw new IllegalStateException("PROJECTION_CONTENT_BLOCKED");
+            var headings = new ArrayList<String>(node.headingPath().size());
+            for (String heading : node.headingPath()) {
+                var sanitizedHeading = sanitizer.sanitizeText(heading);
+                if (sanitizedHeading.blocked()) {
+                    throw new IllegalStateException("PROJECTION_CONTENT_BLOCKED");
+                }
+                headings.add(sanitizedHeading.value());
+            }
+            embeddingInputs.add(body.value());
+            preparedNodes.add(new PreparedNode(
+                    node, body.value(), List.copyOf(headings), List.of()));
+        }
+
+        if (!vectorEnabled) return new PreparedProjection(title.value(), preparedNodes);
+
+        List<EmbeddingVector> vectors = embeddings.embedAll(List.copyOf(embeddingInputs));
+        if (vectors == null || vectors.size() != preparedNodes.size()
+                || vectors.stream().anyMatch(Objects::isNull)) {
+            throw new IllegalStateException("PROJECTION_EMBEDDING_BATCH_INVALID");
+        }
+        var vectorized = new ArrayList<PreparedNode>(preparedNodes.size());
+        for (int index = 0; index < preparedNodes.size(); index++) {
+            EmbeddingVector vector = vectors.get(index);
+            if (vector.dimension() != vectorDimension) {
+                throw new IllegalStateException("PROJECTION_EMBEDDING_DIMENSION_INVALID");
+            }
+            PreparedNode node = preparedNodes.get(index);
+            vectorized.add(new PreparedNode(
+                    node.source(), node.bodyText(), node.headingPath(), vector.values()));
+        }
+        return new PreparedProjection(title.value(), vectorized);
     }
 
     private String resolveConcreteTarget(String targetIndex) {
@@ -101,15 +185,16 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
         return !"noop".equals(response.path("result").asText());
     }
 
-    private void writeNodes(String index, RetrievalProjectionSnapshot snapshot) {
+    private void writeNodes(
+            String index, RetrievalProjectionSnapshot snapshot, PreparedProjection prepared) {
         StringBuilder ndjson = new StringBuilder();
-        for (ProjectionNode node : snapshot.nodes()) {
+        for (PreparedNode node : prepared.nodes()) {
             ObjectNode action = json.createObjectNode();
             ObjectNode updateAction = action.putObject("update");
             updateAction.put("_index", index);
-            updateAction.put("_id", node.indexDocumentId());
+            updateAction.put("_id", node.source().indexDocumentId());
             ndjson.append(action).append('\n');
-            ObjectNode source = nodeDocument(snapshot, node);
+            ObjectNode source = nodeDocument(snapshot, prepared.title(), node);
             ObjectNode update = json.createObjectNode();
             update.put("scripted_upsert", true);
             ObjectNode script = update.putObject("script");
@@ -136,7 +221,9 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
         }
     }
 
-    private ObjectNode nodeDocument(RetrievalProjectionSnapshot snapshot, ProjectionNode node) {
+    private ObjectNode nodeDocument(
+            RetrievalProjectionSnapshot snapshot, String title, PreparedNode prepared) {
+        ProjectionNode node = prepared.source();
         ObjectNode document = json.createObjectNode();
         document.put("recordType", "NODE");
         document.put("spaceId", snapshot.spaceId().toString());
@@ -144,9 +231,10 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
         document.put("versionId", snapshot.versionId().toString());
         document.put("candidateId", node.candidateId().toString());
         document.put("nodeId", node.nodeId());
-        document.put("title", snapshot.title());
-        document.putPOJO("headingPath", node.headingPath());
-        document.put("bodyText", node.bodyText());
+        document.put("title", title);
+        document.putPOJO("headingPath", prepared.headingPath());
+        document.put("bodyText", prepared.bodyText());
+        if (vectorEnabled) document.putPOJO("embedding", prepared.embedding());
         document.put("kind", node.kind());
         document.put("stableOrder", node.stableOrder());
         if (node.confidence() != null) document.put("confidence", node.confidence());
@@ -276,5 +364,19 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
 
     private static String encodeId(String value) {
         return java.net.URLEncoder.encode(value, StandardCharsets.UTF_8).replace("+", "%20");
+    }
+
+    private record PreparedProjection(String title, List<PreparedNode> nodes) {
+        private PreparedProjection {
+            nodes = List.copyOf(nodes);
+        }
+    }
+
+    private record PreparedNode(
+            ProjectionNode source, String bodyText, List<String> headingPath, List<Double> embedding) {
+        private PreparedNode {
+            headingPath = List.copyOf(headingPath);
+            embedding = List.copyOf(embedding);
+        }
     }
 }

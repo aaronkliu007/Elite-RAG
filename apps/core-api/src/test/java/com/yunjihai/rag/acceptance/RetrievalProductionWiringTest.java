@@ -1,5 +1,8 @@
 package com.yunjihai.rag.acceptance;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
 import com.yunjihai.rag.RagApplication;
 import com.yunjihai.rag.access.PrincipalRef;
 import com.yunjihai.rag.access.PrincipalType;
@@ -9,15 +12,29 @@ import com.yunjihai.rag.infrastructure.opensearch.OpenSearchConnection;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchIndexManager;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchProperties;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchRebuildService;
+import com.yunjihai.rag.infrastructure.model.OpenAiEmbeddingAdapter;
+import com.yunjihai.rag.infrastructure.model.OpenAiRerankerAdapter;
 import com.yunjihai.rag.retrieval.TrustedRetrievalService;
 import com.yunjihai.rag.retrieval.PrincipalResolverPort;
+import com.yunjihai.rag.retrieval.domain.Candidate;
 import com.yunjihai.rag.retrieval.domain.DegradationReason;
+import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
+import com.yunjihai.rag.retrieval.domain.RecallSource;
 import com.yunjihai.rag.retrieval.domain.RetrievalFilter;
+import com.yunjihai.rag.retrieval.domain.ScoredCandidate;
+import com.yunjihai.rag.retrieval.embedding.EmbeddingPort;
+import com.yunjihai.rag.retrieval.projection.ProjectionAclGrant;
+import com.yunjihai.rag.retrieval.projection.ProjectionNode;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
+import com.yunjihai.rag.retrieval.projection.RetrievalProjectionSnapshot;
+import com.yunjihai.rag.retrieval.projection.SearchProjectionWriter;
 import com.yunjihai.rag.runtime.IngestionWorkerScheduler;
 import com.yunjihai.rag.runtime.ProjectionWorkerScheduler;
 import com.yunjihai.rag.ingestion.UploadService;
 import com.yunjihai.rag.retrieval.search.HybridRecallService;
+import com.yunjihai.rag.retrieval.search.VectorRetriever;
+import com.yunjihai.rag.retrieval.selection.RerankerPort;
+import com.yunjihai.rag.retrieval.selection.RerankingService;
 import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
@@ -39,12 +56,19 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 
+import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -53,6 +77,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RetrievalProductionWiringTest {
+    private static final ObjectMapper JSON = new ObjectMapper();
     private static final GenericContainer<?> OPENSEARCH = new GenericContainer<>(
             DockerImageName.parse("opensearchproject/opensearch:3.8.0"))
             .withEnv("discovery.type", "single-node")
@@ -63,11 +88,19 @@ class RetrievalProductionWiringTest {
             .waitingFor(Wait.forHttp("/").forStatusCode(200)
                     .withStartupTimeout(Duration.ofMinutes(3)));
     private static URI endpoint;
+    private static HttpServer modelGateway;
+    private static URI modelEndpoint;
+    private static final List<String> MODEL_REQUEST_BODIES =
+            java.util.Collections.synchronizedList(new ArrayList<>());
 
     @BeforeAll
     static void startInfrastructure() throws Exception {
         LocalFoundationInfrastructure.start();
         OPENSEARCH.start();
+        modelGateway = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        modelGateway.createContext("/v1/embeddings", RetrievalProductionWiringTest::embeddingResponse);
+        modelGateway.start();
+        modelEndpoint = URI.create("http://127.0.0.1:" + modelGateway.getAddress().getPort());
         endpoint = URI.create("http://" + OPENSEARCH.getHost() + ":" + OPENSEARCH.getMappedPort(9200));
         try (OpenSearchConnection connection = new OpenSearchClientFactory().create(
                 new OpenSearchProperties(endpoint, null, null))) {
@@ -79,6 +112,7 @@ class RetrievalProductionWiringTest {
 
     @AfterAll
     static void stopInfrastructure() {
+        if (modelGateway != null) modelGateway.stop(0);
         OPENSEARCH.stop();
         LocalFoundationInfrastructure.stop();
     }
@@ -128,6 +162,12 @@ class RetrievalProductionWiringTest {
             assertThat(result.candidates()).isEmpty();
             assertThat(result.degradationReasons()).containsExactly(DegradationReason.VECTOR_UNAVAILABLE);
 
+            var reranked = context.getBean(RerankingService.class)
+                    .rerank("部署方案", List.of(candidate()));
+            assertThat(reranked.candidates()).hasSize(1);
+            assertThat(reranked.degradationReasons())
+                    .containsExactly(DegradationReason.RERANKER_UNAVAILABLE);
+
             var jdbc = context.getBean(JdbcClient.class);
             UUID bootstrapAdmin = jdbc.sql("""
                             SELECT user_id
@@ -158,8 +198,69 @@ class RetrievalProductionWiringTest {
         }
     }
 
+    @Test
+    void vectorEnabledWiresApprovedAdaptersAndUsesOneDimensionForRebuildProjectionAndQuery()
+            throws Exception {
+        MODEL_REQUEST_BODIES.clear();
+        try (var context = startContext(Map.ofEntries(
+                Map.entry("rag.workers.enabled", "false"),
+                Map.entry("rag.ai.enabled", "true"),
+                Map.entry("rag.ai.endpoint", modelEndpoint.toString()),
+                Map.entry("rag.ai.approved-hosts", "127.0.0.1"),
+                Map.entry("rag.ai.api-key", "sk-wiring-test"),
+                Map.entry("rag.ai.embedding-model", "embedding-wiring"),
+                Map.entry("rag.ai.reranker-model", "reranker-wiring"),
+                Map.entry("rag.ai.chat-model", "chat-wiring"),
+                Map.entry("rag.ai.connect-timeout", "PT1S"),
+                Map.entry("rag.ai.response-timeout", "PT2S"),
+                Map.entry("rag.ai.total-timeout", "PT3S"),
+                Map.entry("rag.ai.max-input-tokens", "8000"),
+                Map.entry("rag.ai.max-output-tokens", "2000"),
+                Map.entry("rag.ai.max-concurrency", "2"),
+                Map.entry("rag.ai.daily-deployment-token-limit", "100000"),
+                Map.entry("rag.ai.allow-insecure-loopback-for-tests", "true"),
+                Map.entry("rag.retrieval.vector.enabled", "true"),
+                Map.entry("rag.retrieval.vector.dimension", "3")))) {
+            assertThat(context.getBean(EmbeddingPort.class)).isInstanceOf(OpenAiEmbeddingAdapter.class);
+            assertThat(context.getBean(RerankerPort.class)).isInstanceOf(OpenAiRerankerAdapter.class);
+            var health = context.getBean(HealthContributorRegistry.class);
+            var embedding = assertHealth(health, "embeddingCapability", Status.UP);
+            assertThat(embedding.getDetails())
+                    .containsEntry("capability", "ENABLED")
+                    .containsEntry("dimension", 3);
+
+            String generation = "chunks-wiring-vector";
+            context.getBean(OpenSearchRebuildService.class)
+                    .rebuild(generation, Duration.ofSeconds(10));
+            UUID spaceId = UUID.fromString("00000000-0000-0000-0000-000000000111");
+            UUID principalId = UUID.fromString("00000000-0000-0000-0000-000000000113");
+            context.getBean(SearchProjectionWriter.class)
+                    .apply(generation, snapshot(spaceId, principalId, "联系 13800138000"));
+
+            var candidates = context.getBean(VectorRetriever.class).retrieve(
+                    "联系方式",
+                    new RetrievalFilter(
+                            Set.of(spaceId),
+                            Set.of(new PrincipalRef(PrincipalType.USER, principalId)),
+                            true, Instant.parse("2026-10-10T09:00:00Z"), Map.of()),
+                    10);
+
+            assertThat(candidates).hasSize(1);
+            assertThat(MODEL_REQUEST_BODIES).hasSize(2);
+            assertThat(MODEL_REQUEST_BODIES.getFirst())
+                    .contains("[PHONE]")
+                    .doesNotContain("13800138000");
+            assertThat(readSource(generation, "version-wiring:node-1").path("embedding").size())
+                    .isEqualTo(3);
+        }
+    }
+
     private static ConfigurableApplicationContext startContext() {
-        Map<String, Object> properties = Map.ofEntries(
+        return startContext(Map.of());
+    }
+
+    private static ConfigurableApplicationContext startContext(Map<String, Object> overrides) {
+        Map<String, Object> properties = new HashMap<>(Map.ofEntries(
                 Map.entry("server.port", "0"),
                 Map.entry("spring.datasource.url", LocalFoundationInfrastructure.jdbcUrl()),
                 Map.entry("spring.datasource.username", LocalFoundationInfrastructure.RUNTIME_USER),
@@ -184,12 +285,62 @@ class RetrievalProductionWiringTest {
                         "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration",
                         "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration",
                         "org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration")),
-                Map.entry("logging.level.root", "ERROR"));
+                Map.entry("logging.level.root", "ERROR")));
+        properties.putAll(overrides);
         return new SpringApplicationBuilder(RagApplication.class)
                 .profiles("local")
                 .initializers(application -> application.getEnvironment().getPropertySources()
                         .addFirst(new MapPropertySource("retrieval-wiring-test", properties)))
                 .run();
+    }
+
+    private static ScoredCandidate candidate() {
+        var candidate = new Candidate(
+                UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                "node-1", "标题", "正文", new MarkdownLocator(List.of("章节"), "node-1"),
+                RecallSource.LEXICAL, 1, 1.0);
+        return new ScoredCandidate(candidate, 1.0, 1, EnumSet.of(RecallSource.LEXICAL));
+    }
+
+    private static RetrievalProjectionSnapshot snapshot(
+            UUID spaceId, UUID principalId, String body) {
+        UUID documentId = UUID.fromString("00000000-0000-0000-0000-000000000112");
+        UUID versionId = UUID.nameUUIDFromBytes("version-wiring".getBytes(StandardCharsets.UTF_8));
+        var node = new ProjectionNode(
+                "version-wiring:node-1", UUID.randomUUID(), "node-1", "PARAGRAPH", body,
+                List.of("章节"), 0, new MarkdownLocator(List.of("章节"), "node-1"), 0.9);
+        return new RetrievalProjectionSnapshot(
+                spaceId, documentId, versionId, "联系方式", 1, 1,
+                Instant.parse("2026-10-10T08:00:00Z"),
+                Instant.parse("2026-10-10T07:59:00Z"),
+                Set.of(new ProjectionAclGrant("USER:" + principalId, null)),
+                Set.of(), false, Map.of(), List.of(node), true);
+    }
+
+    private static void embeddingResponse(HttpExchange exchange) throws IOException {
+        String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        MODEL_REQUEST_BODIES.add(requestBody);
+        int size = JSON.readTree(requestBody).path("input").size();
+        var data = JSON.createArrayNode();
+        for (int index = 0; index < size; index++) {
+            data.addObject().put("index", index).putArray("embedding").add(0.1).add(0.2).add(0.3);
+        }
+        byte[] response = JSON.createObjectNode().set("data", data).toString()
+                .getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().add("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, response.length);
+        exchange.getResponseBody().write(response);
+        exchange.close();
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode readSource(String index, String id)
+            throws Exception {
+        var response = HttpClient.newHttpClient().send(
+                HttpRequest.newBuilder(endpoint.resolve(
+                        "/" + index + "/_doc/" + id.replace(":", "%3A"))).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode()).as(response.body()).isEqualTo(200);
+        return JSON.readTree(response.body()).path("_source");
     }
 
     private static org.springframework.boot.health.contributor.Health assertHealth(

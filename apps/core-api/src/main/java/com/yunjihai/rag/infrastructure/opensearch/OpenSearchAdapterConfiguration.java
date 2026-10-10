@@ -22,6 +22,7 @@ import com.yunjihai.rag.retrieval.selection.EvidenceSelectionService;
 import com.yunjihai.rag.retrieval.selection.RerankerPort;
 import com.yunjihai.rag.retrieval.selection.RerankingService;
 import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -70,8 +71,14 @@ public class OpenSearchAdapterConfiguration {
     }
 
     @Bean
-    SearchProjectionWriter searchProjectionWriter(OpenSearchClient client) {
-        return new OpenSearchProjectionWriter(client);
+    SearchProjectionWriter searchProjectionWriter(
+            OpenSearchClient client,
+            SensitiveContentSanitizer sanitizer,
+            EmbeddingPort embeddings,
+            @Value("${rag.retrieval.vector.enabled:false}") boolean vectorEnabled,
+            @Value("${rag.retrieval.vector.dimension:1536}") int vectorDimension) {
+        return new OpenSearchProjectionWriter(
+                client, sanitizer, embeddings, vectorEnabled, vectorDimension);
     }
 
     @Bean
@@ -206,7 +213,9 @@ public class OpenSearchAdapterConfiguration {
     }
 
     @Bean(name = "embeddingCapability")
-    EmbeddingCapabilityHealthIndicator embeddingCapabilityHealthIndicator() {
-        return new EmbeddingCapabilityHealthIndicator(false);
+    EmbeddingCapabilityHealthIndicator embeddingCapabilityHealthIndicator(
+            @Value("${rag.retrieval.vector.enabled:false}") boolean enabled,
+            @Value("${rag.retrieval.vector.dimension:1536}") int dimension) {
+        return new EmbeddingCapabilityHealthIndicator(enabled, dimension);
     }
 }

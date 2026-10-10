@@ -9,12 +9,16 @@ import com.yunjihai.rag.infrastructure.opensearch.OpenSearchProperties;
 import com.yunjihai.rag.infrastructure.postgres.JdbcProjectionDocumentLock;
 import com.yunjihai.rag.infrastructure.postgres.JdbcProjectionEventRepository;
 import com.yunjihai.rag.infrastructure.postgres.JdbcRetrievalProjectionSource;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
+import com.yunjihai.rag.retrieval.embedding.EmbeddingVector;
 import com.yunjihai.rag.retrieval.projection.ProjectionDocumentLock;
+import com.yunjihai.rag.retrieval.projection.ProjectionEventStatus;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorkerPolicy;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -35,6 +39,8 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.OptionalInt;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -112,6 +118,11 @@ class ProjectionWorkerIntegrationTest {
         POSTGRES.stop();
     }
 
+    @BeforeEach
+    void clearProjectionEvents() {
+        jdbc.sql("DELETE FROM retrieval_projection_event").update();
+    }
+
     @Test
     void expiredOlderEventCannotOverwriteNewerProjectionOfCurrentPostgresState() throws Exception {
         long oldSequence = events.enqueueDocument(spaceId, documentId, versionId, 1, START);
@@ -138,6 +149,27 @@ class ProjectionWorkerIntegrationTest {
         var stored = indexedNode();
         assertEquals(newSequence, stored.path("projectionSequence").asLong());
         assertEquals("新权威正文", stored.path("bodyText").asText());
+    }
+
+    @Test
+    void embeddingDimensionMismatchLeavesProjectionEventRetryableWithoutWriting() {
+        long sequence = events.enqueueDocument(
+                spaceId, documentId, versionId, 2, START.plusSeconds(1));
+        var mismatchedWriter = new OpenSearchProjectionWriter(
+                search.client(), new RegexSensitiveContentSanitizer(Set.of()),
+                texts -> List.of(new EmbeddingVector(List.of(0.1, 0.2))), true, 3);
+        var policy = new ProjectionWorkerPolicy(
+                10, 10, Duration.ofMinutes(1), 3,
+                Duration.ofSeconds(1), Duration.ofSeconds(10));
+        var worker = new ProjectionWorker(events, source, lock, mismatchedWriter, policy,
+                Clock.fixed(START.plusSeconds(5), ZoneOffset.UTC));
+
+        assertEquals(0, worker.runOnce("dimension-mismatch-worker", "chunks-vector-retry"));
+
+        var event = events.eventsAfter(sequence - 1, 1).getFirst();
+        assertEquals(ProjectionEventStatus.RETRY_WAIT, event.status());
+        assertEquals("PROJECTION_TEMPORARY_FAILURE", event.errorCode());
+        assertEquals(1, event.attempts());
     }
 
     private static void seedPublishedDocument() {

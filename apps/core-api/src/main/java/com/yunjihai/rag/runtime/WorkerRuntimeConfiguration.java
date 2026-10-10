@@ -18,6 +18,8 @@ import com.yunjihai.rag.ingestion.ParserContractValidator;
 import com.yunjihai.rag.ingestion.UploadPolicy;
 import com.yunjihai.rag.ingestion.UploadService;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -32,11 +34,24 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Configuration(proxyBeanMethods = false)
 @Profile("local")
 @EnableScheduling
 public class WorkerRuntimeConfiguration {
+
+    @Bean
+    SensitiveContentSanitizer sensitiveContentSanitizer(
+            @Value("${rag.sanitization.business-terms:}") String configuredTerms) {
+        Set<String> terms = Arrays.stream(configuredTerms.split(","))
+                .map(String::trim)
+                .filter(term -> !term.isEmpty())
+                .collect(Collectors.toUnmodifiableSet());
+        return new RegexSensitiveContentSanitizer(terms);
+    }
 
     @Bean
     IngestionWorkerPolicy ingestionWorkerPolicy(

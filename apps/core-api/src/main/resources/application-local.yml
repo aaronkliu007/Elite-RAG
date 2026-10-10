@@ -17,6 +17,24 @@ spring:
     locations: classpath:db/migration
     validate-on-migrate: true
 rag:
+  ai:
+    enabled: ${RAG_AI_ENABLED:false}
+    endpoint: ${RAG_AI_ENDPOINT:}
+    approved-hosts: ${RAG_AI_APPROVED_HOSTS:}
+    api-key: ${RAG_AI_API_KEY:}
+    embedding-model: ${RAG_AI_EMBEDDING_MODEL:}
+    reranker-model: ${RAG_AI_RERANKER_MODEL:}
+    chat-model: ${RAG_AI_CHAT_MODEL:}
+    connect-timeout: ${RAG_AI_CONNECT_TIMEOUT:PT3S}
+    response-timeout: ${RAG_AI_RESPONSE_TIMEOUT:PT15S}
+    total-timeout: ${RAG_AI_TOTAL_TIMEOUT:PT30S}
+    max-input-tokens: ${RAG_AI_MAX_INPUT_TOKENS:12000}
+    max-output-tokens: ${RAG_AI_MAX_OUTPUT_TOKENS:2000}
+    max-concurrency: ${RAG_AI_MAX_CONCURRENCY:4}
+    daily-deployment-token-limit: ${RAG_AI_DAILY_DEPLOYMENT_TOKEN_LIMIT:1000000}
+    allow-insecure-loopback-for-tests: false
+  sanitization:
+    business-terms: ${RAG_SANITIZATION_BUSINESS_TERMS:}
   workers:
     enabled: ${RAG_WORKERS_ENABLED:true}
   upload:
@@ -75,7 +93,7 @@ management:
         liveness:
           include: livenessState
         readiness:
-          include: readinessState,db,minio,opensearchRead,opensearchProjection
+          include: readinessState,db,minio,opensearchRead,opensearchProjection,embeddingCapability
   endpoints:
     web:
       exposure:
