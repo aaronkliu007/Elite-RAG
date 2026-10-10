@@ -156,7 +156,8 @@ public final class GroundedQaService {
                     command.requestId(), RefusalReason.UNSAFE_TO_SEND, pack.degraded()));
         }
         if (timedOut(deadline)) {
-            return complete(state, command.actorId(), new QaOutcome.Failed(command.requestId(), "QA_TIMEOUT"));
+            return complete(state, command.actorId(), new QaOutcome.Failed(
+                    command.requestId(), "QA_TIMEOUT", pack.degraded()));
         }
 
         Optional<QaPersistencePort.RequestState> generating = persistence.transition(
@@ -174,7 +175,7 @@ public final class GroundedQaService {
                     sanitizationHits(sanitized), attempt.retryCount(), attempt.resultCode(), clock.instant()));
         } catch (RuntimeException auditFailure) {
             return complete(state, command.actorId(), new QaOutcome.Failed(
-                    command.requestId(), "MODEL_AUDIT_FAILED"));
+                    command.requestId(), "MODEL_AUDIT_FAILED", pack.degraded()));
         }
 
         if (attempt.failure() != null) {
@@ -203,7 +204,8 @@ public final class GroundedQaService {
                     command.requestId(), RefusalReason.UNSUPPORTED_CLAIM, pack.degraded()));
         }
         if (timedOut(deadline)) {
-            return complete(state, command.actorId(), new QaOutcome.Failed(command.requestId(), "QA_TIMEOUT"));
+            return complete(state, command.actorId(), new QaOutcome.Failed(
+                    command.requestId(), "QA_TIMEOUT", pack.degraded()));
         }
         return complete(state, command.actorId(), new QaOutcome.Answered(
                 command.requestId(), candidate.answer(), candidate.claims().stream()
@@ -212,6 +214,12 @@ public final class GroundedQaService {
 
     public Optional<QaOutcome> find(UUID requestId, UUID actorId) {
         return persistence.find(
+                Objects.requireNonNull(requestId, "requestId must not be null"),
+                Objects.requireNonNull(actorId, "actorId must not be null"));
+    }
+
+    public Optional<Instant> completedAt(UUID requestId, UUID actorId) {
+        return persistence.completedAt(
                 Objects.requireNonNull(requestId, "requestId must not be null"),
                 Objects.requireNonNull(actorId, "actorId must not be null"));
     }
@@ -253,7 +261,7 @@ public final class GroundedQaService {
             case POLICY_VIOLATION -> new QaOutcome.Refused(
                     requestId, RefusalReason.UNSAFE_TO_SEND, degraded);
             case AUTHENTICATION, RATE_LIMITED, TIMEOUT, UNAVAILABLE -> new QaOutcome.Failed(
-                    requestId, "MODEL_" + failure.kind().name());
+                    requestId, "MODEL_" + failure.kind().name(), degraded);
         };
     }
 

@@ -140,7 +140,7 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
                 boolean degraded = switch (outcome) {
                     case QaOutcome.Answered answered -> answered.degraded();
                     case QaOutcome.Refused refused -> refused.degraded();
-                    case QaOutcome.Failed ignored -> current.degraded();
+                    case QaOutcome.Failed failed -> failed.degraded();
                 };
                 int updated = jdbc.sql("""
                         UPDATE qa_request SET status=:status,revision=revision+1,degraded=:degraded,
@@ -195,6 +195,21 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
         }
     }
 
+    @Override
+    public Optional<Instant> completedAt(UUID requestId, UUID actorId) {
+        Objects.requireNonNull(requestId); Objects.requireNonNull(actorId);
+        try {
+            return jdbc.sql("""
+                    SELECT completed_at FROM qa_request
+                    WHERE id=:id AND actor_id=:actorId
+                      AND status IN ('ANSWERED','REFUSED','FAILED')
+                    """).param("id", requestId).param("actorId", actorId)
+                    .query(OffsetDateTime.class).optional().map(OffsetDateTime::toInstant);
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
     private Optional<RequestState> load(UUID requestId) {
         return jdbc.sql("SELECT id,actor_id,status,revision,degraded FROM qa_request WHERE id=:id")
                 .param("id", requestId).query(JdbcQaPersistenceAdapter::state).optional();
@@ -213,7 +228,7 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
             }
             case REFUSED -> Optional.of(new QaOutcome.Refused(
                     requestId, RefusalReason.valueOf(refusal), degraded));
-            case FAILED -> Optional.of(new QaOutcome.Failed(requestId, failure));
+            case FAILED -> Optional.of(new QaOutcome.Failed(requestId, failure, degraded));
             default -> Optional.empty();
         };
     }

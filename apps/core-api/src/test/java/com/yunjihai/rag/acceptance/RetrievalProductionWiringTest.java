@@ -40,6 +40,9 @@ import com.yunjihai.rag.knowledge.KnowledgeWriteAuthorization;
 import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
 import com.yunjihai.rag.knowledge.web.DocumentController;
 import com.yunjihai.rag.knowledge.web.UploadController;
+import com.yunjihai.rag.qa.GroundedQaService;
+import com.yunjihai.rag.qa.web.QaController;
+import com.yunjihai.rag.qa.web.QaSourceController;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -128,6 +131,9 @@ class RetrievalProductionWiringTest {
             assertThat(context.getBean(DocumentController.class)).isNotNull();
             assertThat(context.getBean("runtimeUploadService", UploadService.class)).isNotNull();
             assertThat(context.getBean(UploadController.class)).isNotNull();
+            assertThat(context.getBean(GroundedQaService.class)).isNotNull();
+            assertThat(context.getBean(QaController.class)).isNotNull();
+            assertThat(context.getBean(QaSourceController.class)).isNotNull();
             var multipart = context.getBean(MultipartProperties.class);
             assertThat(multipart.getMaxFileSize().toBytes()).isEqualTo(100L * 1024 * 1024);
             assertThat(multipart.getMaxRequestSize().toBytes()).isGreaterThan(100L * 1024 * 1024);
@@ -277,6 +283,7 @@ class RetrievalProductionWiringTest {
                 Map.entry("rag.ingestion.worker.poll-delay", "PT1H"),
                 Map.entry("rag.opensearch.worker.poll-delay", "PT1H"),
                 Map.entry("rag.opensearch.endpoint", endpoint.toString()),
+                Map.entry("rag.qa.hmac-key", "qa-wiring-key-32-bytes-minimum!!"),
                 Map.entry("rag.retrieval.vector.enabled", "false"),
                 Map.entry("rag.bootstrap-admin.username", "wiring-admin"),
                 Map.entry("rag.bootstrap-admin.password", "wiring-admin-password"),

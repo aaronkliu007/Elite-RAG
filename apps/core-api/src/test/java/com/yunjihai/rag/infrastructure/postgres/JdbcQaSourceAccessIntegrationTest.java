@@ -104,12 +104,15 @@ class JdbcQaSourceAccessIntegrationTest {
 
     @Test
     void resolvesAllAuthorizedSpacesAndReauthorizesExactEvidenceSource(){
+        jdbc.sql("UPDATE document SET title='现行制度文件' WHERE id=:document")
+                .param("document",document).update();
         assertThat(scopes.resolve(actor,NOW)).containsExactly(space);
         assertThat(sources.findAuthorized(request,uncitedEvidence,actor,NOW)).isEmpty();
         assertThat(sources.findAuthorized(request,evidence,actor,NOW)).get().satisfies(source->{
             assertThat(source.documentId()).isEqualTo(document);
             assertThat(source.versionId()).isEqualTo(version);
             assertThat(source.nodeId()).isEqualTo("node-1");
+            assertThat(source.title()).isEqualTo("现行制度文件");
         });
     }
 

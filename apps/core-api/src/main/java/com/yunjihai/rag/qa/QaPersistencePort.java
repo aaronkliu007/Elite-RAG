@@ -30,4 +30,8 @@ public interface QaPersistencePort {
             UUID requestId, long expectedRevision, QaOutcome outcome, Instant at);
 
     Optional<QaOutcome> find(UUID requestId, UUID actorId);
+
+    default Optional<Instant> completedAt(UUID requestId, UUID actorId) {
+        return Optional.empty();
+    }
 }

@@ -104,6 +104,8 @@ class JdbcQaPersistenceIntegrationTest {
         var answered=new QaOutcome.Answered(request,"制度已经生效。",List.of(claim),false);
         assertThat(persistence.complete(request,verifying.revision(),answered,NOW)).isPresent();
         assertThat(persistence.find(request,actor)).contains(answered);
+        assertThat(persistence.completedAt(request,actor)).contains(NOW);
+        assertThat(persistence.completedAt(request,UUID.randomUUID())).isEmpty();
         assertThat(jdbc.sql("SELECT title FROM qa_evidence_snapshot WHERE request_id=:id")
                 .param("id",request).query(String.class).single()).isEqualTo("制度");
         String storedClaims=jdbc.sql("SELECT claims::text FROM qa_answer WHERE request_id=:id")
@@ -128,6 +130,19 @@ class JdbcQaPersistenceIntegrationTest {
                 """).param("id",request).query((row,n)->List.of(row.getString(1),row.getString(2),
                         row.getInt(3),row.getInt(4),row.getLong(5),row.getInt(6),row.getInt(7),row.getString(8))).single();
         assertThat(stored).containsExactly("c".repeat(64),"d".repeat(64),100,20,50L,2,1,"SUCCESS");
+    }
+
+    @Test
+    void preservesDegradedFlagForFailedTerminalResults() {
+        persistence.create(request,actor,"e".repeat(64),NOW);
+        var retrieving=persistence.transition(request,0,QaStatus.RETRIEVING,NOW).orElseThrow();
+        var failed=new QaOutcome.Failed(request,"MODEL_UNAVAILABLE",true);
+
+        assertThat(persistence.complete(request,retrieving.revision(),failed,NOW)).isPresent();
+
+        assertThat(persistence.find(request,actor)).contains(failed);
+        assertThat(ownerJdbc.sql("SELECT degraded FROM qa_request WHERE id=:id")
+                .param("id",request).query(Boolean.class).single()).isTrue();
     }
 
     @Test

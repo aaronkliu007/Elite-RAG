@@ -20,6 +20,16 @@ import com.yunjihai.rag.ingestion.UploadService;
 import com.yunjihai.rag.retrieval.projection.ProjectionWorker;
 import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
 import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
+import com.yunjihai.rag.qa.AuthorizedSpaceScopePort;
+import com.yunjihai.rag.qa.CitationSupportVerifier;
+import com.yunjihai.rag.qa.ExactQuoteCitationSupportVerifier;
+import com.yunjihai.rag.qa.GroundedQaService;
+import com.yunjihai.rag.qa.ModelCallAuditPort;
+import com.yunjihai.rag.qa.QaPersistencePort;
+import com.yunjihai.rag.qa.QaPolicy;
+import com.yunjihai.rag.qa.QuestionDigestPort;
+import com.yunjihai.rag.qa.model.ChatCompletionPort;
+import com.yunjihai.rag.retrieval.RetrievalService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -34,6 +44,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Clock;
 import java.util.Arrays;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -42,6 +53,41 @@ import java.util.stream.Collectors;
 @Profile("local")
 @EnableScheduling
 public class WorkerRuntimeConfiguration {
+
+    @Bean
+    QaPolicy qaPolicy() {
+        return QaPolicy.defaults();
+    }
+
+    @Bean
+    CitationSupportVerifier citationSupportVerifier() {
+        return new ExactQuoteCitationSupportVerifier();
+    }
+
+    @Bean
+    @ConditionalOnBean({
+            AuthorizedSpaceScopePort.class,
+            RetrievalService.class,
+            QaPersistencePort.class,
+            ModelCallAuditPort.class,
+            QuestionDigestPort.class,
+            ChatCompletionPort.class
+    })
+    GroundedQaService groundedQaService(
+            AuthorizedSpaceScopePort authorizedSpaces,
+            RetrievalService retrieval,
+            QaPersistencePort persistence,
+            ModelCallAuditPort audits,
+            QuestionDigestPort digests,
+            SensitiveContentSanitizer sanitizer,
+            ChatCompletionPort chat,
+            CitationSupportVerifier citationVerifier,
+            QaPolicy policy,
+            Clock clock) {
+        return new GroundedQaService(
+                authorizedSpaces,retrieval,persistence,audits,digests,sanitizer,chat,
+                citationVerifier,policy,clock);
+    }
 
     @Bean
     SensitiveContentSanitizer sensitiveContentSanitizer(

@@ -120,11 +120,12 @@ class QaDomainContractTest {
         QaOutcome answered = new QaOutcome.Answered(id(1), "回答", List.of(claim), false);
         QaOutcome refused = new QaOutcome.Refused(
                 id(2), RefusalReason.INSUFFICIENT_EVIDENCE, true);
-        QaOutcome failed = new QaOutcome.Failed(id(3), "MODEL_UNAVAILABLE");
+        QaOutcome failed = new QaOutcome.Failed(id(3), "MODEL_UNAVAILABLE", true);
 
         assertThat(answered.status()).isEqualTo(QaStatus.ANSWERED);
         assertThat(refused.status()).isEqualTo(QaStatus.REFUSED);
         assertThat(failed.status()).isEqualTo(QaStatus.FAILED);
+        assertThat(((QaOutcome.Failed) failed).degraded()).isTrue();
         assertThatThrownBy(() -> new QaOutcome.Failed(id(4), "包含空格的秘密错误"))
                 .isInstanceOf(IllegalArgumentException.class);
     }

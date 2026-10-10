@@ -40,7 +40,11 @@ public sealed interface QaOutcome permits QaOutcome.Answered, QaOutcome.Refused,
         public QaStatus status() { return QaStatus.REFUSED; }
     }
 
-    record Failed(UUID requestId, String code) implements QaOutcome {
+    record Failed(UUID requestId, String code, boolean degraded) implements QaOutcome {
+        public Failed(UUID requestId, String code) {
+            this(requestId, code, false);
+        }
+
         public Failed {
             Objects.requireNonNull(requestId, "requestId must not be null");
             Objects.requireNonNull(code, "failure code must not be null");

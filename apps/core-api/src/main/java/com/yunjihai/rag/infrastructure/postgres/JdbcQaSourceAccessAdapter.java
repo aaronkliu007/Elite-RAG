@@ -42,7 +42,7 @@ public final class JdbcQaSourceAccessAdapter implements QaSourceAccessPort {
                         UNION SELECT 'DEPARTMENT'::text,department_id FROM department_tree
                     )
                     SELECT snapshot.request_id,snapshot.evidence_id,snapshot.space_id,
-                           snapshot.document_id,snapshot.version_id,snapshot.node_id,snapshot.title,
+                           snapshot.document_id,snapshot.version_id,snapshot.node_id,document.title,
                            snapshot.locator_type,snapshot.locator::text
                     FROM qa_evidence_snapshot snapshot
                     JOIN qa_request request ON request.id=snapshot.request_id AND request.actor_id=:actorId
