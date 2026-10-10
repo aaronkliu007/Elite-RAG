@@ -137,11 +137,6 @@ public class OpenSearchAdapterConfiguration {
     OpenSearchCandidateMapper openSearchCandidateMapper() { return new OpenSearchCandidateMapper(); }
 
     @Bean
-    EmbeddingPort embeddingPort() {
-        return texts -> { throw new EmbeddingUnavailableException("EMBEDDING_DISABLED"); };
-    }
-
-    @Bean
     LexicalRetriever lexicalRetriever(
             OpenSearchClient client, OpenSearchRecallQueryFactory queries,
             OpenSearchCandidateMapper mapper) {
@@ -175,9 +170,6 @@ public class OpenSearchAdapterConfiguration {
             ExecutorService executor, RetrievalPolicy policy) {
         return new HybridRecallService(lexical, vector, executor, policy);
     }
-
-    @Bean
-    RerankerPort rerankerPort() { return (query, candidates) -> { throw new IllegalStateException("RERANKER_DISABLED"); }; }
 
     @Bean
     RerankingService rerankingService(
