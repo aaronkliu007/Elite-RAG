@@ -138,7 +138,7 @@ public class OpenSearchAdapterConfiguration {
 
     @Bean
     EmbeddingPort embeddingPort() {
-        return text -> { throw new EmbeddingUnavailableException("EMBEDDING_DISABLED"); };
+        return texts -> { throw new EmbeddingUnavailableException("EMBEDDING_DISABLED"); };
     }
 
     @Bean

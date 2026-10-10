@@ -160,7 +160,9 @@ class OpenSearchRetrieverIntegrationTest {
     void vectorRecallUsesDeterministicEmbeddingAndSameSecurityFilter() {
         var vector = new OpenSearchVectorRetriever(
                 connection.client(), INDEX,
-                text -> new EmbeddingVector(List.of(1.0, 0.0, 0.0, 0.0)),
+                texts -> texts.stream()
+                        .map(ignored -> new EmbeddingVector(List.of(1.0, 0.0, 0.0, 0.0)))
+                        .toList(),
                 4, new OpenSearchRecallQueryFactory(), new OpenSearchCandidateMapper());
 
         var candidates = vector.retrieve("部署", filter(Set.of(user()), Map.of()), 10);
@@ -173,11 +175,13 @@ class OpenSearchRetrieverIntegrationTest {
     void vectorBranchFailsExplicitlyForUnavailableInvalidOrFakeVectors() {
         var unavailable = new OpenSearchVectorRetriever(
                 connection.client(), INDEX,
-                text -> { throw new EmbeddingUnavailableException("EMBEDDING_DISABLED"); },
+                texts -> { throw new EmbeddingUnavailableException("EMBEDDING_DISABLED"); },
                 4, new OpenSearchRecallQueryFactory(), new OpenSearchCandidateMapper());
         var wrongDimension = new OpenSearchVectorRetriever(
                 connection.client(), INDEX,
-                text -> new EmbeddingVector(List.of(1.0, 0.0)),
+                texts -> texts.stream()
+                        .map(ignored -> new EmbeddingVector(List.of(1.0, 0.0)))
+                        .toList(),
                 4, new OpenSearchRecallQueryFactory(), new OpenSearchCandidateMapper());
 
         assertThrows(EmbeddingUnavailableException.class,
@@ -190,9 +194,11 @@ class OpenSearchRetrieverIntegrationTest {
         var called = new AtomicBoolean();
         var guarded = new OpenSearchVectorRetriever(
                 connection.client(), INDEX,
-                text -> {
+                texts -> {
                     called.set(true);
-                    return new EmbeddingVector(List.of(1.0, 0.0, 0.0, 0.0));
+                    return texts.stream()
+                            .map(ignored -> new EmbeddingVector(List.of(1.0, 0.0, 0.0, 0.0)))
+                            .toList();
                 },
                 4, new OpenSearchRecallQueryFactory(), new OpenSearchCandidateMapper());
         assertThrows(IllegalArgumentException.class,

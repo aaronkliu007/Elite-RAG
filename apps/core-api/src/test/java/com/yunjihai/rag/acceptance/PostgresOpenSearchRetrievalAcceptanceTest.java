@@ -208,7 +208,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
         @Bean
         @Primary
         EmbeddingPort countingEmbeddingPort() {
-            return text -> {
+            return texts -> {
                 EMBEDDING_CALLS.incrementAndGet();
                 throw new EmbeddingUnavailableException("test embedding must not be called");
             };
