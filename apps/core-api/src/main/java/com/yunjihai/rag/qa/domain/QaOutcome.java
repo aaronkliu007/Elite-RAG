@@ -12,7 +12,7 @@ public sealed interface QaOutcome permits QaOutcome.Answered, QaOutcome.Refused,
 
     QaStatus status();
 
-    record Answered(UUID requestId, String answer, List<GroundedClaim> claims, boolean degraded)
+    record Answered(UUID requestId, String answer, List<CitationClaim> claims, boolean degraded)
             implements QaOutcome {
         public Answered {
             Objects.requireNonNull(requestId, "requestId must not be null");

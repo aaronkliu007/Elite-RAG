@@ -47,6 +47,8 @@ class GroundedQaServiceTest {
         QaOutcome outcome = harness.service().ask(command("  如何　执行制度？ "));
 
         assertThat(outcome).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(((QaOutcome.Answered) outcome).claims().getFirst().evidenceIds())
+                .containsExactly(id(100));
         assertThat(harness.queries).singleElement().satisfies(query -> {
             assertThat(query.userId()).isEqualTo(id(2));
             assertThat(query.spaceIds()).containsExactlyInAnyOrder(id(11), id(12));

@@ -59,7 +59,8 @@ class PostgresMigrationIntegrationTest {
                 "canonical_document", "canonical_node", "audit_event", "blob_cleanup_candidate",
                 "retrieval_projection_event", "document_retrieval_metadata", "external_identity",
                 "local_credential", "login_source_attempt", "system_role_assignment",
-                "space_role_assignment", "idempotency_record", "document_review"),
+                "space_role_assignment", "idempotency_record", "document_review",
+                "qa_request", "qa_evidence_snapshot", "qa_answer", "qa_model_call_audit"),
                 values("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'"));
         assertColumnType("app_user", "id", "uuid");
         assertColumnType("app_user", "created_at", "timestamp with time zone");
@@ -297,7 +298,7 @@ class PostgresMigrationIntegrationTest {
         migrate();
         Flyway restartedApplication = flyway("classpath:db/migration");
         assertDoesNotThrow(restartedApplication::validate);
-        assertEquals(3, restartedApplication.info().applied().length);
+        assertEquals(4, restartedApplication.info().applied().length);
     }
 
     @Test
@@ -327,7 +328,7 @@ class PostgresMigrationIntegrationTest {
     }
 
     private static void migrate() {
-        assertEquals(3, flyway("classpath:db/migration").migrate().migrationsExecuted);
+        assertEquals(4, flyway("classpath:db/migration").migrate().migrationsExecuted);
     }
 
     private static Connection ownerConnection() throws SQLException {

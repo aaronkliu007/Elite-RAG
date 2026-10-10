@@ -116,8 +116,7 @@ class QaDomainContractTest {
 
     @Test
     void outcomes_have_fixed_terminal_status_and_safe_payloads() {
-        var claim = new GroundedClaim(
-                id(903), "声明", List.of(new EvidenceSupport(id(100), "引句")));
+        var claim = new CitationClaim(id(903), "声明", List.of(id(100)));
         QaOutcome answered = new QaOutcome.Answered(id(1), "回答", List.of(claim), false);
         QaOutcome refused = new QaOutcome.Refused(
                 id(2), RefusalReason.INSUFFICIENT_EVIDENCE, true);

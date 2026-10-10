@@ -38,6 +38,7 @@ import com.yunjihai.rag.ingestion.IngestionWorkerPolicy;
 import com.yunjihai.rag.ingestion.OrphanBlobRecorder;
 import com.yunjihai.rag.ingestion.ParsedDocumentStore;
 import com.yunjihai.rag.infrastructure.minio.MinioBlobReader;
+import com.yunjihai.rag.infrastructure.crypto.HmacQuestionDigest;
 import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
 import com.yunjihai.rag.knowledge.DocumentCreationAuthorization;
@@ -58,6 +59,11 @@ import com.yunjihai.rag.retrieval.projection.ProjectionEventRepository;
 import com.yunjihai.rag.retrieval.projection.RetrievalProjectionSource;
 import com.yunjihai.rag.retrieval.PrincipalResolverPort;
 import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
+import com.yunjihai.rag.qa.AuthorizedSpaceScopePort;
+import com.yunjihai.rag.qa.ModelCallAuditPort;
+import com.yunjihai.rag.qa.QaPersistencePort;
+import com.yunjihai.rag.qa.QaSourceAccessPort;
+import com.yunjihai.rag.qa.QuestionDigestPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -66,6 +72,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.annotation.EnableTransactionManagement;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.nio.charset.StandardCharsets;
@@ -90,6 +98,33 @@ public class PostgresAdapterConfiguration {
     @Bean
     JdbcAuditEventStore jdbcAuditEventStore(JdbcClient jdbc) {
         return new JdbcAuditEventStore(jdbc);
+    }
+
+    @Bean
+    AuthorizedSpaceScopePort authorizedSpaceScopePort(JdbcClient jdbc) {
+        return new JdbcAuthorizedSpaceScope(jdbc);
+    }
+
+    @Bean
+    QaPersistencePort qaPersistencePort(JdbcClient jdbc, PlatformTransactionManager transactions) {
+        return new JdbcQaPersistenceAdapter(
+                jdbc, new TransactionTemplate(transactions), new com.fasterxml.jackson.databind.ObjectMapper());
+    }
+
+    @Bean
+    ModelCallAuditPort modelCallAuditPort(JdbcClient jdbc) {
+        return new JdbcModelCallAuditAdapter(jdbc);
+    }
+
+    @Bean
+    QaSourceAccessPort qaSourceAccessPort(JdbcClient jdbc) {
+        return new JdbcQaSourceAccessAdapter(jdbc, new com.fasterxml.jackson.databind.ObjectMapper());
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "rag.qa", name = "hmac-key")
+    QuestionDigestPort questionDigestPort(@Value("${rag.qa.hmac-key}") String key) {
+        return new HmacQuestionDigest(key.getBytes(StandardCharsets.UTF_8));
     }
 
     @Bean

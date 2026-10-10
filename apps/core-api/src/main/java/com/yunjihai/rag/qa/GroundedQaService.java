@@ -1,6 +1,7 @@
 package com.yunjihai.rag.qa;
 
 import com.yunjihai.rag.qa.domain.CandidateAnswer;
+import com.yunjihai.rag.qa.domain.CitationClaim;
 import com.yunjihai.rag.qa.domain.EvidenceBundle;
 import com.yunjihai.rag.qa.domain.QaOutcome;
 import com.yunjihai.rag.qa.domain.QaQuestion;
@@ -205,7 +206,8 @@ public final class GroundedQaService {
             return complete(state, command.actorId(), new QaOutcome.Failed(command.requestId(), "QA_TIMEOUT"));
         }
         return complete(state, command.actorId(), new QaOutcome.Answered(
-                command.requestId(), candidate.answer(), candidate.claims(), pack.degraded()));
+                command.requestId(), candidate.answer(), candidate.claims().stream()
+                        .map(CitationClaim::from).toList(), pack.degraded()));
     }
 
     public Optional<QaOutcome> find(UUID requestId, UUID actorId) {
