@@ -64,6 +64,8 @@ import com.yunjihai.rag.qa.ModelCallAuditPort;
 import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaSourceAccessPort;
 import com.yunjihai.rag.qa.QuestionDigestPort;
+import com.yunjihai.rag.qa.evaluation.EvaluationDataset;
+import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -78,11 +80,13 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.nio.charset.StandardCharsets;
+import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.StringJoiner;
+import java.util.Map;
 import tools.jackson.databind.ObjectMapper;
 
 @Configuration(proxyBeanMethods = false)
@@ -120,6 +124,19 @@ public class PostgresAdapterConfiguration {
     @Bean
     QaSourceAccessPort qaSourceAccessPort(JdbcClient jdbc) {
         return new JdbcQaSourceAccessAdapter(jdbc, new com.fasterxml.jackson.databind.ObjectMapper());
+    }
+
+    @Bean
+    EvaluationRepository evaluationRepository(JdbcClient jdbc) {
+        var json=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        try(var input=PostgresAdapterConfiguration.class.getResourceAsStream(
+                "/contracts/qa/golden-dataset-v1.json")) {
+            if(input==null)throw new IllegalStateException("grounded QA golden dataset is missing");
+            EvaluationDataset dataset=json.readValue(input,EvaluationDataset.class);
+            return new JdbcEvaluationRepository(jdbc,json,Map.of(dataset.id(),dataset));
+        } catch(IOException failure) {
+            throw new IllegalStateException("grounded QA golden dataset is invalid",failure);
+        }
     }
 
     @Bean

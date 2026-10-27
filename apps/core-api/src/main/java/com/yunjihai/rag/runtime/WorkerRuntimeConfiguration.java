@@ -31,6 +31,10 @@ import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaPolicy;
 import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
+import com.yunjihai.rag.qa.evaluation.EvaluationGate;
+import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
+import com.yunjihai.rag.qa.evaluation.GroundedQaEvaluationService;
+import com.yunjihai.rag.qa.evaluation.QaEvaluationUseCase;
 import com.yunjihai.rag.retrieval.RetrievalService;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Value;
@@ -99,6 +103,18 @@ public class WorkerRuntimeConfiguration {
         return new GroundedQaService(
                 authorizedSpaces,retrieval,persistence,audits,digests,sanitizer,chat,
                 citationVerifier,policy,clock,metrics);
+    }
+
+    @Bean
+    EvaluationGate evaluationGate() {
+        return new EvaluationGate();
+    }
+
+    @Bean
+    @ConditionalOnBean({GroundedQaService.class,EvaluationRepository.class})
+    QaEvaluationUseCase qaEvaluationUseCase(
+            GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock) {
+        return new GroundedQaEvaluationService(qa,repository,gate,clock);
     }
 
     @Bean

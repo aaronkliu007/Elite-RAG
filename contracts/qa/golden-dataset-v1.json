@@ -1,0 +1,831 @@
+{
+  "id": "10000000-0000-7000-8000-000000000001",
+  "version": "golden-v1",
+  "promptVersion": "grounded-answer-v1",
+  "sanitizationVersion": "sensitive-policy-v1",
+  "cases": [
+    {
+      "id": "30000000-0000-7000-8000-000000000001",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 1：WORD 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000001",
+          "nodeId": "fictional-node-1"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "WORD"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000002",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 2：PDF 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000002",
+          "nodeId": "fictional-node-2"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PDF"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000003",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 3：PPT 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000003",
+          "nodeId": "fictional-node-3"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PPT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000004",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 4：EXCEL 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000004",
+          "nodeId": "fictional-node-4"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "EXCEL"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000005",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 5：MARKDOWN 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000005",
+          "nodeId": "fictional-node-5"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "MARKDOWN"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000006",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 6：PNG_OCR 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000006",
+          "nodeId": "fictional-node-6"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PNG_OCR"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000007",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 7：CROSS_DOCUMENT 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000007",
+          "nodeId": "fictional-node-7"
+        },
+        {
+          "documentId": "21000000-0000-7000-8000-000000000007",
+          "nodeId": "fictional-cross-node-7"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "CROSS_DOCUMENT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000008",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 8：SYNONYM 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000008",
+          "nodeId": "fictional-node-8"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "SYNONYM"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000009",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 9：ABBREVIATION 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000009",
+          "nodeId": "fictional-node-9"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "ABBREVIATION"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000010",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 10：CONFLICT 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "CONFLICT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000011",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 11：REFUSAL 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "REFUSAL"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000012",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 12：PERMISSION_TRAP 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [
+        "20000000-0000-7000-8000-000000000012"
+      ],
+      "forbiddenNodeIds": [
+        "forbidden-fictional-node-12"
+      ],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "PERMISSION_TRAP"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000013",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 13：WORD 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000013",
+          "nodeId": "fictional-node-13"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "WORD"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000014",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 14：PDF 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000014",
+          "nodeId": "fictional-node-14"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PDF"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000015",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 15：PPT 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000015",
+          "nodeId": "fictional-node-15"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PPT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000016",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 16：EXCEL 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000016",
+          "nodeId": "fictional-node-16"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "EXCEL"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000017",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 17：MARKDOWN 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000017",
+          "nodeId": "fictional-node-17"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "MARKDOWN"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000018",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 18：PNG_OCR 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000018",
+          "nodeId": "fictional-node-18"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PNG_OCR"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000019",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 19：CROSS_DOCUMENT 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000019",
+          "nodeId": "fictional-node-19"
+        },
+        {
+          "documentId": "21000000-0000-7000-8000-000000000019",
+          "nodeId": "fictional-cross-node-19"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "CROSS_DOCUMENT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000020",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 20：SYNONYM 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000020",
+          "nodeId": "fictional-node-20"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "SYNONYM"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000021",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 21：ABBREVIATION 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000021",
+          "nodeId": "fictional-node-21"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "ABBREVIATION"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000022",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 22：CONFLICT 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "CONFLICT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000023",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 23：REFUSAL 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "REFUSAL"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000024",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 24：PERMISSION_TRAP 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [
+        "20000000-0000-7000-8000-000000000024"
+      ],
+      "forbiddenNodeIds": [
+        "forbidden-fictional-node-24"
+      ],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "PERMISSION_TRAP"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000025",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 25：WORD 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000025",
+          "nodeId": "fictional-node-25"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "WORD"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000026",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 26：PDF 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000026",
+          "nodeId": "fictional-node-26"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PDF"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000027",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 27：PPT 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000027",
+          "nodeId": "fictional-node-27"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PPT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000028",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 28：EXCEL 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000028",
+          "nodeId": "fictional-node-28"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "EXCEL"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000029",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 29：MARKDOWN 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000029",
+          "nodeId": "fictional-node-29"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "MARKDOWN"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000030",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 30：PNG_OCR 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000030",
+          "nodeId": "fictional-node-30"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PNG_OCR"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000031",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 31：CROSS_DOCUMENT 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000031",
+          "nodeId": "fictional-node-31"
+        },
+        {
+          "documentId": "21000000-0000-7000-8000-000000000031",
+          "nodeId": "fictional-cross-node-31"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "CROSS_DOCUMENT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000032",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 32：SYNONYM 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000032",
+          "nodeId": "fictional-node-32"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "SYNONYM"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000033",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 33：ABBREVIATION 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000033",
+          "nodeId": "fictional-node-33"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "ABBREVIATION"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000034",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 34：CONFLICT 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "CONFLICT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000035",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 35：REFUSAL 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "REFUSAL"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000036",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 36：PERMISSION_TRAP 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [
+        "20000000-0000-7000-8000-000000000036"
+      ],
+      "forbiddenNodeIds": [
+        "forbidden-fictional-node-36"
+      ],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "PERMISSION_TRAP"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000037",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 37：WORD 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000037",
+          "nodeId": "fictional-node-37"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "WORD"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000038",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 38：PDF 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000038",
+          "nodeId": "fictional-node-38"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PDF"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000039",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 39：PPT 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000039",
+          "nodeId": "fictional-node-39"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PPT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000040",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 40：EXCEL 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000040",
+          "nodeId": "fictional-node-40"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "EXCEL"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000041",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 41：MARKDOWN 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000041",
+          "nodeId": "fictional-node-41"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "MARKDOWN"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000042",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 42：PNG_OCR 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000042",
+          "nodeId": "fictional-node-42"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PNG_OCR"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000043",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 43：CROSS_DOCUMENT 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000043",
+          "nodeId": "fictional-node-43"
+        },
+        {
+          "documentId": "21000000-0000-7000-8000-000000000043",
+          "nodeId": "fictional-cross-node-43"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "CROSS_DOCUMENT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000044",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 44：SYNONYM 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000044",
+          "nodeId": "fictional-node-44"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "SYNONYM"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000045",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 45：ABBREVIATION 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000045",
+          "nodeId": "fictional-node-45"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "ABBREVIATION"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000046",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 46：CONFLICT 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "CONFLICT"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000047",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 47：REFUSAL 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "REFUSAL"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000048",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 48：PERMISSION_TRAP 类型知识应如何回答？",
+      "expectedEvidence": [],
+      "forbiddenDocumentIds": [
+        "20000000-0000-7000-8000-000000000048"
+      ],
+      "forbiddenNodeIds": [
+        "forbidden-fictional-node-48"
+      ],
+      "shouldRefuse": true,
+      "coverageTags": [
+        "PERMISSION_TRAP"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000049",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 49：WORD 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000049",
+          "nodeId": "fictional-node-49"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "WORD"
+      ]
+    },
+    {
+      "id": "30000000-0000-7000-8000-000000000050",
+      "evaluationActorId": "00000000-0000-7000-8000-000000000100",
+      "question": "虚构企业案例 50：PDF 类型知识应如何回答？",
+      "expectedEvidence": [
+        {
+          "documentId": "20000000-0000-7000-8000-000000000050",
+          "nodeId": "fictional-node-50"
+        }
+      ],
+      "forbiddenDocumentIds": [],
+      "forbiddenNodeIds": [],
+      "shouldRefuse": false,
+      "coverageTags": [
+        "PDF"
+      ]
+    }
+  ],
+  "active": true
+}
