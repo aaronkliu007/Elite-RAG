@@ -4,7 +4,7 @@
 
 本手册覆盖当前批次交付的生产形态适配器：PostgreSQL 批量最终鉴权、事务投影事件、OpenSearch 版本化索引、BM25/KNN 混合召回、无缝重建，以及 Spring `local` Profile 装配。
 
-当前能力仍属于研发联调版本。它没有对外开放重建管理 API、常驻投影调度器、真实 Embedding、真实 Reranker、黄金评测集或试点资格。不得创建 `pilot-retrieval-v1` 标签，不得用本批结果宣称已投产。
+当前能力仍属于研发联调版本。常驻投影调度器已经落地，但没有对外开放重建管理 API；真实 Embedding、真实 Reranker 和黄金评测框架已具备默认关闭的生产适配器与工程验收，尚未完成真实供应商审批、真实业务黄金集和试点资格。不得创建 `pilot-retrieval-v1` 标签，不得用本批结果宣称已投产。
 
 ## 2. 数据权威与安全边界
 
@@ -96,7 +96,7 @@ $env:SPRING_PROFILES_ACTIVE = 'local'
 - `RAG_OPENSEARCH_ENDPOINT=https://...`
 - `RAG_OPENSEARCH_USERNAME` 与 `RAG_OPENSEARCH_PASSWORD`，必须成对提供；Basic Auth 只允许 HTTPS。
 - `RAG_OPENSEARCH_CONNECT_TIMEOUT` 与 `RAG_OPENSEARCH_RESPONSE_TIMEOUT`，使用 ISO-8601 Duration，例如 `PT3S`、`PT10S`。
-- `RAG_VECTOR_ENABLED=false` 为当前安全默认值。没有经过审批的 Embedding 实现时不得改为 `true`。
+- `RAG_VECTOR_ENABLED=false` 为当前安全默认值。没有经过审批的 Embedding 配置和完整向量索引重建时不得改为 `true`；模型或维度变更也必须新建代际并重建，具体见 `docs/runbooks/grounded-qa.md`。
 
 ## 6. 健康检查
 
@@ -154,7 +154,7 @@ Invoke-RestMethod http://127.0.0.1:8080/actuator/health/readiness
 
 ## 9. 当前未完成项
 
-- 经过审批的云端 Embedding 适配器、密钥托管和调用审计。
-- 真实 Reranker、质量黄金集、离线/在线评测和准确性门槛。
-- 投影 Worker 常驻调度、内部重建控制面、指标告警与值班流程。
+- 真实云端 Embedding/Reranker 供应商审批、密钥托管和受控环境联调。
+- 真实业务脱敏黄金集、人工抽验和在线质量监控；当前 50 条虚构集只作为工程发布门禁。
+- 内部重建控制面、完整指标告警与值班流程。
 - 面向试点的容量、性能、灾备、安全测试和正式发布审批。

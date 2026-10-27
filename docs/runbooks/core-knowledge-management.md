@@ -85,7 +85,7 @@ $env:RAG_BOOTSTRAP_ADMIN_DISPLAY_NAME = '本地系统管理员'
 
 ## 6. 全文检索与降级判定
 
-当前生产形态只启用 BM25 全文召回。未配置经过审批的 Embedding 和 Reranker 时，响应应明确包含 `VECTOR_UNAVAILABLE`、`RERANKER_UNAVAILABLE`，这属于可见能力降级，不应伪装成混合检索。
+默认生产形态只启用 BM25 全文召回。经过审批并完成向量索引重建后可以启用真实 Embedding 和 Reranker；未配置或暂时不可用时，响应应明确包含 `VECTOR_UNAVAILABLE`、`RERANKER_UNAVAILABLE`，这属于可见能力降级，不应伪装成混合检索。问答能力的独立启用、严格拒答和配置回滚见 `docs/runbooks/grounded-qa.md`。
 
 - OpenSearch 全部不可用：检索返回服务不可用，readiness 为 `DOWN`；不得返回伪造空结果。
 - PostgreSQL 最终鉴权不可用：检索失败关闭；不得只依赖索引 ACL。
@@ -135,5 +135,5 @@ docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml down
 - 未完成备份恢复、容量、灾备、渗透和性能测试。
 - OpenSearch 本地 Compose 关闭安全插件，只能绑定回环地址。
 - 没有公共解析重放、投影重建或失败任务管理 API。
-- 未接入真实 Embedding、Reranker、问答模型或经审批的云模型网关。
-- 钉钉登录与组织同步、RAG 问答、报表和方案生成属于后续批次。
+- 已实现默认关闭的 OpenAI 兼容 Embedding、Reranker、问答模型适配器；真实供应商审批、真实凭据联调和生产容量/费用验证尚未完成。
+- 已实现受控单轮 RAG 问答闭环；真实业务黄金集验收、生产安全加固、钉钉登录与组织同步、报表和方案生成仍属于后续批次。
