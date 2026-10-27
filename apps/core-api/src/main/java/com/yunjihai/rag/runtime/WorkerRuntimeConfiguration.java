@@ -26,6 +26,7 @@ import com.yunjihai.rag.qa.ExactQuoteCitationSupportVerifier;
 import com.yunjihai.rag.qa.GroundedQaService;
 import com.yunjihai.rag.qa.ModelCallAuditPort;
 import com.yunjihai.rag.qa.MicrometerQaMetrics;
+import com.yunjihai.rag.qa.QaEvidenceAuthorizationPort;
 import com.yunjihai.rag.qa.QaMetrics;
 import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaPolicy;
@@ -98,11 +99,12 @@ public class WorkerRuntimeConfiguration {
             ChatCompletionPort chat,
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
+            QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock,
             QaMetrics metrics) {
         return new GroundedQaService(
                 authorizedSpaces,retrieval,persistence,audits,digests,sanitizer,chat,
-                citationVerifier,policy,clock,metrics);
+                citationVerifier,policy,evidenceAuthorization,clock,metrics);
     }
 
     @Bean

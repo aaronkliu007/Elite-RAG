@@ -216,6 +216,21 @@ class GroundedQaServiceTest {
         assertThat(late.service().ask(command("问题"))).isEqualTo(late.persistedOutcome);
     }
 
+    @Test
+    void refusesLateModelResultWhenEvidenceAuthorizationWasRevoked() {
+        var harness = new Harness();
+        harness.finalAuthorization = false;
+
+        QaOutcome outcome = harness.service().ask(command("问题"));
+
+        assertThat(outcome).isEqualTo(new QaOutcome.Refused(
+                id(1), RefusalReason.NO_AUTHORIZED_SPACE, false));
+        assertThat(harness.modelCalls).hasValue(1);
+        assertThat(harness.states).containsExactly(
+                QaStatus.RECEIVED, QaStatus.RETRIEVING, QaStatus.SANITIZING,
+                QaStatus.GENERATING, QaStatus.VERIFYING, QaStatus.REFUSED);
+    }
+
     private static AskQuestionCommand command(String question) {
         return new AskQuestionCommand(id(1), id(2), question);
     }
@@ -258,6 +273,7 @@ class GroundedQaServiceTest {
         private boolean blockSanitization;
         private boolean auditFailure;
         private boolean rejectAnsweredCompletion;
+        private boolean finalAuthorization = true;
         private QaOutcome persistedOutcome;
         private QaMetrics metrics = QaMetrics.noop();
         private final List<com.yunjihai.rag.retrieval.domain.RetrievalQuery> queries = new ArrayList<>();
@@ -302,6 +318,7 @@ class GroundedQaServiceTest {
             return new GroundedQaService(
                     scope, retrieval, new FakePersistence(), audit, value -> "digest:" + value.length(),
                     sanitizer, chat, new ExactQuoteCitationSupportVerifier(), QaPolicy.defaults(),
+                    (requestId, actorId, at) -> finalAuthorization,
                     Clock.fixed(NOW, ZoneOffset.UTC), metrics);
         }
 

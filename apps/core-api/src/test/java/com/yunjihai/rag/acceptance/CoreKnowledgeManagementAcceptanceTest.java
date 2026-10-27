@@ -19,6 +19,7 @@ import com.yunjihai.rag.knowledge.DocumentService;
 import com.yunjihai.rag.knowledge.DocumentRepository;
 import com.yunjihai.rag.knowledge.DocumentStatus;
 import com.yunjihai.rag.knowledge.KnowledgeSpaceService;
+import com.yunjihai.rag.qa.QaEvidenceAuthorizationPort;
 import com.yunjihai.rag.retrieval.TrustedRetrievalService;
 import com.yunjihai.rag.retrieval.domain.DegradationReason;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
@@ -112,6 +113,9 @@ class CoreKnowledgeManagementAcceptanceTest {
     private TrustedRetrievalService retrieval;
 
     @Autowired
+    private QaEvidenceAuthorizationPort qaEvidenceAuthorization;
+
+    @Autowired
     private JdbcClient jdbc;
 
     @BeforeAll
@@ -152,6 +156,7 @@ class CoreKnowledgeManagementAcceptanceTest {
 
     @Test
     void completesGovernedKnowledgeFlowAcrossRealInfrastructure() {
+        assertThat(qaEvidenceAuthorization).isNotNull();
         var admin = authentication.authenticate(
                 ADMIN_USERNAME, ADMIN_PASSWORD.toCharArray(), "127.0.0.1");
         var suffix = UUID.randomUUID().toString().substring(0, 8);

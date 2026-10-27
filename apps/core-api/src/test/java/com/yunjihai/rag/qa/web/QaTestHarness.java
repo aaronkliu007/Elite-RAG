@@ -70,7 +70,8 @@ final class QaTestHarness {
         };
         var service=new GroundedQaService(spaces,retrieval,persistence,ignored->{},
                 ignored->"a".repeat(64),sanitizer,chat,new ExactQuoteCitationSupportVerifier(),
-                QaPolicy.defaults(),Clock.fixed(NOW,ZoneOffset.UTC));
+                QaPolicy.defaults(),(requestId,actorId,at)->true,
+                Clock.fixed(NOW,ZoneOffset.UTC));
         var json=new ObjectMapper();
         var idempotency=new IdempotencyService(new MemoryIdempotencyStore(),json,
                 Clock.fixed(NOW,ZoneOffset.UTC),Duration.ofHours(24));

@@ -47,6 +47,7 @@ public final class GroundedQaService {
     private final ChatCompletionPort chat;
     private final CitationSupportVerifier citationVerifier;
     private final QaPolicy policy;
+    private final QaEvidenceAuthorizationPort evidenceAuthorization;
     private final Clock clock;
     private final QaMetrics metrics;
 
@@ -60,9 +61,10 @@ public final class GroundedQaService {
             ChatCompletionPort chat,
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
+            QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock) {
         this(authorizedSpaces, retrieval, persistence, audits, digests, sanitizer, chat,
-                citationVerifier, policy, clock, QaMetrics.noop());
+                citationVerifier, policy, evidenceAuthorization, clock, QaMetrics.noop());
     }
 
     public GroundedQaService(
@@ -75,6 +77,7 @@ public final class GroundedQaService {
             ChatCompletionPort chat,
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
+            QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock,
             QaMetrics metrics) {
         this.authorizedSpaces = Objects.requireNonNull(authorizedSpaces);
@@ -86,6 +89,7 @@ public final class GroundedQaService {
         this.chat = Objects.requireNonNull(chat);
         this.citationVerifier = Objects.requireNonNull(citationVerifier);
         this.policy = Objects.requireNonNull(policy);
+        this.evidenceAuthorization = Objects.requireNonNull(evidenceAuthorization);
         this.clock = Objects.requireNonNull(clock);
         this.metrics = Objects.requireNonNull(metrics);
     }
@@ -254,6 +258,16 @@ public final class GroundedQaService {
             if (!citationVerifier.isSupported(candidate, sanitized.evidence())) {
                 return complete(state, command.actorId(), new QaOutcome.Refused(
                         command.requestId(), RefusalReason.UNSUPPORTED_CLAIM, pack.degraded()));
+            }
+            try {
+                if (!evidenceAuthorization.allAuthorized(
+                        command.requestId(), command.actorId(), clock.instant())) {
+                    return complete(state, command.actorId(), new QaOutcome.Refused(
+                            command.requestId(), RefusalReason.NO_AUTHORIZED_SPACE, pack.degraded()));
+                }
+            } catch (RuntimeException authorizationFailure) {
+                return complete(state, command.actorId(), new QaOutcome.Failed(
+                        command.requestId(), "FINAL_AUTHORIZATION_FAILED", pack.degraded()));
             }
             if (timedOut(deadline)) {
                 return complete(state, command.actorId(), new QaOutcome.Failed(

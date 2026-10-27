@@ -61,6 +61,7 @@ import com.yunjihai.rag.retrieval.PrincipalResolverPort;
 import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
 import com.yunjihai.rag.qa.AuthorizedSpaceScopePort;
 import com.yunjihai.rag.qa.ModelCallAuditPort;
+import com.yunjihai.rag.qa.QaEvidenceAuthorizationPort;
 import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaSourceAccessPort;
 import com.yunjihai.rag.qa.QuestionDigestPort;
@@ -124,6 +125,11 @@ public class PostgresAdapterConfiguration {
     @Bean
     QaSourceAccessPort qaSourceAccessPort(JdbcClient jdbc) {
         return new JdbcQaSourceAccessAdapter(jdbc, new com.fasterxml.jackson.databind.ObjectMapper());
+    }
+
+    @Bean
+    QaEvidenceAuthorizationPort qaEvidenceAuthorizationPort(JdbcClient jdbc) {
+        return new JdbcQaEvidenceAuthorizationAdapter(jdbc);
     }
 
     @Bean

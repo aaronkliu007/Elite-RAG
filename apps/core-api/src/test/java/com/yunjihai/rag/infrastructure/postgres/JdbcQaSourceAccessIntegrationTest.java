@@ -25,6 +25,7 @@ class JdbcQaSourceAccessIntegrationTest {
     private static JdbcQaPersistenceAdapter persistence;
     private static JdbcAuthorizedSpaceScope scopes;
     private static JdbcQaSourceAccessAdapter sources;
+    private static JdbcQaEvidenceAuthorizationAdapter finalAuthorization;
     private UUID actor,request,evidence,uncitedEvidence,space,document,version;
 
     @BeforeAll
@@ -46,6 +47,7 @@ class JdbcQaSourceAccessIntegrationTest {
                 new TransactionTemplate(new DataSourceTransactionManager(dataSource)),new ObjectMapper());
         scopes=new JdbcAuthorizedSpaceScope(jdbc);
         sources=new JdbcQaSourceAccessAdapter(jdbc,new ObjectMapper());
+        finalAuthorization=new JdbcQaEvidenceAuthorizationAdapter(jdbc);
     }
 
     @AfterAll static void stop(){POSTGRES.stop();}
@@ -114,6 +116,7 @@ class JdbcQaSourceAccessIntegrationTest {
             assertThat(source.nodeId()).isEqualTo("node-1");
             assertThat(source.title()).isEqualTo("现行制度文件");
         });
+        assertThat(finalAuthorization.allAuthorized(request,actor,NOW)).isTrue();
     }
 
     @Test
@@ -123,6 +126,7 @@ class JdbcQaSourceAccessIntegrationTest {
                 .param("at",OffsetDateTime.ofInstant(NOW,ZoneOffset.UTC)).param("space",space).update();
         assertThat(scopes.resolve(actor,NOW)).isEmpty();
         assertThat(sources.findAuthorized(request,evidence,actor,NOW)).isEmpty();
+        assertThat(finalAuthorization.allAuthorized(request,actor,NOW)).isFalse();
     }
 
     @Test
@@ -131,5 +135,6 @@ class JdbcQaSourceAccessIntegrationTest {
                 .param("document",document).update();
 
         assertThat(sources.findAuthorized(request,evidence,actor,NOW)).isEmpty();
+        assertThat(finalAuthorization.allAuthorized(request,actor,NOW)).isFalse();
     }
 }

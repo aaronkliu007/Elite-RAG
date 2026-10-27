@@ -6,6 +6,7 @@ import com.yunjihai.rag.api.idempotency.StoredHttpResult;
 import com.yunjihai.rag.common.UuidV7;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
@@ -21,7 +22,8 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     }
 
     @Override
-    @Transactional
+    // Commit the claim before the business transaction so concurrent callers observe IN_PROGRESS.
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Claim claim(IdempotencyScope scope, String requestHash, Instant now, Instant expiresAt) {
         requireClaim(scope, requestHash, now, expiresAt);
         try {
@@ -105,7 +107,8 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
     }
 
     @Override
-    @Transactional
+    // Release must survive rollback of a failed business transaction so a safe retry can acquire it.
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void release(IdempotencyScope scope, String requestHash) {
         Objects.requireNonNull(scope);
         Objects.requireNonNull(requestHash);

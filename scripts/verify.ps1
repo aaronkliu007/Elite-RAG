@@ -40,6 +40,18 @@ try {
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+    $groundedQaAcceptanceReports = @(
+        'com.yunjihai.rag.acceptance.GroundedQaAcceptanceTest.txt',
+        'com.yunjihai.rag.acceptance.GroundedQaSecurityIntegrationTest.txt',
+        'com.yunjihai.rag.acceptance.GroundedQaModelGatewayIntegrationTest.txt'
+    )
+    foreach ($report in $groundedQaAcceptanceReports) {
+        $reportPath = Join-Path $projectRoot "apps\core-api\target\surefire-reports\$report"
+        if (-not (Test-Path -LiteralPath $reportPath -PathType Leaf)) {
+            throw "Required Grounded QA acceptance report is missing: $report"
+        }
+    }
+
     corepack pnpm test
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
