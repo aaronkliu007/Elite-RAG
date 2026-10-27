@@ -35,6 +35,11 @@ rag:
     allow-insecure-loopback-for-tests: false
   sanitization:
     business-terms: ${RAG_SANITIZATION_BUSINESS_TERMS:}
+  qa:
+    hmac-key: ${RAG_QA_QUESTION_HMAC_KEY:}
+    metrics:
+      input-cost-per-million-tokens: ${RAG_AI_INPUT_COST_PER_MILLION_TOKENS:0}
+      output-cost-per-million-tokens: ${RAG_AI_OUTPUT_COST_PER_MILLION_TOKENS:0}
   workers:
     enabled: ${RAG_WORKERS_ENABLED:true}
   upload:
@@ -93,7 +98,7 @@ management:
         liveness:
           include: livenessState
         readiness:
-          include: readinessState,db,minio,opensearchRead,opensearchProjection,embeddingCapability
+          include: readinessState,db,minio,opensearchRead,opensearchProjection,embeddingCapability,modelGateway
   endpoints:
     web:
       exposure:

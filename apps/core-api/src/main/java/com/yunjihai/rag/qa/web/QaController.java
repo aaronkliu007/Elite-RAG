@@ -5,7 +5,7 @@ import com.yunjihai.rag.api.idempotency.*;
 import com.yunjihai.rag.common.UuidV7;
 import com.yunjihai.rag.qa.*;
 import com.yunjihai.rag.qa.domain.QaQuestion;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Profile;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -17,7 +17,7 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/qa/questions")
 @Profile("local")
-@ConditionalOnProperty(prefix="rag.qa",name="hmac-key")
+@ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${rag.qa.hmac-key:}')")
 public class QaController {
     private final GroundedQaService qa;
     private final IdempotencyService idempotency;

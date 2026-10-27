@@ -67,6 +67,7 @@ import com.yunjihai.rag.qa.QuestionDigestPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.dao.DataAccessException;
@@ -122,7 +123,7 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
-    @ConditionalOnProperty(prefix = "rag.qa", name = "hmac-key")
+    @ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${rag.qa.hmac-key:}')")
     QuestionDigestPort questionDigestPort(@Value("${rag.qa.hmac-key}") String key) {
         return new HmacQuestionDigest(key.getBytes(StandardCharsets.UTF_8));
     }

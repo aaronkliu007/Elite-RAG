@@ -18,6 +18,8 @@ import com.yunjihai.rag.retrieval.RetrievalService;
 import com.yunjihai.rag.retrieval.domain.Evidence;
 import com.yunjihai.rag.retrieval.domain.EvidencePack;
 import com.yunjihai.rag.retrieval.domain.RetrievalQuery;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.text.Normalizer;
 import java.time.Clock;
@@ -31,6 +33,7 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class GroundedQaService {
+    private static final Logger LOGGER = LoggerFactory.getLogger(GroundedQaService.class);
     private static final String POLICY_VERSION = "qa-policy-v1";
     private static final String PROMPT_VERSION = "grounded-answer-v1";
     private static final ModelUsage EMPTY_USAGE = new ModelUsage(0, 0, Duration.ZERO);
@@ -45,6 +48,7 @@ public final class GroundedQaService {
     private final CitationSupportVerifier citationVerifier;
     private final QaPolicy policy;
     private final Clock clock;
+    private final QaMetrics metrics;
 
     public GroundedQaService(
             AuthorizedSpaceScopePort authorizedSpaces,
@@ -57,6 +61,22 @@ public final class GroundedQaService {
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
             Clock clock) {
+        this(authorizedSpaces, retrieval, persistence, audits, digests, sanitizer, chat,
+                citationVerifier, policy, clock, QaMetrics.noop());
+    }
+
+    public GroundedQaService(
+            AuthorizedSpaceScopePort authorizedSpaces,
+            RetrievalService retrieval,
+            QaPersistencePort persistence,
+            ModelCallAuditPort audits,
+            QuestionDigestPort digests,
+            SensitiveContentSanitizer sanitizer,
+            ChatCompletionPort chat,
+            CitationSupportVerifier citationVerifier,
+            QaPolicy policy,
+            Clock clock,
+            QaMetrics metrics) {
         this.authorizedSpaces = Objects.requireNonNull(authorizedSpaces);
         this.retrieval = Objects.requireNonNull(retrieval);
         this.persistence = Objects.requireNonNull(persistence);
@@ -67,10 +87,19 @@ public final class GroundedQaService {
         this.citationVerifier = Objects.requireNonNull(citationVerifier);
         this.policy = Objects.requireNonNull(policy);
         this.clock = Objects.requireNonNull(clock);
+        this.metrics = Objects.requireNonNull(metrics);
     }
 
     public QaOutcome ask(AskQuestionCommand command) {
         Objects.requireNonNull(command, "command must not be null");
+        long started = System.nanoTime();
+        QaOutcome outcome = execute(command);
+        safeMetric(command.requestId(), () -> metrics.recordOutcome(outcome, elapsed(started)));
+        LOGGER.info("qa_terminal requestId={} code={}", command.requestId(), terminalCode(outcome));
+        return outcome;
+    }
+
+    private QaOutcome execute(AskQuestionCommand command) {
         Instant requestTime = clock.instant();
         QaQuestion question;
         try {
@@ -86,6 +115,7 @@ public final class GroundedQaService {
                 command.requestId(), command.actorId(), questionDigest, requestTime);
         long deadline = System.nanoTime() + policy.totalTimeout().toNanos();
 
+        long authorizationStarted = System.nanoTime();
         Set<UUID> spaces;
         try {
             spaces = Set.copyOf(Objects.requireNonNull(
@@ -94,6 +124,9 @@ public final class GroundedQaService {
         } catch (RuntimeException unavailable) {
             return complete(state, command.actorId(), new QaOutcome.Failed(
                     command.requestId(), "AUTHORIZED_SCOPE_UNAVAILABLE"));
+        } finally {
+            safeMetric(command.requestId(), () -> metrics.recordStage(
+                    QaMetrics.Stage.AUTHORIZATION, elapsed(authorizationStarted)));
         }
         if (spaces.isEmpty()) {
             return complete(state, command.actorId(), new QaOutcome.Refused(
@@ -109,6 +142,7 @@ public final class GroundedQaService {
         if (retrieving.isEmpty()) return stale(command);
         state = retrieving.orElseThrow();
 
+        long retrievalStarted = System.nanoTime();
         EvidencePack pack;
         try {
             pack = retrieval.retrieve(new RetrievalQuery(
@@ -117,6 +151,9 @@ public final class GroundedQaService {
         } catch (RuntimeException retrievalFailure) {
             return complete(state, command.actorId(), new QaOutcome.Failed(
                     command.requestId(), "RETRIEVAL_FAILED"));
+        } finally {
+            safeMetric(command.requestId(), () -> metrics.recordStage(
+                    QaMetrics.Stage.RETRIEVAL, elapsed(retrievalStarted)));
         }
         if (!command.requestId().equals(pack.requestId())) {
             return complete(state, command.actorId(), new QaOutcome.Failed(
@@ -144,13 +181,18 @@ public final class GroundedQaService {
         if (saved.isEmpty()) return stale(command);
         state = saved.orElseThrow();
 
+        long sanitizationStarted = System.nanoTime();
         SanitizationResult sanitized;
         try {
             sanitized = sanitizer.sanitize(evidence);
         } catch (RuntimeException sanitizationFailure) {
             return complete(state, command.actorId(), new QaOutcome.Refused(
                     command.requestId(), RefusalReason.UNSAFE_TO_SEND, pack.degraded()));
+        } finally {
+            safeMetric(command.requestId(), () -> metrics.recordStage(
+                    QaMetrics.Stage.SANITIZATION, elapsed(sanitizationStarted)));
         }
+        safeMetric(command.requestId(), () -> metrics.recordSanitizationHits(sanitizationHits(sanitized)));
         if (sanitized.blocked()) {
             return complete(state, command.actorId(), new QaOutcome.Refused(
                     command.requestId(), RefusalReason.UNSAFE_TO_SEND, pack.degraded()));
@@ -167,7 +209,15 @@ public final class GroundedQaService {
         GroundedAnswerPrompt prompt = new GroundedAnswerPrompt(
                 question, sanitized.evidence(), "zh-CN", POLICY_VERSION, PROMPT_VERSION,
                 policy.maxModelOutputCodePoints());
-        GenerationAttempt attempt = generate(prompt);
+        long generationStarted = System.nanoTime();
+        GenerationAttempt attempt;
+        try {
+            attempt = generate(prompt, command.requestId());
+        } finally {
+            safeMetric(command.requestId(), () -> metrics.recordStage(
+                    QaMetrics.Stage.GENERATION, elapsed(generationStarted)));
+        }
+        safeMetric(command.requestId(), () -> metrics.recordModelUsage(attempt.usage()));
 
         try {
             audits.record(new ModelCallAuditPort.ModelCallAudit(
@@ -182,34 +232,40 @@ public final class GroundedQaService {
             QaOutcome failureOutcome = mapModelFailure(command.requestId(), attempt.failure(), pack.degraded());
             return complete(state, command.actorId(), failureOutcome);
         }
-        ModelGeneration generation = attempt.generation();
-        CandidateAnswer candidate = generation.answer();
-        if (candidate.decision() == CandidateAnswer.Decision.REFUSE) {
-            return complete(state, command.actorId(), new QaOutcome.Refused(
-                    command.requestId(), RefusalReason.INSUFFICIENT_EVIDENCE, pack.degraded()));
-        }
+        long verificationStarted = System.nanoTime();
         try {
-            candidate.validateAgainst(sanitized.evidence());
-        } catch (RuntimeException unknownEvidence) {
-            return complete(state, command.actorId(), new QaOutcome.Refused(
-                    command.requestId(), RefusalReason.INVALID_MODEL_OUTPUT, pack.degraded()));
-        }
+            ModelGeneration generation = attempt.generation();
+            CandidateAnswer candidate = generation.answer();
+            if (candidate.decision() == CandidateAnswer.Decision.REFUSE) {
+                return complete(state, command.actorId(), new QaOutcome.Refused(
+                        command.requestId(), RefusalReason.INSUFFICIENT_EVIDENCE, pack.degraded()));
+            }
+            try {
+                candidate.validateAgainst(sanitized.evidence());
+            } catch (RuntimeException unknownEvidence) {
+                return complete(state, command.actorId(), new QaOutcome.Refused(
+                        command.requestId(), RefusalReason.INVALID_MODEL_OUTPUT, pack.degraded()));
+            }
 
-        Optional<QaPersistencePort.RequestState> verifying = persistence.transition(
-                command.requestId(), state.revision(), QaStatus.VERIFYING, clock.instant());
-        if (verifying.isEmpty()) return stale(command);
-        state = verifying.orElseThrow();
-        if (!citationVerifier.isSupported(candidate, sanitized.evidence())) {
-            return complete(state, command.actorId(), new QaOutcome.Refused(
-                    command.requestId(), RefusalReason.UNSUPPORTED_CLAIM, pack.degraded()));
+            Optional<QaPersistencePort.RequestState> verifying = persistence.transition(
+                    command.requestId(), state.revision(), QaStatus.VERIFYING, clock.instant());
+            if (verifying.isEmpty()) return stale(command);
+            state = verifying.orElseThrow();
+            if (!citationVerifier.isSupported(candidate, sanitized.evidence())) {
+                return complete(state, command.actorId(), new QaOutcome.Refused(
+                        command.requestId(), RefusalReason.UNSUPPORTED_CLAIM, pack.degraded()));
+            }
+            if (timedOut(deadline)) {
+                return complete(state, command.actorId(), new QaOutcome.Failed(
+                        command.requestId(), "QA_TIMEOUT", pack.degraded()));
+            }
+            return complete(state, command.actorId(), new QaOutcome.Answered(
+                    command.requestId(), candidate.answer(), candidate.claims().stream()
+                            .map(CitationClaim::from).toList(), pack.degraded()));
+        } finally {
+            safeMetric(command.requestId(), () -> metrics.recordStage(
+                    QaMetrics.Stage.VERIFICATION, elapsed(verificationStarted)));
         }
-        if (timedOut(deadline)) {
-            return complete(state, command.actorId(), new QaOutcome.Failed(
-                    command.requestId(), "QA_TIMEOUT", pack.degraded()));
-        }
-        return complete(state, command.actorId(), new QaOutcome.Answered(
-                command.requestId(), candidate.answer(), candidate.claims().stream()
-                        .map(CitationClaim::from).toList(), pack.degraded()));
     }
 
     public Optional<QaOutcome> find(UUID requestId, UUID actorId) {
@@ -224,18 +280,21 @@ public final class GroundedQaService {
                 Objects.requireNonNull(actorId, "actorId must not be null"));
     }
 
-    private GenerationAttempt generate(GroundedAnswerPrompt prompt) {
+    private GenerationAttempt generate(GroundedAnswerPrompt prompt, UUID requestId) {
         int retries = 0;
         while (true) {
             try {
                 return GenerationAttempt.success(chat.generate(prompt), retries);
             } catch (ModelGatewayException failure) {
+                safeMetric(requestId, () -> metrics.recordModelError(failure.kind()));
                 if (isTransient(failure.kind()) && retries < policy.transientRetryLimit()) {
                     retries++;
                     continue;
                 }
                 return GenerationAttempt.failure(failure, retries);
             } catch (RuntimeException invalidResponse) {
+                safeMetric(requestId, () -> metrics.recordModelError(
+                        ModelGatewayException.Kind.INVALID_RESPONSE));
                 return GenerationAttempt.failure(
                         new ModelGatewayException(ModelGatewayException.Kind.INVALID_RESPONSE), retries);
             }
@@ -251,6 +310,28 @@ public final class GroundedQaService {
 
     private static int sanitizationHits(SanitizationResult result) {
         return result.hitCounts().values().stream().mapToInt(Integer::intValue).sum();
+    }
+
+    private void safeMetric(UUID requestId, Runnable recorder) {
+        try {
+            recorder.run();
+        } catch (RuntimeException metricsFailure) {
+            LOGGER.warn("qa_metrics_failed requestId={} code=METRICS_RECORD_FAILED", requestId);
+        }
+    }
+
+    private static Duration elapsed(long started) {
+        return Duration.ofNanos(Math.max(0L, System.nanoTime() - started));
+    }
+
+    private static String terminalCode(QaOutcome outcome) {
+        if (outcome instanceof QaOutcome.Refused refused) {
+            return "REFUSED_" + refused.reason().name();
+        }
+        if (outcome instanceof QaOutcome.Failed failed) {
+            return "FAILED_" + failed.code();
+        }
+        return "ANSWERED";
     }
 
     private static QaOutcome mapModelFailure(

@@ -20,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DependencyHealthIntegrationTest {
 
@@ -39,16 +40,28 @@ class DependencyHealthIntegrationTest {
             assertContributorUp(context, "db");
             assertContributorUp(context, "minio");
             assertContributorUp(context, "readinessState");
+            assertContributorStatus(context, "modelGateway", new Status("DISABLED"));
             assertHealth(context, "readiness", 200, "UP");
             assertHealth(context, "liveness", 200, "UP");
         }
     }
 
     private static void assertContributorUp(ConfigurableApplicationContext context, String name) {
+        assertContributorStatus(context, name, Status.UP);
+    }
+
+    private static void assertContributorStatus(
+            ConfigurableApplicationContext context, String name, Status expected) {
         var contributor = context.getBean(HealthContributorRegistry.class).getContributor(name);
         assertThat(contributor).as("health contributor %s", name).isInstanceOf(HealthIndicator.class);
         assertThat(((HealthIndicator) contributor).health().getStatus())
-                .as("health contributor %s", name).isEqualTo(Status.UP);
+                .as("health contributor %s", name).isEqualTo(expected);
+    }
+
+    @Test
+    void enabledModelGatewayWithoutApprovedConfigurationFailsStartup() {
+        assertThatThrownBy(() -> startContext(Map.of("rag.ai.enabled", "true")))
+                .hasRootCauseMessage("MODEL_GATEWAY_CONFIGURATION_INVALID");
     }
 
     @Test
@@ -87,7 +100,7 @@ class DependencyHealthIntegrationTest {
         properties.put("rag.opensearch.enabled", "false");
         properties.put("rag.workers.enabled", "false");
         properties.put("rag.bootstrap-admin.enabled", "false");
-        properties.put("management.endpoint.health.group.readiness.include", "readinessState,db,minio");
+        properties.put("management.endpoint.health.group.readiness.include", "readinessState,db,minio,modelGateway");
         properties.put("spring.autoconfigure.exclude", String.join(",",
                 "org.springframework.boot.hibernate.autoconfigure.HibernateJpaAutoConfiguration",
                 "org.springframework.boot.data.jpa.autoconfigure.DataJpaRepositoriesAutoConfiguration",

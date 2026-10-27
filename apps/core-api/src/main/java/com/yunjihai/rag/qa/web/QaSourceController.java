@@ -3,7 +3,7 @@ package com.yunjihai.rag.qa.web;
 import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.qa.QaSourceAccessPort;
 import com.yunjihai.rag.retrieval.domain.*;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Profile;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -14,7 +14,7 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/qa/questions/{requestId}/sources")
 @Profile("local")
-@ConditionalOnProperty(prefix="rag.qa",name="hmac-key")
+@ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${rag.qa.hmac-key:}')")
 public class QaSourceController {
     private final QaSourceAccessPort sources;
     private final Clock clock;

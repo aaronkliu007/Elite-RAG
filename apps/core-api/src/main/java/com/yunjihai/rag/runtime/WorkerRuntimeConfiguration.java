@@ -25,11 +25,14 @@ import com.yunjihai.rag.qa.CitationSupportVerifier;
 import com.yunjihai.rag.qa.ExactQuoteCitationSupportVerifier;
 import com.yunjihai.rag.qa.GroundedQaService;
 import com.yunjihai.rag.qa.ModelCallAuditPort;
+import com.yunjihai.rag.qa.MicrometerQaMetrics;
+import com.yunjihai.rag.qa.QaMetrics;
 import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaPolicy;
 import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.retrieval.RetrievalService;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -53,6 +56,14 @@ import java.util.stream.Collectors;
 @Profile("local")
 @EnableScheduling
 public class WorkerRuntimeConfiguration {
+
+    @Bean
+    QaMetrics qaMetrics(
+            MeterRegistry registry,
+            @Value("${rag.qa.metrics.input-cost-per-million-tokens:0}") double inputCost,
+            @Value("${rag.qa.metrics.output-cost-per-million-tokens:0}") double outputCost) {
+        return new MicrometerQaMetrics(registry, inputCost, outputCost);
+    }
 
     @Bean
     QaPolicy qaPolicy() {
@@ -83,10 +94,11 @@ public class WorkerRuntimeConfiguration {
             ChatCompletionPort chat,
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
-            Clock clock) {
+            Clock clock,
+            QaMetrics metrics) {
         return new GroundedQaService(
                 authorizedSpaces,retrieval,persistence,audits,digests,sanitizer,chat,
-                citationVerifier,policy,clock);
+                citationVerifier,policy,clock,metrics);
     }
 
     @Bean

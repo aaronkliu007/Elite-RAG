@@ -19,6 +19,9 @@ import com.yunjihai.rag.retrieval.domain.EvidencePack;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
 import com.yunjihai.rag.retrieval.domain.RetrievalStats;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -35,6 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@ExtendWith(OutputCaptureExtension.class)
 class GroundedQaServiceTest {
     private static final Instant NOW = Instant.parse("2026-10-10T08:00:00Z");
 
@@ -129,6 +133,8 @@ class GroundedQaServiceTest {
     void retriesOneTransientModelFailureWithTheSameSanitizedPrompt() {
         var harness = new Harness();
         harness.transientFailures = 1;
+        var metrics = new RecordingQaMetrics();
+        harness.metrics = metrics;
 
         QaOutcome outcome = harness.service().ask(command("问题"));
 
@@ -137,6 +143,45 @@ class GroundedQaServiceTest {
         assertThat(harness.audits).singleElement()
                 .extracting(ModelCallAuditPort.ModelCallAudit::retryCount)
                 .isEqualTo(1);
+        assertThat(metrics.modelErrors).containsExactly(ModelGatewayException.Kind.TIMEOUT);
+    }
+
+    @Test
+    void recordsEveryAnsweredPipelineStageAndSafeOperationalTotals() {
+        var harness = new Harness();
+        var metrics = new RecordingQaMetrics();
+        harness.metrics = metrics;
+
+        QaOutcome outcome = harness.service().ask(command("问题"));
+
+        assertThat(outcome).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(metrics.stages).containsExactly(
+                QaMetrics.Stage.AUTHORIZATION,
+                QaMetrics.Stage.RETRIEVAL,
+                QaMetrics.Stage.SANITIZATION,
+                QaMetrics.Stage.GENERATION,
+                QaMetrics.Stage.VERIFICATION);
+        assertThat(metrics.outcomes).containsExactly(QaStatus.ANSWERED);
+        assertThat(metrics.modelUsages).singleElement().satisfies(usage -> {
+            assertThat(usage.inputTokens()).isEqualTo(100);
+            assertThat(usage.outputTokens()).isEqualTo(20);
+        });
+        assertThat(metrics.sanitizationHits).containsExactly(0);
+    }
+
+    @Test
+    void metricsFailureCannotChangeOutcomeOrLeakPayloadsToLogs(CapturedOutput output) {
+        var harness = new Harness();
+        harness.metrics = new ThrowingQaMetrics("api-key-secret");
+
+        QaOutcome outcome = harness.service().ask(command("question-secret"));
+
+        assertThat(outcome).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(output).contains(id(1).toString(), "METRICS_RECORD_FAILED")
+                .doesNotContain("question-secret")
+                .doesNotContain("证据　正文")
+                .doesNotContain("制度已经生效")
+                .doesNotContain("api-key-secret");
     }
 
     @Test
@@ -214,6 +259,7 @@ class GroundedQaServiceTest {
         private boolean auditFailure;
         private boolean rejectAnsweredCompletion;
         private QaOutcome persistedOutcome;
+        private QaMetrics metrics = QaMetrics.noop();
         private final List<com.yunjihai.rag.retrieval.domain.RetrievalQuery> queries = new ArrayList<>();
         private final AtomicReference<com.yunjihai.rag.qa.model.GroundedAnswerPrompt> prompt =
                 new AtomicReference<>();
@@ -256,7 +302,7 @@ class GroundedQaServiceTest {
             return new GroundedQaService(
                     scope, retrieval, new FakePersistence(), audit, value -> "digest:" + value.length(),
                     sanitizer, chat, new ExactQuoteCitationSupportVerifier(), QaPolicy.defaults(),
-                    Clock.fixed(NOW, ZoneOffset.UTC));
+                    Clock.fixed(NOW, ZoneOffset.UTC), metrics);
         }
 
         private final class FakePersistence implements QaPersistencePort {
@@ -309,6 +355,57 @@ class GroundedQaServiceTest {
             public Optional<QaOutcome> find(UUID requestId, UUID actorId) {
                 return Optional.ofNullable(persistedOutcome);
             }
+        }
+    }
+
+    private static final class RecordingQaMetrics implements QaMetrics {
+        private final List<Stage> stages = new ArrayList<>();
+        private final List<QaStatus> outcomes = new ArrayList<>();
+        private final List<ModelUsage> modelUsages = new ArrayList<>();
+        private final List<Integer> sanitizationHits = new ArrayList<>();
+        private final List<ModelGatewayException.Kind> modelErrors = new ArrayList<>();
+
+        @Override
+        public void recordStage(Stage stage, Duration duration) {
+            stages.add(stage);
+        }
+
+        @Override
+        public void recordOutcome(QaOutcome outcome, Duration duration) {
+            outcomes.add(outcome.status());
+        }
+
+        @Override
+        public void recordModelUsage(ModelUsage usage) {
+            modelUsages.add(usage);
+        }
+
+        @Override
+        public void recordSanitizationHits(int count) {
+            sanitizationHits.add(count);
+        }
+
+        @Override
+        public void recordModelError(ModelGatewayException.Kind kind) {
+            modelErrors.add(kind);
+        }
+    }
+
+    private static final class ThrowingQaMetrics implements QaMetrics {
+        private final String secret;
+
+        private ThrowingQaMetrics(String secret) {
+            this.secret = secret;
+        }
+
+        @Override public void recordStage(Stage stage, Duration duration) { fail(); }
+        @Override public void recordOutcome(QaOutcome outcome, Duration duration) { fail(); }
+        @Override public void recordModelUsage(ModelUsage usage) { fail(); }
+        @Override public void recordSanitizationHits(int count) { fail(); }
+        @Override public void recordModelError(ModelGatewayException.Kind kind) { fail(); }
+
+        private void fail() {
+            throw new IllegalStateException(secret);
         }
     }
 }

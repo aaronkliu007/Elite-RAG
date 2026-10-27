@@ -16,6 +16,12 @@ import org.springframework.context.annotation.Primary;
 @EnableConfigurationProperties(ApprovedModelGatewayProperties.class)
 public class ModelGatewayConfiguration {
 
+    @Bean(name = "modelGateway")
+    ModelGatewayHealthIndicator modelGatewayHealthIndicator(
+            ApprovedModelGatewayProperties properties) {
+        return new ModelGatewayHealthIndicator(properties);
+    }
+
     @Bean
     @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "true")
     ModelUsagePolicy modelUsagePolicy(ApprovedModelGatewayProperties properties) {
