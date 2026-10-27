@@ -20,6 +20,7 @@ import com.yunjihai.rag.retrieval.selection.EvidenceSelectionService;
 import com.yunjihai.rag.retrieval.selection.RerankScore;
 import com.yunjihai.rag.retrieval.selection.RerankingService;
 import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -49,6 +50,76 @@ class TrustedRetrievalServiceTest {
     private static final UUID USER_ID = uuid(2);
     private static final UUID SPACE_ID = uuid(3);
     private static final Instant NOW = Instant.parse("2026-09-28T04:00:00Z");
+
+    @Test
+    void sanitizesQuestionAndAuthorizedCandidatesBeforeExternalRecallAndRerank() {
+        var observedRecallQuery = new AtomicReference<String>();
+        var observedRerankQuery = new AtomicReference<String>();
+        var observedRerankText = new AtomicReference<String>();
+        var candidate = candidate(9, 109, RecallSource.LEXICAL, 1,
+                "联系人 13812345678");
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var policy = RetrievalPolicy.defaults();
+            var service = new TrustedRetrievalService(
+                    (userId, at) -> Set.of(new PrincipalRef(PrincipalType.USER, userId)),
+                    new HybridRecallService(
+                            (query, filter, limit) -> {
+                                observedRecallQuery.set(query);
+                                return List.of(candidate);
+                            },
+                            (query, filter, limit) -> List.of(), executor, policy),
+                    new RerankingService((query, candidates) -> {
+                        observedRerankQuery.set(query);
+                        observedRerankText.set(candidates.getFirst().candidate().text());
+                        return candidates.stream().map(value -> new RerankScore(
+                                value.candidate().candidateId(), value.score())).toList();
+                    }, executor, policy),
+                    (userId, requestedBySpace, at) -> flatten(requestedBySpace),
+                    new EvidenceSelectionService(policy), at -> uuid(9090), policy,
+                    Clock.fixed(NOW, ZoneOffset.UTC), command -> null,
+                    new RegexSensitiveContentSanitizer(Set.of()));
+
+            service.retrieve(new RetrievalQuery(
+                    REQUEST_ID, USER_ID, Set.of(SPACE_ID),
+                    "查询 13812345678", Map.of(), 8));
+
+            assertThat(observedRecallQuery.get()).isEqualTo("查询 [PHONE]");
+            assertThat(observedRerankQuery.get()).isEqualTo("查询 [PHONE]");
+            assertThat(observedRerankText.get()).isEqualTo("联系人 [PHONE]");
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void blocksUnsafeQuestionBeforeAnyRecallBranchRuns() {
+        var recallCalls = new AtomicInteger();
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var policy = RetrievalPolicy.defaults();
+            var service = new TrustedRetrievalService(
+                    (userId, at) -> Set.of(new PrincipalRef(PrincipalType.USER, userId)),
+                    new HybridRecallService(
+                            (query, filter, limit) -> { recallCalls.incrementAndGet(); return List.of(); },
+                            (query, filter, limit) -> { recallCalls.incrementAndGet(); return List.of(); },
+                            executor, policy),
+                    new RerankingService((query, candidates) -> List.of(), executor, policy),
+                    (userId, requestedBySpace, at) -> flatten(requestedBySpace),
+                    new EvidenceSelectionService(policy), at -> uuid(9091), policy,
+                    Clock.fixed(NOW, ZoneOffset.UTC), command -> null,
+                    new RegexSensitiveContentSanitizer(Set.of()));
+
+            assertThatThrownBy(() -> service.retrieve(new RetrievalQuery(
+                    REQUEST_ID, USER_ID, Set.of(SPACE_ID),
+                    "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----",
+                    Map.of(), 8)))
+                    .isInstanceOf(RetrievalOutboundPolicyException.class);
+            assertThat(recallCalls).hasValue(0);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
 
     @Test
     void groupsFinalAuthorizationByCandidateSpaceAndPreservesSpaceInEvidence() {
@@ -194,8 +265,9 @@ class TrustedRetrievalServiceTest {
             assertThat(observed.getFirst()).isEqualTo("principal");
             assertThat(observed.indexOf("rerank")).isGreaterThan(observed.indexOf("lexical"));
             assertThat(observed.indexOf("rerank")).isGreaterThan(observed.indexOf("vector"));
-            assertThat(observed.indexOf("authorize")).isGreaterThan(observed.indexOf("rerank"));
-            assertThat(observed.indexOf("id")).isGreaterThan(observed.indexOf("authorize"));
+            assertThat(observed.indexOf("authorize")).isGreaterThan(observed.indexOf("vector"));
+            assertThat(observed.indexOf("rerank")).isGreaterThan(observed.indexOf("authorize"));
+            assertThat(observed.indexOf("id")).isGreaterThan(observed.indexOf("rerank"));
         } finally {
             executor.shutdownNow();
         }
@@ -242,7 +314,7 @@ class TrustedRetrievalServiceTest {
     }
 
     @Test
-    void reauthorizesOnceAtTheSecondServerTimeAndFiltersDeniedVersions() {
+    void authorizesBeforeAndAfterRerankingAndFiltersDeniedVersions() {
         var candidates = List.of(
                 candidate(41, 141, RecallSource.LEXICAL, 1, "甲甲甲甲"),
                 candidate(42, 142, RecallSource.LEXICAL, 2, "乙乙乙乙"),
@@ -261,14 +333,16 @@ class TrustedRetrievalServiceTest {
 
             var result = harness.service.retrieve(query());
 
-            assertThat(harness.authorizationCalls).hasValue(1);
-            assertThat(harness.requested.get()).hasSize(5);
-            assertThat(harness.checkedAt.get()).isEqualTo(checked);
+            assertThat(harness.authorizationCalls).hasValue(2);
+            assertThat(harness.requested.get()).containsExactly(allowed);
+            assertThat(harness.checkedAt.get()).isEqualTo(completed);
             assertThat(result.evidence())
                     .extracting(evidence -> evidence.documentId())
                     .containsExactly(candidates.getFirst().documentId());
             assertThat(result.stats().reauthorizedCount()).isEqualTo(1);
             assertThat(harness.idCalls).hasValue(1);
+            assertThat(harness.rerankedDocumentIds.get())
+                    .containsExactly(candidates.getFirst().documentId());
         }
 
         try (var denied = new AuthorizationHarness(
@@ -277,10 +351,11 @@ class TrustedRetrievalServiceTest {
                 Clock.fixed(NOW, ZoneOffset.UTC))) {
             var empty = denied.service.retrieve(query());
 
-            assertThat(denied.authorizationCalls).hasValue(1);
+            assertThat(denied.authorizationCalls).hasValue(2);
             assertThat(empty.evidence()).isEmpty();
             assertThat(empty.stats().reauthorizedCount()).isZero();
             assertThat(denied.idCalls).hasValue(0);
+            assertThat(denied.rerankedDocumentIds.get()).isEmpty();
         }
     }
 
@@ -309,14 +384,10 @@ class TrustedRetrievalServiceTest {
                     executor,
                     policy);
             var reranking = new RerankingService(
-                    (query, values) -> {
-                        authority.changeAfterRecall(
-                                revoked, replaced, archived, membershipRemoved);
-                        return values.stream()
+                    (query, values) -> values.stream()
                                 .map(value -> new RerankScore(
                                         value.candidate().candidateId(), value.score()))
-                                .toList();
-                    },
+                                .toList(),
                     executor,
                     policy);
             var service = new TrustedRetrievalService(
@@ -325,7 +396,11 @@ class TrustedRetrievalServiceTest {
                             new PrincipalRef(PrincipalType.ROLE, roleId)),
                     recall,
                     reranking,
-                    authority::authorize,
+                    (userId, versionsBySpace, at) -> {
+                        authority.changeAfterRecall(
+                                revoked, replaced, archived, membershipRemoved);
+                        return authority.authorize(userId, versionsBySpace, at);
+                    },
                     new EvidenceSelectionService(policy),
                     at -> uuid(9400),
                     policy,
@@ -334,10 +409,10 @@ class TrustedRetrievalServiceTest {
 
             var result = service.retrieve(query());
 
-            assertThat(authority.authorizationCalls()).isEqualTo(1);
+            assertThat(authority.authorizationCalls()).isEqualTo(2);
             assertThat(authority.lastUserId()).isEqualTo(USER_ID);
             assertThat(authority.lastSpaceId()).isEqualTo(SPACE_ID);
-            assertThat(authority.lastCheckedAt()).isEqualTo(checked);
+            assertThat(authority.lastCheckedAt()).isEqualTo(completed);
             assertThat(result.evidence())
                     .extracting(evidence -> evidence.documentId())
                     .containsExactly(healthy.documentId());
@@ -518,8 +593,7 @@ class TrustedRetrievalServiceTest {
         assertThat(command.resourceType()).isEqualTo("RETRIEVAL");
         assertThat(command.resourceId()).isEqualTo(REQUEST_ID);
         assertThat(command.outcome()).isEqualTo(AuditOutcome.SUCCEEDED);
-        assertThat(command.metadata()).containsEntry(
-                "queryHash", "1c53ff8e9f430d8380c52e0e2744d90415412a95c2fec215b69a9d87ae8eaf6a");
+        assertThat(command.metadata().get("queryCodePoints")).matches("[1-9][0-9]*");
         assertThat(command.metadata()).containsEntry("reauthorizedCount", reauthorizedCount);
         assertThat(command.metadata()).containsEntry("selectedCount", selectedCount);
         assertThat(command.metadata()).containsEntry("degradationReasons", degradationReasons);
@@ -528,7 +602,7 @@ class TrustedRetrievalServiceTest {
 
     private static void assertBodyFreeMetadata(AuditCommand command) {
         assertThat(command.metadata().keySet()).containsExactlyInAnyOrder(
-                "queryHash",
+                "queryCodePoints",
                 "lexicalCount",
                 "vectorCount",
                 "fusedCount",
@@ -785,6 +859,8 @@ class TrustedRetrievalServiceTest {
         private final AtomicInteger authorizationCalls = new AtomicInteger();
         private final AtomicInteger idCalls = new AtomicInteger();
         private final AtomicReference<Set<DocumentVersionRef>> requested = new AtomicReference<>();
+        private final AtomicReference<List<UUID>> rerankedDocumentIds =
+                new AtomicReference<>(List.of());
         private final AtomicReference<Instant> checkedAt = new AtomicReference<>();
         private final List<AuditCommand> auditCommands = new ArrayList<>();
         private final TrustedRetrievalService service;
@@ -799,10 +875,15 @@ class TrustedRetrievalServiceTest {
                     executor,
                     RetrievalPolicy.defaults());
             var reranking = new RerankingService(
-                    (query, values) -> values.stream()
-                            .map(value -> new RerankScore(
-                                    value.candidate().candidateId(), value.score()))
-                            .toList(),
+                    (query, values) -> {
+                        rerankedDocumentIds.set(values.stream()
+                                .map(value -> value.candidate().documentId())
+                                .toList());
+                        return values.stream()
+                                .map(value -> new RerankScore(
+                                        value.candidate().candidateId(), value.score()))
+                                .toList();
+                    },
                     executor,
                     RetrievalPolicy.defaults());
             this.service = new TrustedRetrievalService(

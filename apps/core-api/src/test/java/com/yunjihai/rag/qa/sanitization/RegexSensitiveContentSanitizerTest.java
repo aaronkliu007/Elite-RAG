@@ -27,7 +27,7 @@ class RegexSensitiveContentSanitizerTest {
 
         var result = sanitizer.sanitize(bundle);
 
-        assertThat(result.blocked()).isFalse();
+        assertThat(result.blocked()).isTrue();
         assertThat(result.hitCounts()).containsKeys(
                 "PHONE", "NATIONAL_ID", "EMAIL", "BEARER_TOKEN", "API_KEY",
                 "CONNECTION_STRING", "BUSINESS_TERM");

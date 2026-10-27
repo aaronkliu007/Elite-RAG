@@ -19,6 +19,7 @@ class JdbcEvaluationRepositoryIntegrationTest {
     private static JdbcClient owner;
     private static JdbcEvaluationRepository repository;
     private static EvaluationDataset dataset;
+    private static EvaluationTraceRegistry traces;
 
     @BeforeAll static void start() throws Exception {
         POSTGRES.start();
@@ -32,7 +33,8 @@ class JdbcEvaluationRepositoryIntegrationTest {
         owner=JdbcClient.create(new DriverManagerDataSource(POSTGRES.getJdbcUrl(),POSTGRES.getUsername(),POSTGRES.getPassword()));
         var runtime=JdbcClient.create(new DriverManagerDataSource(POSTGRES.getJdbcUrl(),"rag_runtime_test","runtime_test_only"));
         dataset=dataset();
-        repository=new JdbcEvaluationRepository(runtime,new ObjectMapper().findAndRegisterModules(),Map.of(dataset.id(),dataset));
+        traces=new EvaluationTraceRegistry();
+        repository=new JdbcEvaluationRepository(runtime,new ObjectMapper().findAndRegisterModules(),Map.of(dataset.id(),dataset),traces);
     }
     @AfterAll static void stop() { POSTGRES.stop(); }
     @BeforeEach void clean() {
@@ -108,13 +110,19 @@ class JdbcEvaluationRepositoryIntegrationTest {
                     .param("digest","b".repeat(64)).param("locator","{\"headingPath\":[\"Fictional\"],\"nodeId\":\""+node+"\"}").update();
         }
 
+        var requestRef=new EvaluationCase.EvidenceRef(document,"fictional-node-10");
+        var responseRef=new EvaluationCase.EvidenceRef(document,"fictional-node-1");
+        traces.begin(request);
+        traces.recordRequest(request,List.of(requestRef));
+        traces.recordResponse(request,List.of(responseRef));
         var observation=repository.observe(request);
 
         assertThat(observation.evidenceIds()).containsExactlyInAnyOrderElementsOf(evidenceIds);
         assertThat(observation.retrievedTop10()).hasSize(10)
                 .doesNotContain(new EvaluationCase.EvidenceRef(document,"fictional-node-10"));
-        assertThat(observation.modelRequestTrace()).isEmpty();
-        assertThat(observation.responseTrace()).isEmpty();
+        assertThat(observation.modelRequestTrace()).containsExactly(requestRef);
+        assertThat(observation.responseTrace()).containsExactly(responseRef);
+        assertThat(traces.consume(request).modelRequest()).isEmpty();
     }
 
     private static EvaluationDataset dataset() {

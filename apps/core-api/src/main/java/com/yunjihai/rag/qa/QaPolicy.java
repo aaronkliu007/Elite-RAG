@@ -12,8 +12,7 @@ public record QaPolicy(
         int maxEvidenceCodePoints,
         int maxModelContextCodePoints,
         int maxModelOutputCodePoints,
-        Duration totalTimeout,
-        int transientRetryLimit) {
+        Duration totalTimeout) {
 
     public QaPolicy {
         if (maxQuestionCodePoints < 1 || maxQuestionCodePoints > 2_000) {
@@ -43,9 +42,6 @@ public record QaPolicy(
                 || totalTimeout.compareTo(Duration.ofSeconds(30)) > 0) {
             throw new IllegalArgumentException("total timeout is invalid");
         }
-        if (transientRetryLimit < 0 || transientRetryLimit > 1) {
-            throw new IllegalArgumentException("transient retry limit is invalid");
-        }
     }
 
     public static QaPolicy defaults() {
@@ -58,7 +54,6 @@ public record QaPolicy(
                 1_200,
                 12_000,
                 2_000,
-                Duration.ofSeconds(30),
-                1);
+                Duration.ofSeconds(30));
     }
 }

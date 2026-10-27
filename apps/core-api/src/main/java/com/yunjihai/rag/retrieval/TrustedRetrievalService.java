@@ -20,16 +20,16 @@ import com.yunjihai.rag.retrieval.search.HybridRecallService;
 import com.yunjihai.rag.retrieval.selection.EvidenceSelectionService;
 import com.yunjihai.rag.retrieval.selection.RerankingService;
 import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
+import com.yunjihai.rag.qa.evaluation.EvaluationCase;
+import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.EnumSet;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -49,6 +49,8 @@ public final class TrustedRetrievalService implements RetrievalService {
     private final RetrievalPolicy policy;
     private final Clock clock;
     private final AuditSink auditSink;
+    private final SensitiveContentSanitizer outboundSanitizer;
+    private final EvaluationTraceRegistry evaluationTraces;
 
     public TrustedRetrievalService(
             PrincipalResolverPort principalResolver,
@@ -60,6 +62,39 @@ public final class TrustedRetrievalService implements RetrievalService {
             RetrievalPolicy policy,
             Clock clock,
             AuditSink auditSink) {
+        this(principalResolver, recallService, rerankingService, authorization,
+                selectionService, evidenceIdFactory, policy, clock, auditSink,
+                new RegexSensitiveContentSanitizer(Set.of()), new EvaluationTraceRegistry());
+    }
+
+    public TrustedRetrievalService(
+            PrincipalResolverPort principalResolver,
+            HybridRecallService recallService,
+            RerankingService rerankingService,
+            RetrievalAuthorizationPort authorization,
+            EvidenceSelectionService selectionService,
+            EvidenceIdFactory evidenceIdFactory,
+            RetrievalPolicy policy,
+            Clock clock,
+            AuditSink auditSink,
+            SensitiveContentSanitizer outboundSanitizer) {
+        this(principalResolver, recallService, rerankingService, authorization,
+                selectionService, evidenceIdFactory, policy, clock, auditSink,
+                outboundSanitizer, new EvaluationTraceRegistry());
+    }
+
+    public TrustedRetrievalService(
+            PrincipalResolverPort principalResolver,
+            HybridRecallService recallService,
+            RerankingService rerankingService,
+            RetrievalAuthorizationPort authorization,
+            EvidenceSelectionService selectionService,
+            EvidenceIdFactory evidenceIdFactory,
+            RetrievalPolicy policy,
+            Clock clock,
+            AuditSink auditSink,
+            SensitiveContentSanitizer outboundSanitizer,
+            EvaluationTraceRegistry evaluationTraces) {
         this.principalResolver = Objects.requireNonNull(principalResolver);
         this.recallService = Objects.requireNonNull(recallService);
         this.rerankingService = Objects.requireNonNull(rerankingService);
@@ -69,6 +104,8 @@ public final class TrustedRetrievalService implements RetrievalService {
         this.policy = Objects.requireNonNull(policy);
         this.clock = Objects.requireNonNull(clock);
         this.auditSink = Objects.requireNonNull(auditSink);
+        this.outboundSanitizer = Objects.requireNonNull(outboundSanitizer);
+        this.evaluationTraces = Objects.requireNonNull(evaluationTraces);
     }
 
     @Override
@@ -120,23 +157,41 @@ public final class TrustedRetrievalService implements RetrievalService {
                 true,
                 context.startedAt(),
                 query.metadataFilter());
-        var recalled = recallService.recall(query.queryText(), filter);
+        var outboundQuery = outboundSanitizer.sanitizeText(query.queryText());
+        if (outboundQuery.blocked()) {
+            throw new RetrievalOutboundPolicyException();
+        }
+        var recalled = recallService.recall(outboundQuery.value(), filter);
         progress.lexicalCount = recalled.lexicalCount();
         progress.vectorCount = recalled.vectorCount();
         progress.fusedCount = recalled.candidates().size();
         progress.reasons.addAll(recalled.degradationReasons());
-        var reranked = rerankingService.rerank(query.queryText(), recalled.candidates());
-        progress.reasons.addAll(reranked.degradationReasons());
         Instant checkedAt = clock.instant();
-        var requestedVersionsBySpace = documentVersionsBySpace(query, reranked.candidates());
+        var requestedVersionsBySpace = documentVersionsBySpace(query, recalled.candidates());
         var allowedVersions = authorize(query, requestedVersionsBySpace, checkedAt);
-        var authorizedCandidates = reranked.candidates().stream()
+        var authorizedCandidates = recalled.candidates().stream()
                 .filter(candidate -> allowedVersions.contains(new DocumentVersionRef(
                         candidate.candidate().documentId(), candidate.candidate().versionId())))
                 .toList();
         progress.reauthorizedCount = authorizedCandidates.size();
+        var safeCandidates = sanitizeForReranking(authorizedCandidates);
+        evaluationTraces.recordRequest(query.requestId(), safeCandidates.stream()
+                .map(value -> new EvaluationCase.EvidenceRef(
+                        value.candidate().documentId(), value.candidate().nodeId()))
+                .toList());
+        var reranked = rerankingService.rerank(outboundQuery.value(), safeCandidates);
+        progress.reasons.addAll(reranked.degradationReasons());
+        var restored = restoreOriginalCandidates(reranked.candidates(), authorizedCandidates);
+        Instant recheckedAt = clock.instant();
+        var recheckedVersions = authorize(
+                query, documentVersionsBySpace(query, restored), recheckedAt);
+        var reauthorized = restored.stream()
+                .filter(candidate -> recheckedVersions.contains(new DocumentVersionRef(
+                        candidate.candidate().documentId(), candidate.candidate().versionId())))
+                .toList();
+        progress.reauthorizedCount = reauthorized.size();
         var selected = selectionService.select(
-                authorizedCandidates, query.requestedEvidenceCount());
+                reauthorized, query.requestedEvidenceCount());
         progress.selectedCount = selected.size();
         Instant completedAt = clock.instant();
         var evidence = toEvidence(selected, completedAt);
@@ -226,6 +281,36 @@ public final class TrustedRetrievalService implements RetrievalService {
         return List.copyOf(evidence);
     }
 
+    private List<ScoredCandidate> sanitizeForReranking(List<ScoredCandidate> candidates) {
+        var sanitized = new ArrayList<ScoredCandidate>(candidates.size());
+        for (var scored : candidates) {
+            var candidate = scored.candidate();
+            var title = outboundSanitizer.sanitizeText(candidate.title());
+            var text = outboundSanitizer.sanitizeText(candidate.text());
+            if (title.blocked() || text.blocked()) {
+                throw new RetrievalOutboundPolicyException();
+            }
+            var safeCandidate = new com.yunjihai.rag.retrieval.domain.Candidate(
+                    candidate.spaceId(), candidate.candidateId(), candidate.documentId(),
+                    candidate.versionId(), candidate.nodeId(), title.value(), text.value(),
+                    candidate.locator(), candidate.source(), candidate.sourceRank(),
+                    candidate.sourceScore());
+            sanitized.add(new ScoredCandidate(
+                    safeCandidate, scored.score(), scored.bestSourceRank(), scored.sources()));
+        }
+        return List.copyOf(sanitized);
+    }
+
+    private static List<ScoredCandidate> restoreOriginalCandidates(
+            List<ScoredCandidate> reranked,
+            List<ScoredCandidate> originals) {
+        var byId = new LinkedHashMap<UUID, com.yunjihai.rag.retrieval.domain.Candidate>();
+        originals.forEach(value -> byId.put(value.candidate().candidateId(), value.candidate()));
+        return reranked.stream().map(value -> new ScoredCandidate(
+                Objects.requireNonNull(byId.get(value.candidate().candidateId())),
+                value.score(), value.bestSourceRank(), value.sources())).toList();
+    }
+
     private static String truncate(String value, int maxCodePoints) {
         int codePoints = value.codePointCount(0, value.length());
         if (codePoints <= maxCodePoints) {
@@ -247,7 +332,8 @@ public final class TrustedRetrievalService implements RetrievalService {
                 .sorted()
                 .toList();
         var metadata = Map.ofEntries(
-                Map.entry("queryHash", sha256(query.queryText())),
+                Map.entry("queryCodePoints", Integer.toString(
+                        query.queryText().codePointCount(0, query.queryText().length()))),
                 Map.entry("lexicalCount", Integer.toString(stats.lexicalCount())),
                 Map.entry("vectorCount", Integer.toString(stats.vectorCount())),
                 Map.entry("fusedCount", Integer.toString(stats.fusedCount())),
@@ -262,16 +348,6 @@ public final class TrustedRetrievalService implements RetrievalService {
                 query.requestId(),
                 outcome,
                 metadata));
-    }
-
-    private static String sha256(String value) {
-        try {
-            var digest = MessageDigest.getInstance("SHA-256")
-                    .digest(value.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable");
-        }
     }
 
     private static final class Progress {

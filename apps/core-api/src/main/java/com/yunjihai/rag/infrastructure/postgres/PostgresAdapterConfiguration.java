@@ -67,6 +67,7 @@ import com.yunjihai.rag.qa.QaSourceAccessPort;
 import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.qa.evaluation.EvaluationDataset;
 import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
+import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -133,13 +134,13 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
-    EvaluationRepository evaluationRepository(JdbcClient jdbc) {
+    EvaluationRepository evaluationRepository(JdbcClient jdbc,EvaluationTraceRegistry traces) {
         var json=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
         try(var input=PostgresAdapterConfiguration.class.getResourceAsStream(
                 "/contracts/qa/golden-dataset-v1.json")) {
             if(input==null)throw new IllegalStateException("grounded QA golden dataset is missing");
             EvaluationDataset dataset=json.readValue(input,EvaluationDataset.class);
-            return new JdbcEvaluationRepository(jdbc,json,Map.of(dataset.id(),dataset));
+            return new JdbcEvaluationRepository(jdbc,json,Map.of(dataset.id(),dataset),traces);
         } catch(IOException failure) {
             throw new IllegalStateException("grounded QA golden dataset is invalid",failure);
         }

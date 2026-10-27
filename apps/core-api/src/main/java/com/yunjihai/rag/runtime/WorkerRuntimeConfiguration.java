@@ -34,6 +34,7 @@ import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.evaluation.EvaluationGate;
 import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
+import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
 import com.yunjihai.rag.qa.evaluation.GroundedQaEvaluationService;
 import com.yunjihai.rag.qa.evaluation.QaEvaluationUseCase;
 import com.yunjihai.rag.retrieval.RetrievalService;
@@ -101,10 +102,11 @@ public class WorkerRuntimeConfiguration {
             QaPolicy policy,
             QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock,
-            QaMetrics metrics) {
+            QaMetrics metrics,
+            EvaluationTraceRegistry evaluationTraces) {
         return new GroundedQaService(
                 authorizedSpaces,retrieval,persistence,audits,digests,sanitizer,chat,
-                citationVerifier,policy,evidenceAuthorization,clock,metrics);
+                citationVerifier,policy,evidenceAuthorization,clock,metrics,evaluationTraces);
     }
 
     @Bean
@@ -113,10 +115,14 @@ public class WorkerRuntimeConfiguration {
     }
 
     @Bean
+    EvaluationTraceRegistry evaluationTraceRegistry() { return new EvaluationTraceRegistry(); }
+
+    @Bean
     @ConditionalOnBean({GroundedQaService.class,EvaluationRepository.class})
     QaEvaluationUseCase qaEvaluationUseCase(
-            GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock) {
-        return new GroundedQaEvaluationService(qa,repository,gate,clock);
+            GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock,
+            EvaluationTraceRegistry traces) {
+        return new GroundedQaEvaluationService(qa,repository,gate,clock,traces);
     }
 
     @Bean

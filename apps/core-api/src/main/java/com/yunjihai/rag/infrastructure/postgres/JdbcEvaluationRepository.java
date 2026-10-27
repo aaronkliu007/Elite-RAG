@@ -13,10 +13,17 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
     private final JdbcClient jdbc;
     private final ObjectMapper json;
     private final Map<UUID,EvaluationDataset> datasets;
+    private final EvaluationTraceRegistry traces;
 
     public JdbcEvaluationRepository(JdbcClient jdbc,ObjectMapper json,Map<UUID,EvaluationDataset> datasets) {
+        this(jdbc,json,datasets,new EvaluationTraceRegistry());
+    }
+
+    public JdbcEvaluationRepository(JdbcClient jdbc,ObjectMapper json,Map<UUID,EvaluationDataset> datasets,
+                                    EvaluationTraceRegistry traces) {
         this.jdbc=Objects.requireNonNull(jdbc); this.json=Objects.requireNonNull(json);
         this.datasets=Map.copyOf(Objects.requireNonNull(datasets));
+        this.traces=Objects.requireNonNull(traces);
         if(this.datasets.values().stream().anyMatch(dataset->!dataset.active()))
             throw new IllegalArgumentException("evaluation catalog contains inactive dataset");
     }
@@ -40,9 +47,8 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
                 evidenceIds.add(row.evidenceId());
                 if(row.ordinal()<10)top10.add(new EvaluationCase.EvidenceRef(row.documentId(),row.nodeId()));
             });
-            // Raw model payloads are deliberately not persisted. Evaluation-only gateway capture may
-            // decorate this repository and populate these two trace sets without weakening production logging.
-            return new Observation(top10,evidenceIds,Set.of(),Set.of());
+            EvaluationTraceRegistry.Trace trace=traces.consume(requestId);
+            return new Observation(top10,evidenceIds,trace.modelRequest(),trace.modelResponse());
         } catch(DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }

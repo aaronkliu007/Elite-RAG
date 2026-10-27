@@ -40,7 +40,7 @@ final class QaTestHarness {
         };
         List<Evidence> evidence=java.util.stream.IntStream.range(0,8)
                 .mapToObj(index->new Evidence(id(10),id(100+index),id(200+index),id(300+index),
-                        "node-"+index,"制度","证据正文 "+index,0.9,
+                        "node-"+index,"制度",index==0?"制度已经生效。":"证据正文 "+index,0.9,
                         new MarkdownLocator(List.of("第一章"),"node-"+index)))
                 .toList();
         RetrievalService retrieval=query->new EvidencePack(query.requestId(),evidence,false,
@@ -63,8 +63,8 @@ final class QaTestHarness {
                     throw new IllegalStateException("test interrupted",interrupted);
                 }
             }
-            var claim=new GroundedClaim(id(800),"制度已经生效",
-                    List.of(new EvidenceSupport(id(100),"证据正文 0")));
+            var claim=new GroundedClaim(id(800),"制度已经生效。",
+                    List.of(new EvidenceSupport(id(100),"制度已经生效。")));
             return new ModelGeneration(new CandidateAnswer(CandidateAnswer.Decision.ANSWER,
                     "制度已经生效。",List.of(claim)),new ModelUsage(10,5,Duration.ofMillis(2)),"provider");
         };

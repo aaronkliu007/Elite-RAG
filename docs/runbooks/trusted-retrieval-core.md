@@ -55,7 +55,7 @@
 `RETRIEVE` 事件只允许以下元数据：
 
 - `requestId`、`spaceId`；
-- 规范化查询文本的 UTF-8 SHA-256 `queryHash`；
+- 查询文本的 Unicode 码点长度 `queryCodePoints`（不保存可离线碰撞的查询摘要）；
 - `lexicalCount`、`vectorCount`、`fusedCount`；
 - `reauthorizedCount`、`selectedCount`；
 - `degradationReasons`、`durationMs`。
@@ -80,7 +80,7 @@ mvn.cmd -q -pl apps/core-api verify
 ## 7. 故障定位
 
 1. 查看 EvidencePack 的 `degradationReasons` 和各阶段数量，先判断是单路降级、重排回退还是授权后归零；
-2. 使用 `requestId` 和 `queryHash` 关联审计事件，不在日志中搜索原始查询正文；
+2. 使用 `requestId` 关联审计事件，`queryCodePoints` 仅用于长度分布排查，不在日志中搜索原始查询正文；
 3. `lexicalCount=0` 或 `vectorCount=0` 且存在对应降级原因时，检查端口异常、结果契约和超时；
 4. `fusedCount>0` 且 `reauthorizedCount=0` 时，检查当前发布指针、归档状态、ACL、组织成员关系和有效期；
 5. `reauthorizedCount>selectedCount` 时，检查近重复阈值、单文档 3 条上限和请求数量；

@@ -44,7 +44,7 @@ public final class RegexSensitiveContentSanitizer implements SensitiveContentSan
                 })
                 .sorted()
                 .forEach(term -> configured.add(new Rule(
-                        "BUSINESS_TERM", Pattern.compile(Pattern.quote(term)), "[SENSITIVE_TERM]", false)));
+                        "BUSINESS_TERM", Pattern.compile(Pattern.quote(term)), "[SENSITIVE_TERM]", true)));
         this.rules = List.copyOf(configured);
     }
 

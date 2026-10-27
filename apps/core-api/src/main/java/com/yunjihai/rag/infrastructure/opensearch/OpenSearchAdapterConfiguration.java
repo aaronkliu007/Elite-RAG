@@ -23,6 +23,7 @@ import com.yunjihai.rag.retrieval.selection.RerankerPort;
 import com.yunjihai.rag.retrieval.selection.RerankingService;
 import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
 import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
+import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
 import org.opensearch.client.opensearch.OpenSearchClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -197,9 +198,11 @@ public class OpenSearchAdapterConfiguration {
             PrincipalResolverPort principals, HybridRecallService recall,
             RerankingService reranking, RetrievalAuthorizationPort authorization,
             EvidenceSelectionService selection, EvidenceIdFactory ids,
-            RetrievalPolicy policy, Clock clock, AuditSink audit) {
+            RetrievalPolicy policy, Clock clock, AuditSink audit,
+            SensitiveContentSanitizer sanitizer, EvaluationTraceRegistry evaluationTraces) {
         return new TrustedRetrievalService(
-                principals, recall, reranking, authorization, selection, ids, policy, clock, audit);
+                principals, recall, reranking, authorization, selection, ids, policy, clock, audit,
+                sanitizer, evaluationTraces);
     }
 
     @Bean(name = "opensearchRead")

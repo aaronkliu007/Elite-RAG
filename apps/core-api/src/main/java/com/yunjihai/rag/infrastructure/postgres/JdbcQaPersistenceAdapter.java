@@ -20,6 +20,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 
 public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
     private static final int CLAIMS_SCHEMA_VERSION = 1;
@@ -27,12 +29,14 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
     private final JdbcClient jdbc;
     private final TransactionTemplate transactions;
     private final ObjectMapper json;
+    private final JdbcProjectionDocumentLock documentLock;
 
     public JdbcQaPersistenceAdapter(
             JdbcClient jdbc, TransactionTemplate transactions, ObjectMapper json) {
         this.jdbc = Objects.requireNonNull(jdbc);
         this.transactions = Objects.requireNonNull(transactions);
         this.json = Objects.requireNonNull(json);
+        this.documentLock = new JdbcProjectionDocumentLock(jdbc);
     }
 
     @Override
@@ -173,6 +177,52 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }
+    }
+
+    @Override
+    public AuthorizedCompletion completeAuthorized(
+            UUID requestId, long expectedRevision, QaOutcome.Answered outcome, Instant at,
+            BooleanSupplier authorizationCheck) {
+        Objects.requireNonNull(requestId); Objects.requireNonNull(outcome);
+        Objects.requireNonNull(at); Objects.requireNonNull(authorizationCheck);
+        if (!requestId.equals(outcome.requestId())) throw new IllegalArgumentException("request id mismatch");
+        try {
+            return transactions.execute(transaction -> {
+                lockActorAndSpaces(requestId);
+                List<UUID> documents = jdbc.sql("""
+                        SELECT DISTINCT document_id FROM qa_evidence_snapshot
+                        WHERE request_id=:requestId ORDER BY document_id
+                        """).param("requestId", requestId).query(UUID.class).list();
+                return withDocumentLocks(documents, 0, () -> {
+                    if (!authorizationCheck.getAsBoolean()) {
+                        return new AuthorizedCompletion(false, Optional.empty());
+                    }
+                    return new AuthorizedCompletion(true,
+                            complete(requestId, expectedRevision, outcome, at));
+                });
+            });
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
+    private void lockActorAndSpaces(UUID requestId) {
+        jdbc.sql("""
+                SELECT actor.id FROM app_user actor JOIN qa_request request ON request.actor_id=actor.id
+                WHERE request.id=:requestId FOR SHARE OF actor
+                """).param("requestId", requestId).query(UUID.class).single();
+        jdbc.sql("""
+                SELECT space.id FROM knowledge_space space
+                WHERE space.id IN (SELECT DISTINCT snapshot.space_id FROM qa_evidence_snapshot snapshot
+                                   WHERE snapshot.request_id=:requestId)
+                ORDER BY space.id FOR SHARE
+                """).param("requestId", requestId).query(UUID.class).list();
+    }
+
+    private <T> T withDocumentLocks(List<UUID> documents, int index, Supplier<T> action) {
+        if (index == documents.size()) return action.get();
+        return documentLock.withDocumentLock(documents.get(index),
+                () -> withDocumentLocks(documents, index + 1, action));
     }
 
     @Override

@@ -15,6 +15,9 @@ import com.yunjihai.rag.qa.model.ModelUsage;
 import com.yunjihai.rag.qa.sanitization.SanitizationResult;
 import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import com.yunjihai.rag.retrieval.RetrievalService;
+import com.yunjihai.rag.retrieval.RetrievalOutboundPolicyException;
+import com.yunjihai.rag.qa.evaluation.EvaluationCase;
+import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
 import com.yunjihai.rag.retrieval.domain.Evidence;
 import com.yunjihai.rag.retrieval.domain.EvidencePack;
 import com.yunjihai.rag.retrieval.domain.RetrievalQuery;
@@ -50,6 +53,7 @@ public final class GroundedQaService {
     private final QaEvidenceAuthorizationPort evidenceAuthorization;
     private final Clock clock;
     private final QaMetrics metrics;
+    private final EvaluationTraceRegistry evaluationTraces;
 
     public GroundedQaService(
             AuthorizedSpaceScopePort authorizedSpaces,
@@ -64,7 +68,8 @@ public final class GroundedQaService {
             QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock) {
         this(authorizedSpaces, retrieval, persistence, audits, digests, sanitizer, chat,
-                citationVerifier, policy, evidenceAuthorization, clock, QaMetrics.noop());
+                citationVerifier, policy, evidenceAuthorization, clock, QaMetrics.noop(),
+                new EvaluationTraceRegistry());
     }
 
     public GroundedQaService(
@@ -80,6 +85,25 @@ public final class GroundedQaService {
             QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock,
             QaMetrics metrics) {
+        this(authorizedSpaces, retrieval, persistence, audits, digests, sanitizer, chat,
+                citationVerifier, policy, evidenceAuthorization, clock, metrics,
+                new EvaluationTraceRegistry());
+    }
+
+    public GroundedQaService(
+            AuthorizedSpaceScopePort authorizedSpaces,
+            RetrievalService retrieval,
+            QaPersistencePort persistence,
+            ModelCallAuditPort audits,
+            QuestionDigestPort digests,
+            SensitiveContentSanitizer sanitizer,
+            ChatCompletionPort chat,
+            CitationSupportVerifier citationVerifier,
+            QaPolicy policy,
+            QaEvidenceAuthorizationPort evidenceAuthorization,
+            Clock clock,
+            QaMetrics metrics,
+            EvaluationTraceRegistry evaluationTraces) {
         this.authorizedSpaces = Objects.requireNonNull(authorizedSpaces);
         this.retrieval = Objects.requireNonNull(retrieval);
         this.persistence = Objects.requireNonNull(persistence);
@@ -92,6 +116,7 @@ public final class GroundedQaService {
         this.evidenceAuthorization = Objects.requireNonNull(evidenceAuthorization);
         this.clock = Objects.requireNonNull(clock);
         this.metrics = Objects.requireNonNull(metrics);
+        this.evaluationTraces = Objects.requireNonNull(evaluationTraces);
     }
 
     public QaOutcome ask(AskQuestionCommand command) {
@@ -152,6 +177,9 @@ public final class GroundedQaService {
             pack = retrieval.retrieve(new RetrievalQuery(
                     command.requestId(), command.actorId(), spaces, question.value(), Map.of(),
                     policy.requestedEvidenceCount()));
+        } catch (RetrievalOutboundPolicyException unsafeOutbound) {
+            return complete(state, command.actorId(), new QaOutcome.Refused(
+                    command.requestId(), RefusalReason.UNSAFE_TO_SEND, false));
         } catch (RuntimeException retrievalFailure) {
             return complete(state, command.actorId(), new QaOutcome.Failed(
                     command.requestId(), "RETRIEVAL_FAILED"));
@@ -250,6 +278,16 @@ public final class GroundedQaService {
                 return complete(state, command.actorId(), new QaOutcome.Refused(
                         command.requestId(), RefusalReason.INVALID_MODEL_OUTPUT, pack.degraded()));
             }
+            var evidenceById = sanitized.evidence().evidence().stream()
+                    .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                            com.yunjihai.rag.qa.domain.QaEvidence::evidenceId,
+                            java.util.function.Function.identity()));
+            evaluationTraces.recordResponse(command.requestId(), candidate.claims().stream()
+                    .flatMap(claim -> claim.supports().stream())
+                    .map(support -> evidenceById.get(support.evidenceId()))
+                    .filter(Objects::nonNull)
+                    .map(item -> new EvaluationCase.EvidenceRef(item.documentId(), item.nodeId()))
+                    .toList());
 
             Optional<QaPersistencePort.RequestState> verifying = persistence.transition(
                     command.requestId(), state.revision(), QaStatus.VERIFYING, clock.instant());
@@ -259,23 +297,28 @@ public final class GroundedQaService {
                 return complete(state, command.actorId(), new QaOutcome.Refused(
                         command.requestId(), RefusalReason.UNSUPPORTED_CLAIM, pack.degraded()));
             }
-            try {
-                if (!evidenceAuthorization.allAuthorized(
-                        command.requestId(), command.actorId(), clock.instant())) {
-                    return complete(state, command.actorId(), new QaOutcome.Refused(
-                            command.requestId(), RefusalReason.NO_AUTHORIZED_SPACE, pack.degraded()));
-                }
-            } catch (RuntimeException authorizationFailure) {
-                return complete(state, command.actorId(), new QaOutcome.Failed(
-                        command.requestId(), "FINAL_AUTHORIZATION_FAILED", pack.degraded()));
-            }
             if (timedOut(deadline)) {
                 return complete(state, command.actorId(), new QaOutcome.Failed(
                         command.requestId(), "QA_TIMEOUT", pack.degraded()));
             }
-            return complete(state, command.actorId(), new QaOutcome.Answered(
+            var answered = new QaOutcome.Answered(
                     command.requestId(), candidate.answer(), candidate.claims().stream()
-                            .map(CitationClaim::from).toList(), pack.degraded()));
+                            .map(CitationClaim::from).toList(), pack.degraded());
+            try {
+                var completed = persistence.completeAuthorized(
+                        state.requestId(), state.revision(), answered, clock.instant(),
+                        () -> evidenceAuthorization.allAuthorized(
+                                command.requestId(), command.actorId(), clock.instant()));
+                if (!completed.authorized()) {
+                    return complete(state, command.actorId(), new QaOutcome.Refused(
+                            command.requestId(), RefusalReason.NO_AUTHORIZED_SPACE, pack.degraded()));
+                }
+                if (completed.state().isPresent()) return answered;
+                return stale(command);
+            } catch (RuntimeException authorizationFailure) {
+                return complete(state, command.actorId(), new QaOutcome.Failed(
+                        command.requestId(), "FINAL_AUTHORIZATION_FAILED", pack.degraded()));
+            }
         } finally {
             safeMetric(command.requestId(), () -> metrics.recordStage(
                     QaMetrics.Stage.VERIFICATION, elapsed(verificationStarted)));
@@ -295,23 +338,16 @@ public final class GroundedQaService {
     }
 
     private GenerationAttempt generate(GroundedAnswerPrompt prompt, UUID requestId) {
-        int retries = 0;
-        while (true) {
-            try {
-                return GenerationAttempt.success(chat.generate(prompt), retries);
-            } catch (ModelGatewayException failure) {
-                safeMetric(requestId, () -> metrics.recordModelError(failure.kind()));
-                if (isTransient(failure.kind()) && retries < policy.transientRetryLimit()) {
-                    retries++;
-                    continue;
-                }
-                return GenerationAttempt.failure(failure, retries);
-            } catch (RuntimeException invalidResponse) {
-                safeMetric(requestId, () -> metrics.recordModelError(
-                        ModelGatewayException.Kind.INVALID_RESPONSE));
-                return GenerationAttempt.failure(
-                        new ModelGatewayException(ModelGatewayException.Kind.INVALID_RESPONSE), retries);
-            }
+        try {
+            return GenerationAttempt.success(chat.generate(prompt), 0);
+        } catch (ModelGatewayException failure) {
+            safeMetric(requestId, () -> metrics.recordModelError(failure.kind()));
+            return GenerationAttempt.failure(failure, 0);
+        } catch (RuntimeException invalidResponse) {
+            safeMetric(requestId, () -> metrics.recordModelError(
+                    ModelGatewayException.Kind.INVALID_RESPONSE));
+            return GenerationAttempt.failure(
+                    new ModelGatewayException(ModelGatewayException.Kind.INVALID_RESPONSE), 0);
         }
     }
 
@@ -373,12 +409,6 @@ public final class GroundedQaService {
     private QaOutcome stale(AskQuestionCommand command) {
         return persistence.find(command.requestId(), command.actorId())
                 .orElseGet(() -> new QaOutcome.Failed(command.requestId(), "STALE_QA_RESULT"));
-    }
-
-    private static boolean isTransient(ModelGatewayException.Kind kind) {
-        return kind == ModelGatewayException.Kind.RATE_LIMITED
-                || kind == ModelGatewayException.Kind.TIMEOUT
-                || kind == ModelGatewayException.Kind.UNAVAILABLE;
     }
 
     private static boolean timedOut(long deadline) {

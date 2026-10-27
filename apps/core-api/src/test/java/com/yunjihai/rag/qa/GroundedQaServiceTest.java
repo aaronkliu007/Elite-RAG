@@ -130,7 +130,7 @@ class GroundedQaServiceTest {
     }
 
     @Test
-    void retriesOneTransientModelFailureWithTheSameSanitizedPrompt() {
+    void delegatesTheSingleRetryBudgetToTheHttpGateway() {
         var harness = new Harness();
         harness.transientFailures = 1;
         var metrics = new RecordingQaMetrics();
@@ -138,11 +138,11 @@ class GroundedQaServiceTest {
 
         QaOutcome outcome = harness.service().ask(command("问题"));
 
-        assertThat(outcome).isInstanceOf(QaOutcome.Answered.class);
-        assertThat(harness.modelCalls).hasValue(2);
+        assertThat(outcome).isEqualTo(new QaOutcome.Failed(id(1), "MODEL_TIMEOUT", false));
+        assertThat(harness.modelCalls).hasValue(1);
         assertThat(harness.audits).singleElement()
                 .extracting(ModelCallAuditPort.ModelCallAudit::retryCount)
-                .isEqualTo(1);
+                .isEqualTo(0);
         assertThat(metrics.modelErrors).containsExactly(ModelGatewayException.Kind.TIMEOUT);
     }
 
@@ -237,9 +237,9 @@ class GroundedQaServiceTest {
 
     private static CandidateAnswer answer(UUID evidenceId, String quote) {
         return new CandidateAnswer(
-                CandidateAnswer.Decision.ANSWER, "制度已经生效。",
+                CandidateAnswer.Decision.ANSWER, quote,
                 List.of(new GroundedClaim(
-                        id(800), "制度已经生效",
+                        id(800), quote,
                         List.of(new EvidenceSupport(evidenceId, quote)))));
     }
 

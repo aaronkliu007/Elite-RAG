@@ -275,7 +275,7 @@ git commit -m "feat: add degradable reranking and diverse selection"
 
 - [ ] **步骤 7：编写失败的审计脱敏测试**
 
-健康、空结果和降级路径写 `RETRIEVE/SUCCEEDED`；双召回失败和授权失败写 `RETRIEVE/FAILED`。先扩展 `AuditService` 白名单并测试只新增 `requestId`、`queryHash`、`lexicalCount`、`vectorCount`、`fusedCount`、`reauthorizedCount`、`selectedCount`、`degradationReasons` 和 `durationMs`；沿用已有 `spaceId`。`queryHash` 固定为规范化查询文本的 UTF-8 SHA-256 小写十六进制。断言审计不含 query、text、content、candidate、evidence、异常正文或主体列表。
+健康、空结果和降级路径写 `RETRIEVE/SUCCEEDED`；双召回失败和授权失败写 `RETRIEVE/FAILED`。`AuditService` 白名单只允许 `requestId`、`queryCodePoints`、`lexicalCount`、`vectorCount`、`fusedCount`、`reauthorizedCount`、`selectedCount`、`degradationReasons` 和 `durationMs`；沿用已有 `spaceId`。`queryCodePoints` 只记录查询长度，避免低熵原始查询摘要被离线碰撞。断言审计不含 query、text、content、candidate、evidence、异常正文或主体列表。
 
 - [ ] **步骤 8：实现审计并保证审计失败不产生未审计成功结果**
 

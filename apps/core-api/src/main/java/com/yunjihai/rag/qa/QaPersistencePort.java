@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 
 public interface QaPersistencePort {
     record RequestState(UUID requestId, UUID actorId, QaStatus status, long revision, boolean degraded) {
@@ -28,6 +29,23 @@ public interface QaPersistencePort {
 
     Optional<RequestState> complete(
             UUID requestId, long expectedRevision, QaOutcome outcome, Instant at);
+
+    default AuthorizedCompletion completeAuthorized(
+            UUID requestId, long expectedRevision, QaOutcome.Answered outcome, Instant at,
+            BooleanSupplier authorizationCheck) {
+        Objects.requireNonNull(authorizationCheck, "authorizationCheck must not be null");
+        if (!authorizationCheck.getAsBoolean()) return new AuthorizedCompletion(false, Optional.empty());
+        return new AuthorizedCompletion(true, complete(requestId, expectedRevision, outcome, at));
+    }
+
+    record AuthorizedCompletion(boolean authorized, Optional<RequestState> state) {
+        public AuthorizedCompletion {
+            state = Objects.requireNonNull(state, "state must not be null");
+            if (!authorized && state.isPresent()) {
+                throw new IllegalArgumentException("unauthorized completion cannot contain state");
+            }
+        }
+    }
 
     Optional<QaOutcome> find(UUID requestId, UUID actorId);
 

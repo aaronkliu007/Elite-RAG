@@ -23,7 +23,7 @@ class QaControllerTest {
         assertThat(answer.degraded()).isFalse();
         assertThat(answer.completedAt()).isEqualTo(NOW);
         assertThat(answer.citations()).singleElement().satisfies(citation->{
-            assertThat(citation.text()).isEqualTo("制度已经生效");
+            assertThat(citation.text()).isEqualTo("制度已经生效。");
             assertThat(citation.evidenceIds()).containsExactly(id(100));
         });
         assertThat(new ObjectMapper().writeValueAsString(answer))

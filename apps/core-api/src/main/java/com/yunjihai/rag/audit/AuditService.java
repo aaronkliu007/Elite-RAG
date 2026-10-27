@@ -23,7 +23,7 @@ public class AuditService implements AuditSink {
             "targetPrincipalId",
             "source",
             "requestId",
-            "queryHash",
+            "queryCodePoints",
             "lexicalCount",
             "vectorCount",
             "fusedCount",

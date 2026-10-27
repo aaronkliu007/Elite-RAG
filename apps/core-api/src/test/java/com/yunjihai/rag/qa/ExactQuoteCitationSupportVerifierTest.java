@@ -33,12 +33,38 @@ class ExactQuoteCitationSupportVerifierTest {
         assertThat(verifier.isSupported(answer(id(1), "制度从明日起生效"), bundle)).isFalse();
     }
 
+    @Test
+    void rejectsClaimThatIsNotAnExactExtractFromItsQuotedEvidence() {
+        var verifier = new ExactQuoteCitationSupportVerifier();
+        var bundle = bundle(id(1), "制度自今日起生效");
+        var answer = new CandidateAnswer(
+                CandidateAnswer.Decision.ANSWER,
+                "制度自明日起生效",
+                List.of(new GroundedClaim(id(10), "制度自明日起生效",
+                        List.of(new EvidenceSupport(id(1), "制度自今日起生效")))));
+
+        assertThat(verifier.isSupported(answer, bundle)).isFalse();
+    }
+
+    @Test
+    void rejectsAnswerTextContainingMaterialOutsideTheVerifiedClaims() {
+        var verifier = new ExactQuoteCitationSupportVerifier();
+        var bundle = bundle(id(1), "制度自今日起生效");
+        var answer = new CandidateAnswer(
+                CandidateAnswer.Decision.ANSWER,
+                "制度自今日起生效，且适用于所有子公司。",
+                List.of(new GroundedClaim(id(10), "制度自今日起生效",
+                        List.of(new EvidenceSupport(id(1), "制度自今日起生效")))));
+
+        assertThat(verifier.isSupported(answer, bundle)).isFalse();
+    }
+
     private static CandidateAnswer answer(UUID evidenceId, String quote) {
         return new CandidateAnswer(
                 CandidateAnswer.Decision.ANSWER,
-                "根据证据，制度已生效。",
+                quote,
                 List.of(new GroundedClaim(
-                        id(10), "制度已生效", List.of(new EvidenceSupport(evidenceId, quote)))));
+                        id(10), quote, List.of(new EvidenceSupport(evidenceId, quote)))));
     }
 
     private static EvidenceBundle bundle(UUID evidenceId, String excerpt) {

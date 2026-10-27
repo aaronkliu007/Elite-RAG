@@ -23,26 +23,21 @@ class QaPolicyTest {
         assertThat(policy.maxModelContextCodePoints()).isEqualTo(12_000);
         assertThat(policy.maxModelOutputCodePoints()).isEqualTo(2_000);
         assertThat(policy.totalTimeout()).isEqualTo(Duration.ofSeconds(30));
-        assertThat(policy.transientRetryLimit()).isEqualTo(1);
     }
 
     @Test
     void rejects_inconsistent_or_unbounded_policy() {
         assertThatThrownBy(() -> new QaPolicy(
                 2_000, 100, 7, 8, 15, 1_200, 12_000, 2_000,
-                Duration.ofSeconds(30), 1))
+                Duration.ofSeconds(30)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new QaPolicy(
                 2_000, 101, 10, 8, 15, 1_200, 12_000, 2_000,
-                Duration.ofSeconds(30), 1))
+                Duration.ofSeconds(30)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new QaPolicy(
                 2_000, 100, 10, 8, 15, 1_200, 12_000, 2_000,
-                Duration.ZERO, 1))
-                .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new QaPolicy(
-                2_000, 100, 10, 8, 15, 1_200, 12_000, 2_000,
-                Duration.ofSeconds(30), 2))
+                Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

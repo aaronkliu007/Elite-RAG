@@ -414,10 +414,10 @@ final class GroundedQaAcceptanceEnvironment implements AutoCloseable {
                 String quote = evidence.path("excerpt").asText();
                 String content = JSON.createObjectNode()
                         .put("decision", "ANSWER")
-                        .put("answer", "依据授权证据执行。")
+                        .put("answer", quote)
                         .set("claims", JSON.createArrayNode().add(JSON.createObjectNode()
                                 .put("claimId", UUID.randomUUID().toString())
-                                .put("text", "依据授权证据执行")
+                                .put("text", quote)
                                 .set("supports", JSON.createArrayNode().add(JSON.createObjectNode()
                                         .put("evidenceId", evidenceId).put("quote", quote)))))
                         .toString();

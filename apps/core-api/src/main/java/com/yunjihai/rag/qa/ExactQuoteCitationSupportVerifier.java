@@ -17,10 +17,23 @@ public final class ExactQuoteCitationSupportVerifier implements CitationSupportV
         }
         Map<java.util.UUID, QaEvidence> known = evidence.evidence().stream()
                 .collect(Collectors.toUnmodifiableMap(QaEvidence::evidenceId, Function.identity()));
-        return answer.claims().stream().allMatch(claim -> claim.supports().stream().allMatch(support -> {
-            QaEvidence source = known.get(support.evidenceId());
-            return source != null && normalize(source.excerpt()).contains(normalize(support.quote()));
-        }));
+        boolean claimsSupported = answer.claims().stream().allMatch(claim -> {
+            String normalizedClaim = normalize(claim.text());
+            boolean claimFoundInQuote = claim.supports().stream()
+                    .map(support -> normalize(support.quote()))
+                    .anyMatch(quote -> quote.contains(normalizedClaim));
+            if (!claimFoundInQuote) return false;
+            return claim.supports().stream().allMatch(support -> {
+                QaEvidence source = known.get(support.evidenceId());
+                return source != null
+                        && normalize(source.excerpt()).contains(normalize(support.quote()));
+            });
+        });
+        if (!claimsSupported) return false;
+        String expectedAnswer = answer.claims().stream()
+                .map(claim -> claim.text())
+                .collect(Collectors.joining("\n"));
+        return normalize(answer.answer()).equals(normalize(expectedAnswer));
     }
 
     private static String normalize(String value) {

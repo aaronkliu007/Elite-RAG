@@ -32,7 +32,7 @@ class GroundedQaModelGatewayIntegrationTest {
         assertThat(response.status()).isEqualTo(QaStatus.FAILED);
         assertThat(response.answer()).isNull();
         assertThat(response.citations()).isEmpty();
-        assertThat(environment.gateway.chatCalls() - chatCallsBefore).isEqualTo(4);
+        assertThat(environment.gateway.chatCalls() - chatCallsBefore).isEqualTo(2);
     }
 
     @Test
@@ -46,7 +46,7 @@ class GroundedQaModelGatewayIntegrationTest {
         assertThat(response.status()).isEqualTo(QaStatus.FAILED);
         assertThat(response.answer()).isNull();
         assertThat(response.citations()).isEmpty();
-        assertThat(environment.gateway.chatCalls() - chatCallsBefore).isEqualTo(4);
+        assertThat(environment.gateway.chatCalls() - chatCallsBefore).isEqualTo(2);
     }
 
     @Test

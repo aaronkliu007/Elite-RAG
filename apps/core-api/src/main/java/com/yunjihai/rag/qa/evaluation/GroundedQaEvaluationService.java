@@ -13,16 +13,30 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
     private final EvaluationRepository repository;
     private final EvaluationGate gate;
     private final Clock clock;
+    private final EvaluationTraceRegistry traces;
 
     public GroundedQaEvaluationService(
             GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock) {
-        this(qa::ask,repository,gate,clock);
+        this(qa::ask,repository,gate,clock,new EvaluationTraceRegistry());
+    }
+
+    public GroundedQaEvaluationService(
+            GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock,
+            EvaluationTraceRegistry traces) {
+        this(qa::ask,repository,gate,clock,traces);
     }
 
     GroundedQaEvaluationService(
             QaExecution qa,EvaluationRepository repository,EvaluationGate gate,Clock clock) {
+        this(qa,repository,gate,clock,new EvaluationTraceRegistry());
+    }
+
+    GroundedQaEvaluationService(
+            QaExecution qa,EvaluationRepository repository,EvaluationGate gate,Clock clock,
+            EvaluationTraceRegistry traces) {
         this.qa=Objects.requireNonNull(qa); this.repository=Objects.requireNonNull(repository);
         this.gate=Objects.requireNonNull(gate); this.clock=Objects.requireNonNull(clock);
+        this.traces=Objects.requireNonNull(traces);
     }
 
     @Override
@@ -50,8 +64,10 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
 
     private void evaluate(EvaluationCase item,Accumulator total) {
         UUID requestId=UuidV7.generate(clock.instant());
+        traces.begin(requestId);
         QaOutcome outcome=qa.ask(new AskQuestionCommand(requestId,item.evaluationActorId(),item.question()));
         EvaluationRepository.Observation observation=repository.observe(requestId);
+        traces.consume(requestId);
         total.expected+=item.expectedEvidence().size();
         total.retrieved+=item.expectedEvidence().stream().filter(observation.retrievedTop10()::contains).count();
         if(item.shouldRefuse()) {
@@ -64,7 +80,10 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
             total.claims+=Math.max(1,claims);
             total.citations+=Math.max(1,citations);
             if(outcome instanceof QaOutcome.Answered answered) {
-                total.supportedClaims+=answered.claims().size();
+                total.supportedClaims+=answered.claims().stream()
+                        .filter(claim->!claim.text().isBlank()&&!claim.evidenceIds().isEmpty()
+                                &&observation.evidenceIds().containsAll(claim.evidenceIds()))
+                        .count();
                 total.validCitations+=answered.claims().stream().flatMap(claim->claim.evidenceIds().stream())
                         .filter(observation.evidenceIds()::contains).count();
             }

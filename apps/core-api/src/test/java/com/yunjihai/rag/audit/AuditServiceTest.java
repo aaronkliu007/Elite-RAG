@@ -72,7 +72,7 @@ class AuditServiceTest {
         var metadata = Map.ofEntries(
                 Map.entry("requestId", RESOURCE_ID.toString()),
                 Map.entry("spaceId", RESOURCE_ID.toString()),
-                Map.entry("queryHash", "a".repeat(64)),
+                Map.entry("queryCodePoints", "128"),
                 Map.entry("lexicalCount", "10"),
                 Map.entry("vectorCount", "9"),
                 Map.entry("fusedCount", "12"),
