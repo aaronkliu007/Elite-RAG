@@ -217,3 +217,104 @@ test('登录用户可从导航执行降级检索并跳转到精确来源', async
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1366)
   await page.screenshot({ path: test.info().outputPath('search-degraded-1366.png'), fullPage: true })
 })
+
+test('知识问答展示降级回答、引用，并在再次鉴权后打开来源', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 900 })
+  const idempotencyKeys: string[] = []
+  await page.route(/\/api\/qa\/questions$/, async (route) => {
+    const body = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>
+    expect(Object.keys(body)).toEqual(['question'])
+    idempotencyKeys.push(route.request().headers()['idempotency-key'] ?? '')
+    await route.fulfill({ json: {
+      requestId: 'qa-request-1', status: 'ANSWERED',
+      answer: '交付评审需要方案、风险清单和验收口径。', refusal: null, degraded: true,
+      citations: [{
+        claimId: 'claim-1', text: '交付评审需要准备方案、风险清单和验收口径。',
+        evidenceIds: ['evidence-1'],
+      }],
+      completedAt: '2026-10-27T06:00:00Z',
+    } })
+  })
+  await page.route(/\/api\/qa\/questions\/qa-request-1\/sources\/evidence-1$/, (route) => route.fulfill({ json: {
+    documentId: 'document-1', displayName: '交付评审操作手册', versionId: 'version-1',
+    location: { type: 'PAGE', coordinates: { pageNumber: 18 } },
+    previewUrl: '/api/v1/documents/document-1/preview',
+    downloadUrl: '/api/v1/documents/document-1/download',
+  } }))
+  await page.context().route(/\/api\/v1\/documents\/document-1\/preview$/, (route) => route.fulfill({
+    contentType: 'text/plain', body: '经过再次鉴权的来源预览',
+  }))
+
+  await page.goto('/qa')
+  await expect(page.getByRole('navigation', { name: '主导航' }).getByText('知识问答')).toBeVisible()
+  await page.locator('textarea[name="question"]').fill('交付评审需要哪些材料？')
+  await page.getByRole('button', { name: '提交问题' }).click()
+
+  await expect(page.getByText('回答已降级')).toBeVisible()
+  await expect(page.getByText('交付评审需要方案、风险清单和验收口径。', { exact: true })).toBeVisible()
+  expect(idempotencyKeys).toHaveLength(1)
+  expect(idempotencyKeys[0]).not.toBe('')
+  const popupPromise = page.waitForEvent('popup')
+  await page.locator('[data-source-action]').click()
+  const popup = await popupPromise
+  await expect(page.locator('[data-source-title]')).toHaveText('交付评审操作手册')
+  await expect(popup).toHaveURL(/\/api\/v1\/documents\/document-1\/preview$/)
+  await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1366)
+  await page.screenshot({ path: test.info().outputPath('qa-answered-degraded-1366.png'), fullPage: true })
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await expect(page.getByRole('heading', { name: '知识问答' })).toBeVisible()
+  await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1600)
+  await page.screenshot({ path: test.info().outputPath('qa-answered-degraded-wide.png'), fullPage: true })
+})
+
+test('知识问答明确区分严格拒答与模型故障', async ({ page }) => {
+  let attempts = 0
+  await page.route(/\/api\/qa\/questions$/, (route) => {
+    attempts += 1
+    return route.fulfill({ json: attempts === 1 ? {
+      requestId: 'qa-refused', status: 'REFUSED', answer: null,
+      refusal: 'INSUFFICIENT_EVIDENCE', degraded: false, citations: [],
+      completedAt: '2026-10-27T06:00:00Z',
+    } : {
+      requestId: 'qa-failed', status: 'FAILED', answer: null,
+      refusal: null, degraded: false, citations: [], completedAt: '2026-10-27T06:01:00Z',
+    } })
+  })
+
+  await page.goto('/qa')
+  await page.locator('textarea[name="question"]').fill('没有依据的问题')
+  await page.getByRole('button', { name: '提交问题' }).click()
+  await expect(page.locator('[data-state="refused"]')).toContainText('依据不足，系统已严格拒答')
+
+  await page.locator('textarea[name="question"]').fill('触发模型故障的问题')
+  await page.getByRole('button', { name: '提交问题' }).click()
+  await expect(page.locator('[data-state="failed"]')).toContainText('系统处理失败')
+  await expect(page.locator('[data-state="failed"]')).not.toContainText('严格拒答')
+})
+
+test('来源撤权统一隐藏详情且移动宽度不产生横向滚动', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const longClaim = `https://knowledge.example.internal/${'unbroken-secure-identifier-'.repeat(18)}`
+  await page.route(/\/api\/qa\/questions$/, (route) => route.fulfill({ json: {
+    requestId: 'qa-revoked', status: 'ANSWERED', answer: longClaim,
+    refusal: null, degraded: false,
+    citations: [{ claimId: 'claim-revoked', text: longClaim, evidenceIds: ['evidence-revoked'] }],
+    completedAt: '2026-10-27T06:00:00Z',
+  } }))
+  await page.route(/\/api\/qa\/questions\/qa-revoked\/sources\/evidence-revoked$/, (route) => route.fulfill({
+    status: 404,
+    json: apiError('绝密客户项目已经被撤销', 'NOT_FOUND'),
+  }))
+
+  await page.goto('/qa')
+  await page.locator('textarea[name="question"]').fill('查看已撤权来源')
+  await page.getByRole('button', { name: '提交问题' }).click()
+  await page.locator('[data-source-action]').click()
+
+  await expect(page.getByText('来源不存在或你已无权访问')).toBeVisible()
+  await expect(page.getByText('绝密客户项目已经被撤销')).toHaveCount(0)
+  await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 390)
+  const columns = await page.locator('[data-citation-list]').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)
+  expect(columns).toBe(1)
+  await page.screenshot({ path: test.info().outputPath('qa-source-revoked-mobile.png'), fullPage: true })
+})

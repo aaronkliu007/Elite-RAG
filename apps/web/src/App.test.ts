@@ -45,6 +45,7 @@ describe('认证应用骨架', () => {
 
     expect(paths.slice(0, 2)).toEqual(['/api/v1/session/csrf', '/api/v1/session/me'])
     expect(wrapper.text()).toContain('爱丽丝')
+    expect(wrapper.find('router-link-stub[to="/qa"]').exists()).toBe(true)
     expect(wrapper.get('button[data-action="logout"]').text()).toBe('退出登录')
     expect(wrapper.text()).not.toContain('钉钉')
     wrapper.unmount()

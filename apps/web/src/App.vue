@@ -39,6 +39,9 @@ async function logout() {
         <RouterLink to="/search">
           全文检索
         </RouterLink>
+        <RouterLink to="/qa">
+          知识问答
+        </RouterLink>
       </nav>
       <div class="session-actions">
         <div class="session-chip">
