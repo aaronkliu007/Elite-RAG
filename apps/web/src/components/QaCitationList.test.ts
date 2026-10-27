@@ -58,6 +58,32 @@ describe('问答引用列表', () => {
     expect(open).not.toHaveBeenCalled()
   })
 
+  it('再次鉴权失败时清除先前获准显示的来源信息', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        documentId: 'document-1', displayName: '曾授权的来源标题', versionId: 'version-1',
+        location: { type: 'PAGE', coordinates: { pageNumber: 18 } },
+        previewUrl: '/api/v1/documents/document-1/preview',
+        downloadUrl: '/api/v1/documents/document-1/download',
+      }))
+      .mockResolvedValueOnce(json({ code: 'NOT_FOUND' }, 404))
+    vi.stubGlobal('fetch', fetchMock)
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const wrapper = mount(QaCitationList, { props: { requestId: 'request-1', citations } })
+
+    await wrapper.get('[data-source-action]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('曾授权的来源标题')
+
+    await wrapper.get('[data-source-action]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-source-title]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('曾授权的来源标题')
+    expect(wrapper.get('[role="alert"]').text()).toBe('来源不存在或你已无权访问')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(open).toHaveBeenCalledOnce()
+  })
+
   it('为引用网格和长连续标识符提供可收缩布局契约', () => {
     const wrapper = mount(QaCitationList, { props: {
       requestId: 'request-3',

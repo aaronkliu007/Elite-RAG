@@ -23,6 +23,7 @@ async function openSource(evidenceId: string) {
   if (loading[evidenceId]) return
   loading[evidenceId] = true
   errors[evidenceId] = ''
+  delete authorized[evidenceId]
   try {
     const source = await qaApi.getSource(props.requestId, evidenceId)
     authorized[evidenceId] = source
