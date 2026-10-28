@@ -47,9 +47,9 @@
 
 **Interfaces:** Implements `SectionVersionRepository` and `SectionGenerationCommitPort.commitIfCurrent`; transaction verifies confirmed requirement/outline and adopted baseline, inserts immutable draft and updates attempt atomically.
 
-- [ ] Write failing PostgreSQL tests for roundtrip, foreign solution/section, stale version, rollback and duplicate attempt checkpoint.
-- [ ] Run targeted tests; implement schema and adapters.
-- [ ] Run targeted tests and commit.
+- [x] Write failing PostgreSQL tests for roundtrip, foreign solution/section, stale version, rollback and duplicate attempt checkpoint.
+- [x] Run targeted tests; implement schema and adapters.
+- [x] Run full Java regression and commit.
 
 ### Task 3: Model, recovery and HTTP
 
@@ -58,7 +58,7 @@
 **Interfaces:** Start/get/retry/adopt endpoints under `/api/v1/solutions/{solutionId}/sections/...` with session auth and `Idempotency-Key`.
 
 - [ ] Write failing tests for denied access, stale versions, interrupted attempts, invalid model references and model outage.
-- [ ] Implement adapter and recovery with bounded lease/retry semantics; wire HTTP and audit.
+- [ ] Implement adapter and recovery with bounded lease/retry semantics; wire HTTP and audit. Wrap human adoption in an outer transaction that includes section insert and solution CAS; the JDBC repository rejects ADOPTED writes without this transaction.
 - [ ] Run Java regression and commit.
 
 ### Task 4: Vue closed loop and acceptance

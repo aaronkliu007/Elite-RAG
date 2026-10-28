@@ -25,7 +25,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PostgresMigrationIntegrationTest {
-    private static final int CURRENT_MIGRATION_COUNT = 10;
+    private static final int CURRENT_MIGRATION_COUNT = 11;
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
             .withDatabaseName("rag_test").withUsername("migration_owner").withPassword("migration_test_only");
     private static final String RUNTIME_USER = "rag_runtime_test";
@@ -65,7 +65,8 @@ class PostgresMigrationIntegrationTest {
                 "qa_evaluation_run", "qa_actor_rate_limit", "solution", "solution_requirement_version",
                 "solution_requirement_item", "solution_requirement_source", "solution_outline_version",
                 "solution_outline_node", "solution_outline_node_risk", "solution_adopted_section",
-                "solution_command_idempotency", "solution_generation_attempt"),
+                "solution_command_idempotency", "solution_generation_attempt", "solution_section_version",
+                "solution_section_claim", "solution_section_claim_evidence", "solution_section_claim_risk"),
                 values("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'"));
         assertColumnType("app_user", "id", "uuid");
         assertColumnType("app_user", "created_at", "timestamp with time zone");
