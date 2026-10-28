@@ -10,4 +10,8 @@ public interface RequirementVersionRepository {
     Optional<RequirementVersion> findById(UUID requirementVersionId);
 
     void insert(RequirementVersion requirementVersion);
+
+    default void insert(UUID solutionId, RequirementVersion requirementVersion) {
+        insert(requirementVersion);
+    }
 }

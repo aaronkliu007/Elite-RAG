@@ -99,6 +99,21 @@ import tools.jackson.databind.ObjectMapper;
 public class PostgresAdapterConfiguration {
 
     @Bean
+    JdbcSolutionRepository jdbcSolutionRepository(JdbcClient jdbc) {
+        return new JdbcSolutionRepository(jdbc);
+    }
+
+    @Bean
+    JdbcRequirementVersionRepository jdbcRequirementVersionRepository(JdbcClient jdbc) {
+        return new JdbcRequirementVersionRepository(jdbc);
+    }
+
+    @Bean
+    JdbcOutlineVersionRepository jdbcOutlineVersionRepository(JdbcClient jdbc) {
+        return new JdbcOutlineVersionRepository(jdbc);
+    }
+
+    @Bean
     Clock foundationClock() {
         return Clock.systemUTC();
     }

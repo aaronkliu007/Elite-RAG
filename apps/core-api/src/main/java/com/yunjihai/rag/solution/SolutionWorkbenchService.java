@@ -66,8 +66,8 @@ public final class SolutionWorkbenchService {
                 command.requestId(), command.at());
         var solution = Solution.create(
                 command.solutionId(), command.spaceId(), command.actorId(), command.name(), command.requirements(), command.at());
-        requirements.insert(command.requirements());
         solutions.insert(solution);
+        requirements.insert(command.solutionId(), command.requirements());
         record(command.actorId(), command.solutionId(), AuditAction.SOLUTION_CREATE,
                 command.requestId(), command.spaceId(), Map.of(
                         "requirementVersionId", command.requirements().id().toString(),
@@ -82,7 +82,7 @@ public final class SolutionWorkbenchService {
                 command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         var updated = current.reviseRequirements(command.requirements(), command.expectedRevision());
-        requirements.insert(command.requirements());
+        requirements.insert(command.solutionId(), command.requirements());
         solutions.replace(updated, command.expectedRevision());
         record(command.actorId(), command.solutionId(), AuditAction.EDIT,
                 command.requestId(), command.spaceId(), Map.of(
@@ -133,7 +133,7 @@ public final class SolutionWorkbenchService {
             throw new SolutionLifecycleException("MODEL_PROPOSAL_INVALID");
         }
         var updated = current.reviseRequirements(version, command.expectedRevision());
-        requirements.insert(version);
+        requirements.insert(command.solutionId(), version);
         solutions.replace(updated, command.expectedRevision());
         record(command.actorId(), command.solutionId(), AuditAction.EDIT,
                 command.requestId(), command.spaceId(), modelMetadata(
@@ -167,7 +167,7 @@ public final class SolutionWorkbenchService {
                 command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         var updated = current.reviseOutline(command.outline(), command.expectedRevision());
-        outlines.insert(command.outline());
+        outlines.insert(command.solutionId(), command.outline());
         solutions.replace(updated, command.expectedRevision());
         record(command.actorId(), command.solutionId(), AuditAction.EDIT,
                 command.requestId(), command.spaceId(), Map.of(
@@ -223,7 +223,7 @@ public final class SolutionWorkbenchService {
             throw new SolutionLifecycleException("MODEL_PROPOSAL_INVALID");
         }
         var updated = current.reviseOutline(version, command.expectedRevision());
-        outlines.insert(version);
+        outlines.insert(command.solutionId(), version);
         solutions.replace(updated, command.expectedRevision());
         record(command.actorId(), command.solutionId(), AuditAction.EDIT,
                 command.requestId(), command.spaceId(), modelMetadata(

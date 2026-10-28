@@ -10,4 +10,8 @@ public interface OutlineVersionRepository {
     Optional<OutlineVersion> findById(UUID outlineVersionId);
 
     void insert(OutlineVersion outlineVersion);
+
+    default void insert(UUID solutionId, OutlineVersion outlineVersion) {
+        insert(outlineVersion);
+    }
 }
