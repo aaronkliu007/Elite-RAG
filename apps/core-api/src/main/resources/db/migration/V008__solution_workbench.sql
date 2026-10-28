@@ -107,10 +107,14 @@ CREATE TABLE solution_command_idempotency (
     request_digest text NOT NULL CHECK (request_digest ~ '^[0-9a-f]{64}$'),
     result_solution_id uuid,
     result_revision bigint,
-    result_version_id uuid,
+    result_requirement_version_id uuid,
+    result_outline_version_id uuid,
+    result_phase text,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (actor_id, resource_id, action, client_key),
-    CHECK ((result_solution_id IS NULL) = (result_revision IS NULL))
+    CHECK ((result_solution_id IS NULL) = (result_revision IS NULL)),
+    CHECK ((result_solution_id IS NULL) = (result_requirement_version_id IS NULL)),
+    CHECK ((result_solution_id IS NULL) = (result_phase IS NULL))
 );
 
 DO $$

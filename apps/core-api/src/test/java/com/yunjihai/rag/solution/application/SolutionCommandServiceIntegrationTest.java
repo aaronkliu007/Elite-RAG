@@ -1,0 +1,194 @@
+package com.yunjihai.rag.solution.application;
+
+import com.yunjihai.rag.access.role.*;
+import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
+import com.yunjihai.rag.audit.*;
+import com.yunjihai.rag.knowledge.DocumentVersionRef;
+import com.yunjihai.rag.retrieval.domain.PageLocator;
+import com.yunjihai.rag.infrastructure.postgres.*;
+import com.yunjihai.rag.solution.SolutionWorkbenchService;
+import com.yunjihai.rag.solution.domain.*;
+import com.yunjihai.rag.solution.model.*;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.*;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.testcontainers.containers.PostgreSQLContainer;
+import java.sql.DriverManager;
+import java.time.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import static org.assertj.core.api.Assertions.*;
+
+class SolutionCommandServiceIntegrationTest {
+    private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
+            .withDatabaseName("rag_command_test").withUsername("migration_owner").withPassword("migration_test_only");
+    private static final Instant NOW = Instant.parse("2026-10-28T10:00:00Z");
+    private static JdbcClient jdbc;
+    private static TransactionTemplate tx;
+    private static JdbcSolutionRepository solutions;
+    private static JdbcRequirementVersionRepository requirements;
+    private static JdbcOutlineVersionRepository outlines;
+    private static JdbcSolutionCommandIdempotencyStore idempotency;
+
+    @BeforeAll static void start() throws Exception {
+        POSTGRES.start();
+        try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             var statement = connection.createStatement()) {
+            statement.execute("CREATE ROLE rag_runtime_test LOGIN PASSWORD 'runtime_test_only'");
+            statement.execute("ALTER DATABASE rag_command_test SET rag.runtime_role = 'rag_runtime_test'");
+        }
+        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
+                .locations("classpath:db/migration").load().migrate();
+        var dataSource = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "rag_runtime_test", "runtime_test_only");
+        jdbc = JdbcClient.create(dataSource);
+        tx = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        solutions = new JdbcSolutionRepository(jdbc);
+        requirements = new JdbcRequirementVersionRepository(jdbc);
+        outlines = new JdbcOutlineVersionRepository(jdbc);
+        idempotency = new JdbcSolutionCommandIdempotencyStore(jdbc);
+    }
+
+    @AfterAll static void stop() { POSTGRES.stop(); }
+
+    @Test void sameKeyReplaysCommittedReferenceAndDifferentPayloadConflicts() {
+        var actor = id(1); var space = id(2);
+        seed(actor, space);
+        var commands = service(AuditSink.noop());
+        var input = create(space, "方案甲");
+        var first = commands.create(actor, "client-key-1", input);
+        var replay = commands.create(actor, "client-key-1", input);
+        assertThat(replay).isEqualTo(first);
+        assertThat(jdbc.sql("SELECT count(*) FROM solution WHERE space_id = :space")
+                .param("space", space).query(Long.class).single()).isEqualTo(1);
+        assertThatThrownBy(() -> commands.create(actor, "client-key-1", create(space, "另一方案")))
+                .isInstanceOf(SolutionCommandConflictException.class);
+        assertThat(jdbc.sql("SELECT count(*) FROM solution_command_idempotency WHERE actor_id = :actor")
+                .param("actor", actor).query(Long.class).single()).isEqualTo(1);
+    }
+
+    @Test void auditFailureRollsBackSolutionAndKey() {
+        var actor = id(11); var space = id(12);
+        seed(actor, space);
+        var commands = service(command -> { throw new IllegalStateException("audit unavailable"); });
+        assertThatThrownBy(() -> commands.create(actor, "audit-failure", create(space, "回滚方案")))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(jdbc.sql("SELECT count(*) FROM solution WHERE space_id = :space")
+                .param("space", space).query(Long.class).single()).isZero();
+        assertThat(jdbc.sql("SELECT count(*) FROM solution_command_idempotency WHERE actor_id = :actor")
+                .param("actor", actor).query(Long.class).single()).isZero();
+    }
+
+    @Test void replayAfterSourceOrSpaceRevocationReturnsNoHistoricalBody() {
+        var actor = id(21); var space = id(22); var document = id(23); var version = id(24);
+        seed(actor, space);
+        jdbc.sql("INSERT INTO document (id, space_id, title) VALUES (:id, :space, '材料')")
+                .param("id", document).param("space", space).update();
+        jdbc.sql("""
+                INSERT INTO document_version (id, document_id, version_number, source_blob_id, created_by, status)
+                VALUES (:id, :document, 1, 'test-blob', :actor, 'PUBLISHED')
+                """).param("id", version).param("document", document).param("actor", actor).update();
+        jdbc.sql("UPDATE document SET current_published_version_id = :version WHERE id = :id")
+                .param("version", version).param("id", document).update();
+        var spaceGranted = new AtomicBoolean(true);
+        var sourceGranted = new AtomicBoolean(true);
+        var commands = service(AuditSink.noop(), (user, target, at) -> {
+            if (!spaceGranted.get()) throw new AccessDeniedAsNotFoundException();
+        }, (user, target, doc, ver, at) -> sourceGranted.get());
+        var input = new SolutionCommandService.CreateInput(space, "带来源方案",
+                List.of(new RequirementItem(id(25), RequirementCategory.GOAL, "目标内容",
+                        List.of(new RequirementSource(new DocumentVersionRef(document, version),
+                                new PageLocator(1, null))))), 0);
+        commands.create(actor, "revoked-replay", input);
+        sourceGranted.set(false);
+        assertThatThrownBy(() -> commands.create(actor, "revoked-replay", input))
+                .isInstanceOf(SolutionCommandConflictException.class)
+                .hasMessage("IDEMPOTENT_RESULT_UNAVAILABLE");
+        sourceGranted.set(true);
+        spaceGranted.set(false);
+        assertThatThrownBy(() -> commands.create(actor, "revoked-replay", input))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
+    }
+
+    @Test void selfConfirmationIsRejectedWithoutConsumingKey() {
+        var actor = id(31); var space = id(32);
+        seed(actor, space);
+        var commands = service(AuditSink.noop());
+        var created = commands.create(actor, "create-self", create(space, "双人复核"));
+        var confirm = new SolutionCommandService.ConfirmInput(created.solutionId(),
+                created.requirementVersionId(), created.revision());
+        assertThatThrownBy(() -> commands.confirmRequirements(actor, "confirm-self", confirm))
+                .isInstanceOf(SolutionLifecycleException.class)
+                .hasMessage("SELF_CONFIRMATION_FORBIDDEN");
+        assertThat(jdbc.sql("""
+                SELECT count(*) FROM solution_command_idempotency
+                WHERE actor_id = :actor AND client_key = 'confirm-self'
+                """).param("actor", actor).query(Long.class).single()).isZero();
+    }
+
+    @Test void concurrentSameKeyCreatesOneSolution() throws Exception {
+        var actor = id(41); var space = id(42);
+        seed(actor, space);
+        var commands = service(AuditSink.noop());
+        var input = create(space, "并发方案");
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var gate = new CountDownLatch(1);
+            Callable<SolutionCommandResult> task = () -> {
+                gate.await();
+                return commands.create(actor, "parallel-create", input);
+            };
+            var one = executor.submit(task);
+            var two = executor.submit(task);
+            gate.countDown();
+            assertThat(one.get(10, TimeUnit.SECONDS)).isEqualTo(two.get(10, TimeUnit.SECONDS));
+        }
+        assertThat(jdbc.sql("SELECT count(*) FROM solution WHERE space_id = :space")
+                .param("space", space).query(Long.class).single()).isEqualTo(1);
+    }
+
+    private static SolutionCommandService service(AuditSink audit) {
+        return service(audit, (actor, space, at) -> {},
+                (actor, space, document, version, at) -> true);
+    }
+
+    private static SolutionCommandService service(AuditSink audit,
+            com.yunjihai.rag.knowledge.KnowledgeSpaceReadAuthorization spaceRead,
+            SolutionDocumentSourcePort documentRead) {
+        var access = new SolutionAccessService(spaceRead, new Roles());
+        var sources = new SolutionSourceAccess(spaceRead, documentRead);
+        SolutionModelPort unavailable = new SolutionModelPort() {
+            @Override public <T> SolutionModelResponse<T> execute(SolutionModelRequest request, Class<T> type) {
+                throw new UnsupportedOperationException();
+            }
+        };
+        var workbench = new SolutionWorkbenchService(solutions, requirements, outlines, access, unavailable, audit);
+        return new SolutionCommandService(workbench, solutions, requirements, outlines, access, sources,
+                new SolutionReviewPolicy(false), idempotency, tx, Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    private static SolutionCommandService.CreateInput create(UUID space, String name) {
+        return new SolutionCommandService.CreateInput(space, name,
+                List.of(new RequirementItem(id(100), RequirementCategory.UNKNOWN, "待确认", List.of())), 0);
+    }
+
+    private static void seed(UUID actor, UUID space) {
+        jdbc.sql("INSERT INTO app_user (id, external_id, display_name) VALUES (:id, :external, '测试')")
+                .param("id", actor).param("external", actor.toString()).update();
+        jdbc.sql("INSERT INTO knowledge_space (id, name, created_by) VALUES (:id, '测试空间', :actor)")
+                .param("id", space).param("actor", actor).update();
+    }
+
+    private record Roles() implements RoleAssignmentStore {
+        @Override public boolean hasSystemRole(UUID userId, SystemRole role) { return false; }
+        @Override public boolean hasAnySystemRole(SystemRole role) { return false; }
+        @Override public Set<SpaceRole> activeSpaceRoles(UUID userId, UUID spaceId) { return Set.of(SpaceRole.SPACE_ADMIN); }
+        @Override public void grantSystemRole(UUID userId, SystemRole role, UUID actorId, Instant at) { throw new UnsupportedOperationException(); }
+        @Override public void grantSpaceRole(UUID spaceId, UUID userId, SpaceRole role, UUID actorId, Instant at) { throw new UnsupportedOperationException(); }
+        @Override public void revokeSpaceRole(UUID spaceId, UUID userId, SpaceRole role, UUID actorId, Instant at) { throw new UnsupportedOperationException(); }
+    }
+
+    private static UUID id(int suffix) { return UUID.fromString("00000000-0000-7000-8000-%012d".formatted(suffix)); }
+}

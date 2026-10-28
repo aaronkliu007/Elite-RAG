@@ -69,6 +69,11 @@ import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.solution.application.SolutionAccessService;
 import com.yunjihai.rag.solution.application.SolutionSourceAccess;
 import com.yunjihai.rag.solution.application.SolutionReviewPolicy;
+import com.yunjihai.rag.solution.application.SolutionCommandService;
+import com.yunjihai.rag.solution.SolutionWorkbenchService;
+import com.yunjihai.rag.solution.model.SolutionModelPort;
+import com.yunjihai.rag.solution.model.SolutionModelRequest;
+import com.yunjihai.rag.solution.model.SolutionModelResponse;
 import com.yunjihai.rag.qa.evaluation.EvaluationDataset;
 import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
 import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
@@ -100,6 +105,33 @@ import tools.jackson.databind.ObjectMapper;
 @EnableTransactionManagement(proxyTargetClass = true)
 @EnableConfigurationProperties(BootstrapAdminProperties.class)
 public class PostgresAdapterConfiguration {
+
+    @Bean
+    JdbcSolutionCommandIdempotencyStore jdbcSolutionCommandIdempotencyStore(JdbcClient jdbc) {
+        return new JdbcSolutionCommandIdempotencyStore(jdbc);
+    }
+
+    @Bean
+    SolutionWorkbenchService solutionWorkbenchService(JdbcSolutionRepository solutions,
+            JdbcRequirementVersionRepository requirements, JdbcOutlineVersionRepository outlines,
+            SolutionAccessService access, AuditService audit) {
+        SolutionModelPort manualOnly = new SolutionModelPort() {
+            @Override public <T> SolutionModelResponse<T> execute(SolutionModelRequest request, Class<T> type) {
+                throw new UnsupportedOperationException("manual solution slice only");
+            }
+        };
+        return new SolutionWorkbenchService(solutions, requirements, outlines, access, manualOnly, audit);
+    }
+
+    @Bean
+    SolutionCommandService solutionCommandService(SolutionWorkbenchService workbench,
+            JdbcSolutionRepository solutions, JdbcRequirementVersionRepository requirements,
+            JdbcOutlineVersionRepository outlines, SolutionAccessService access, SolutionSourceAccess sources,
+            SolutionReviewPolicy review, JdbcSolutionCommandIdempotencyStore idempotency,
+            PlatformTransactionManager transactions, Clock clock) {
+        return new SolutionCommandService(workbench, solutions, requirements, outlines,
+                access, sources, review, idempotency, new TransactionTemplate(transactions), clock);
+    }
 
     @Bean
     SolutionAccessService solutionAccessService(KnowledgeSpaceReadAuthorization spaces, RoleAssignmentStore roles) {
