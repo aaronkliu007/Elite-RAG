@@ -65,6 +65,6 @@
 
 **Files:** Update solution workbench views/API client/types, add component and Playwright tests, update Chinese runbook.
 
-- [ ] Write failing UI tests for status, verification, human adoption, conflict and responsive layout.
-- [ ] Implement UI with server returned capabilities; run accessibility and layout gate.
-- [ ] Run unified verification, review the diff and commit.
+- [x] Write failing UI tests for status, verification, human adoption, conflict and responsive layout.
+- [x] Implement UI with server returned capabilities; run accessibility and layout gate.
+- [x] Run unified verification, review the diff and commit.

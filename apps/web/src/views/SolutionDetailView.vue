@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, useRoute } from 'vue-router'
 
 import { ApiRequestError } from '../api/http'
+import SolutionSectionGenerationPanel from '../components/SolutionSectionGenerationPanel.vue'
 import { searchApi, type SearchEvidence, type SourceLocator } from '../api/search'
 import { solutionsApi, type OutlineNodeInput, type RequirementCategory, type RequirementItemInput,
   type RiskType, type SolutionDetail, type SolutionLocator, type SolutionSource } from '../api/solutions'
@@ -33,6 +34,7 @@ const canEditRequirements = computed(() => solution.value?.allowedActions.includ
 const canEditOutline = computed(() => solution.value?.allowedActions.includes('EDIT_OUTLINE') ?? false)
 const canConfirmRequirements = computed(() => solution.value?.allowedActions.includes('CONFIRM_REQUIREMENTS') ?? false)
 const canConfirmOutline = computed(() => solution.value?.allowedActions.includes('CONFIRM_OUTLINE') ?? false)
+const canGenerateSections = computed(() => solution.value?.allowedActions.includes('ADOPT_SECTION') ?? false)
 const dirty = computed(() => dirtyRequirements.value || dirtyOutline.value)
 const phaseLabel: Record<SolutionDetail['phase'], string> = {
   REQUIREMENTS_DRAFT: '需求草稿', REQUIREMENTS_CONFIRMED: '需求已确认',
@@ -628,6 +630,46 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           </div>
         </template>
       </section>
+      <section
+        class="step-card"
+        aria-labelledby="sections-heading"
+      >
+        <div class="step-heading">
+          <div>
+            <p class="eyebrow">
+              步骤 3
+            </p>
+            <h3 id="sections-heading">
+              章节生成与人工采纳
+            </h3>
+          </div>
+        </div>
+        <p
+          v-if="!solution.outlineConfirmation?.valid"
+          class="step-note"
+        >
+          确认大纲后可生成章节草稿。
+        </p>
+        <template v-else>
+          <p class="step-note">
+            逐章检查正文、引用和核验结论。采纳后将生成新的不可变章节版本。
+          </p>
+          <div class="section-panels">
+            <SolutionSectionGenerationPanel
+              v-for="node in solution.outlineVersion?.nodes ?? []"
+              :key="`${solution.id}:${node.sectionId}:${canGenerateSections}`"
+              :solution-id="solution.id"
+              :section="node"
+              :revision="solution.revision"
+              :baseline-version-id="solution.adoptedSectionVersionIds?.[node.sectionId] ?? null"
+              :can-generate="canGenerateSections"
+              :disabled="saving || dirty"
+              @adopted="load(true)"
+              @reload="load(true)"
+            />
+          </div>
+        </template>
+      </section>
     </template>
   </section>
 </template>
@@ -647,6 +689,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
 .button { min-height: 44px; padding: 0 18px; border: 1px solid var(--color-primary); border-radius: var(--radius-control); appearance: none; font: inherit; font-weight: 750; cursor: pointer; }.button-primary { color: #fff; background: var(--color-primary); -webkit-text-fill-color: #fff; }.button-primary:hover { border-color: var(--color-primary-strong); background: var(--color-primary-strong); }.button-secondary { color: var(--color-primary); background: #fff; }.button:disabled, button:disabled { opacity: .52; cursor: not-allowed; }
 .outline-grid { grid-template-columns: minmax(0, 1fr) 120px 120px; }.outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: span 2; }.required-check { display: flex !important; align-items: center; gap: 8px; }.risk-options { display: flex; gap: 8px 16px; flex-wrap: wrap; margin: 0; padding: 10px; border: 1px solid var(--color-border-soft); border-radius: 8px; }.risk-options legend { color: var(--color-muted); font-size: 13px; font-weight: 750; }.risk-options label { display: flex; gap: 5px; align-items: center; font-size: 12px; }
 .state { padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); color: var(--color-muted); background: #fff; }.state-error { color: #a51f32; background: #fff8f8; }.state-warning { color: #86500a; background: #fff8e7; }.state button { margin-left: 8px; min-height: 34px; border: 1px solid var(--color-border); border-radius: 7px; color: var(--color-primary); background: #fff; font: inherit; cursor: pointer; }
+.section-panels { display: grid; gap: 14px; min-width: 0; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
 @media (max-width: 850px) { .outline-grid { grid-template-columns: minmax(0, 1fr) 100px; }.outline-grid label:nth-child(3) { grid-column: 1 / -1; }.outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: 1 / -1; } }
 @media (max-width: 620px) { .detail-header { flex-direction: column; }.header-meta { justify-items: start; }.field-grid, .outline-grid { grid-template-columns: 1fr; }.outline-grid label:nth-child(3), .outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: auto; }.item-card, .detail-header, .step-card { padding: 16px; }.editor-actions, .confirm-block { align-items: stretch; flex-direction: column; }.reason-field { flex: 0 1 auto; width: 100%; }.editor-actions .button, .confirm-block .button { width: 100%; } }

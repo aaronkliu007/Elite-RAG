@@ -154,3 +154,74 @@ test('无权操作隐藏，409 保留草稿且窄屏主操作可见', async ({ p
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 620)
   await page.screenshot({ path: test.info().outputPath('solution-workbench-620.png'), fullPage: true })
 })
+
+test('章节生成、核验、人工采纳及窄屏冲突提示', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await session(page)
+  const evidenceId = '00000000-0000-0000-0000-000000000003'
+  let adopted = false
+  const requestBodies: Record<string, unknown>[] = []
+  const current = () => ({
+    id: 'solution-3', spaceId: space.id,
+    name: `跨区域方案${'长期交付'.repeat(16)}`,
+    phase: adopted ? 'IN_REVIEW' : 'OUTLINE_CONFIRMED', revision: adopted ? 4 : 3,
+    solutionRevision: 1, createdAt: now,
+    requirementVersion: { id: 'req-3', number: 1, items: [{ itemId: 'item-3',
+      category: 'UNKNOWN', text: '待明确', sources: [] }], createdBy: 'user-1', createdAt: now,
+      changeReason: '初始录入' },
+    outlineVersion: { id: 'outline-3', number: 1, createdBy: 'user-1', createdAt: now,
+      changeReason: '形成大纲', nodes: [{ sectionId: 'section-3',
+        title: `超长章节${'技术边界'.repeat(15)}`, level: 1, order: 1, required: true,
+        objective: '说明技术边界', retrievalHint: '查找客户材料', riskTypes: [] }] },
+    requirementConfirmation: { versionId: 'req-3', confirmedBy: 'user-2', confirmedAt: now, valid: true },
+    outlineConfirmation: { versionId: 'outline-3', confirmedBy: 'user-2', confirmedAt: now, valid: true },
+    sourceAccessValid: true, adoptedSectionVersionIds: adopted ? { 'section-3': 'adopted-3' } : {},
+    allowedActions: ['ADOPT_SECTION'],
+  })
+  await page.route(/\/api\/v1\/solutions\/solution-3(?:\/.*)?$/, async (route) => {
+    const request = route.request()
+    const path = new URL(request.url()).pathname
+    if (request.method() === 'GET' && path.endsWith('/solution-3')) return route.fulfill({ json: current() })
+    if (path.endsWith('/generation-attempts') && request.method() === 'POST') {
+      requestBodies.push(request.postDataJSON() as Record<string, unknown>)
+      if (adopted) return route.fulfill({ status: 409,
+        json: error('SOLUTION_CONCURRENT_UPDATE', '方案已由他人修改') })
+      return route.fulfill({ json: { id: 'attempt-3', status: 'SUCCEEDED', executionCount: 1,
+        revision: 4, failureCode: null, sectionVersion: { id: 'draft-3',
+          content: '## 总体方案\n客户计划支持100名用户。', evidenceIds: [evidenceId],
+          claims: [{ claimId: 'claim-3', text: '客户计划支持100名用户', factual: true,
+            evidenceIds: [evidenceId], riskTypes: [] }],
+          verification: { verifications: [{ claimId: 'claim-3', verdict: 'HUMAN_CONFIRMATION_REQUIRED',
+            reason: 'NEEDS_REVIEW' }] } } } })
+    }
+    if (path.endsWith('/adopt') && request.method() === 'POST') {
+      expect(request.postDataJSON()).toEqual({ expectedRevision: 3 })
+      adopted = true
+      return route.fulfill({ json: { solutionId: 'solution-3', revision: 4,
+        requirementVersionId: 'req-3', outlineVersionId: 'outline-3', phase: 'IN_REVIEW' } })
+    }
+    throw new Error(path)
+  })
+  await page.goto('/solutions/solution-3')
+  await page.locator('[data-action="generate-section"]').focus()
+  await expect(page.locator('[data-action="generate-section"]')).toHaveCSS('outline-style', 'solid')
+  await page.locator('[data-action="generate-section"]').click()
+  await expect(page.getByText('需人工确认')).toBeVisible()
+  await expect(page.locator('[data-action="adopt-section"]')).toBeDisabled()
+  await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1366)
+  await page.screenshot({ path: test.info().outputPath('solution-generation-1366.png'), fullPage: true })
+  await page.setViewportSize({ width: 620, height: 900 })
+  await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 620)
+  await page.screenshot({ path: test.info().outputPath('solution-draft-620.png'), fullPage: true })
+  await page.locator('[data-action="review-section"]').check()
+  await page.locator('[data-action="adopt-section"]').click()
+  await expect(page.getByText('当前已采纳版本：adopted-3')).toBeVisible()
+  expect(requestBodies[0]).toEqual({ expectedRevision: 3, baselineSectionVersionId: null })
+  await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 620)
+  await page.locator('[data-action="generate-section"]').click()
+  await expect(page.getByRole('alert')).toContainText('方案已由他人修改')
+  await expect(page.locator('[data-action="reload-generation-conflict"]')).toBeVisible()
+  expect(requestBodies[1]).toEqual({ expectedRevision: 4, baselineSectionVersionId: 'adopted-3' })
+  await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 620)
+  await page.screenshot({ path: test.info().outputPath('solution-generation-620.png'), fullPage: true })
+})

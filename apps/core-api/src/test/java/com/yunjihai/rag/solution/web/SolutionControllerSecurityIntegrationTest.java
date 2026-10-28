@@ -39,6 +39,8 @@ class SolutionControllerSecurityIntegrationTest {
     private static final Instant NOW = Instant.parse("2026-10-28T10:00:00Z");
     private static final UUID SOLUTION = UUID.fromString("00000000-0000-7000-8000-000000000003");
     private static final UUID REQUIREMENT = UUID.fromString("00000000-0000-7000-8000-000000000004");
+    private static final UUID SECTION = UUID.fromString("00000000-0000-7000-8000-000000000005");
+    private static final UUID ADOPTED = UUID.fromString("00000000-0000-7000-8000-000000000006");
     private static final AtomicBoolean SOURCE_GRANTED = new AtomicBoolean(true);
     @Autowired MockMvc mvc;
 
@@ -126,12 +128,23 @@ class SolutionControllerSecurityIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.sourceAccessValid").value(false))
                     .andExpect(jsonPath("$.requirementVersion").isEmpty())
+                    .andExpect(jsonPath("$.adoptedSectionVersionIds").isEmpty())
                     .andExpect(jsonPath("$.allowedActions").value(
                             org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("ADOPT_SECTION"))))
                     .andExpect(jsonPath("$.name").value("测试方案"));
         } finally {
             SOURCE_GRANTED.set(true);
         }
+    }
+
+    @Test void exposesCurrentAdoptedSectionVersionAsGenerationBaseline() throws Exception {
+        mvc.perform(get("/api/v1/solutions/{solutionId}", SOLUTION)
+                        .with(authentication(session())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.adoptedSectionVersionIds['" + SECTION + "']")
+                        .value(ADOPTED.toString()))
+                .andExpect(jsonPath("$.allowedActions")
+                        .value(org.hamcrest.Matchers.hasItem("ADOPT_SECTION")));
     }
 
     private static UsernamePasswordAuthenticationToken session() {
@@ -154,7 +167,14 @@ class SolutionControllerSecurityIntegrationTest {
                             "历史正文", List.of(new RequirementSource(new DocumentVersionRef(
                                     UUID.randomUUID(), UUID.randomUUID()), new PageLocator(1, null))))),
                     ACTOR, NOW, "初始录入");
-            var sample = Solution.create(SOLUTION, SPACE, ACTOR, SolutionName.of("测试方案"), initial, NOW);
+            var outline = new OutlineVersion(UUID.randomUUID(), 1,
+                    List.of(new OutlineNode(SECTION, "总体方案", 1, 1, true,
+                            "说明方案", "查找依据", Set.of())), ACTOR, NOW);
+            var sample = Solution.create(SOLUTION, SPACE, ACTOR, SolutionName.of("测试方案"), initial, NOW)
+                    .confirmRequirements(ACTOR, NOW, 0)
+                    .reviseOutline(outline, 1)
+                    .confirmOutline(ACTOR, NOW, 2)
+                    .adoptSection(SECTION, ADOPTED, 3);
             SolutionCommandPort commands = new SolutionCommandPort() {
                 @Override public SolutionCommandResult create(UUID actor, String key,
                         SolutionCommandService.CreateInput input) {
@@ -189,7 +209,9 @@ class SolutionControllerSecurityIntegrationTest {
                 @Override public void insert(RequirementVersion version) { throw new UnsupportedOperationException(); }
             };
             OutlineVersionRepository outlines = new OutlineVersionRepository() {
-                @Override public Optional<OutlineVersion> findById(UUID id) { return Optional.empty(); }
+                @Override public Optional<OutlineVersion> findById(UUID id) {
+                    return id.equals(outline.id()) ? Optional.of(outline) : Optional.empty();
+                }
                 @Override public void insert(OutlineVersion version) { throw new UnsupportedOperationException(); }
             };
             RoleAssignmentStore roles = new RoleAssignmentStore() {

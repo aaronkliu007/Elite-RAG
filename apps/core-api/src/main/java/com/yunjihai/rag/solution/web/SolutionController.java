@@ -144,7 +144,8 @@ public final class SolutionController {
                 sourcesValid && outline != null ? SolutionDtos.OutlineVersionView.from(outline) : null,
                 solution.requirementConfirmation().map(c -> SolutionDtos.ConfirmationView.from(c, currentSourcesValid)).orElse(null),
                 solution.outlineConfirmation().map(c -> SolutionDtos.ConfirmationView.from(c, currentSourcesValid)).orElse(null),
-                sourcesValid, allowed.stream().map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet()));
+                sourcesValid, sourcesValid ? solution.adoptedSectionVersionIds() : Map.of(),
+                allowed.stream().map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet()));
     }
 
     private static UUID actor(Authentication authentication) {
