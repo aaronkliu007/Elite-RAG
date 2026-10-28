@@ -53,20 +53,25 @@ final class QaTestHarness {
                 return new SanitizedText(value,Map.of(),false);
             }
         };
-        ChatCompletionPort chat=prompt->{
-            modelCalls.incrementAndGet();
-            modelEntered.countDown();
-            if(blockModel) {
-                try { releaseModel.await(); }
-                catch(InterruptedException interrupted) {
-                    Thread.currentThread().interrupt();
-                    throw new IllegalStateException("test interrupted",interrupted);
-                }
+        ChatCompletionPort chat=new ChatCompletionPort() {
+            @Override public ModelCallDescriptor descriptor() {
+                return new ModelCallDescriptor("test-provider","chat-completions","test-model","test-config-v1");
             }
-            var claim=new GroundedClaim(id(800),"制度已经生效。",
-                    List.of(new EvidenceSupport(id(100),"制度已经生效。")));
-            return new ModelGeneration(new CandidateAnswer(CandidateAnswer.Decision.ANSWER,
-                    "制度已经生效。",List.of(claim)),new ModelUsage(10,5,Duration.ofMillis(2)),"provider");
+            @Override public ModelGeneration generate(GroundedAnswerPrompt prompt) {
+                modelCalls.incrementAndGet();
+                modelEntered.countDown();
+                if(blockModel) {
+                    try { releaseModel.await(); }
+                    catch(InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                        throw new IllegalStateException("test interrupted",interrupted);
+                    }
+                }
+                var claim=new GroundedClaim(id(800),"制度已经生效。",
+                        List.of(new EvidenceSupport(id(100),"制度已经生效。")));
+                return new ModelGeneration(new CandidateAnswer(CandidateAnswer.Decision.ANSWER,
+                        "制度已经生效。",List.of(claim)),new ModelUsage(10,5,Duration.ofMillis(2)),"provider",0);
+            }
         };
         var service=new GroundedQaService(spaces,retrieval,persistence,ignored->{},
                 ignored->"a".repeat(64),sanitizer,chat,new ExactQuoteCitationSupportVerifier(),

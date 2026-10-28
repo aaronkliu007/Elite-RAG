@@ -39,7 +39,8 @@ class OpenAiAdaptersTest {
         server = new WireMockServer(0);
         server.start();
         properties = new ApprovedModelGatewayProperties(
-                true, URI.create(server.baseUrl()), Set.of("localhost"), "sk-sensitive-key",
+                true, "approved-openai-compatible", "model-config-v1",
+                URI.create(server.baseUrl()), Set.of("localhost"), "sk-sensitive-key",
                 "embedding-model", "reranker-model", "chat-model",
                 Duration.ofMillis(200), Duration.ofSeconds(2), Duration.ofSeconds(3),
                 8_000, 1_000, 2, 100_000, true);
@@ -154,6 +155,14 @@ class OpenAiAdaptersTest {
                 .isEqualTo(evidenceId);
         assertThat(generation.usage().totalTokens()).isEqualTo(150);
         assertThat(generation.providerRequestId()).isEqualTo("req-chat-1");
+        assertThat(generation.retryCount()).isZero();
+        assertThat(new OpenAiChatCompletionAdapter(properties, client, JSON).descriptor())
+                .satisfies(descriptor -> {
+                    assertThat(descriptor.provider()).isEqualTo("approved-openai-compatible");
+                    assertThat(descriptor.endpointIdentifier()).isEqualTo("chat-completions");
+                    assertThat(descriptor.model()).isEqualTo("chat-model");
+                    assertThat(descriptor.configVersion()).isEqualTo("model-config-v1");
+                });
     }
 
     @Test
@@ -177,7 +186,8 @@ class OpenAiAdaptersTest {
     @Test
     void rejectsProviderUsageOverConfiguredOutputLimit() {
         var limited = new ApprovedModelGatewayProperties(
-                true, URI.create(server.baseUrl()), Set.of("localhost"), "sk-sensitive-key",
+                true, "approved-openai-compatible", "model-config-v1",
+                URI.create(server.baseUrl()), Set.of("localhost"), "sk-sensitive-key",
                 "embedding-model", "reranker-model", "chat-model",
                 Duration.ofMillis(200), Duration.ofSeconds(2), Duration.ofSeconds(3),
                 8_000, 5, 2, 100_000, true);

@@ -3,6 +3,7 @@ package com.yunjihai.rag.infrastructure.model;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.model.ModelCallDescriptor;
 import com.yunjihai.rag.retrieval.embedding.EmbeddingPort;
 import com.yunjihai.rag.retrieval.embedding.EmbeddingUnavailableException;
 import com.yunjihai.rag.retrieval.selection.RerankerPort;
@@ -76,6 +77,17 @@ public class ModelGatewayConfiguration {
     @Bean
     @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "false", matchIfMissing = true)
     ChatCompletionPort disabledChatCompletionPort() {
-        return prompt -> { throw new ModelGatewayException(ModelGatewayException.Kind.UNAVAILABLE); };
+        return new ChatCompletionPort() {
+            @Override
+            public ModelCallDescriptor descriptor() {
+                return new ModelCallDescriptor("disabled", "chat-completions", "disabled", "disabled");
+            }
+
+            @Override
+            public com.yunjihai.rag.qa.model.ModelGeneration generate(
+                    com.yunjihai.rag.qa.model.GroundedAnswerPrompt prompt) {
+                throw new ModelGatewayException(ModelGatewayException.Kind.UNAVAILABLE);
+            }
+        };
     }
 }

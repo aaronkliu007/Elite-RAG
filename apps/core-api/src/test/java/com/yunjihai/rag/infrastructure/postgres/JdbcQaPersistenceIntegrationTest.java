@@ -121,15 +121,22 @@ class JdbcQaPersistenceIntegrationTest {
     void rejectsStaleRevisionAndPersistsOnlyApprovedModelAuditFields() {
         persistence.create(request,actor,"b".repeat(64),NOW);
         assertThat(persistence.transition(request,9,QaStatus.RETRIEVING,NOW)).isEmpty();
-        audits.record(new ModelCallAuditPort.ModelCallAudit(request,"c".repeat(64),"d".repeat(64),
+        audits.record(new ModelCallAuditPort.ModelCallAudit(request,
+                "approved-openai-compatible","chat-completions","chat-model","model-config-v1",
+                "c".repeat(64),"d".repeat(64),
                 new ModelUsage(100,20,Duration.ofMillis(50)),2,1,"SUCCESS",NOW));
         var stored=jdbc.sql("""
-                SELECT request_digest,response_digest,input_tokens,output_tokens,latency_ms,
+                SELECT provider,endpoint_identifier,model_name,model_config_version,
+                       request_digest,response_digest,input_tokens,output_tokens,latency_ms,
                        sanitization_hit_count,retry_count,result_code
                 FROM qa_model_call_audit WHERE request_id=:id
-                """).param("id",request).query((row,n)->List.of(row.getString(1),row.getString(2),
-                        row.getInt(3),row.getInt(4),row.getLong(5),row.getInt(6),row.getInt(7),row.getString(8))).single();
-        assertThat(stored).containsExactly("c".repeat(64),"d".repeat(64),100,20,50L,2,1,"SUCCESS");
+                """).param("id",request).query((row,n)->List.of(
+                        row.getString(1),row.getString(2),row.getString(3),row.getString(4),
+                        row.getString(5),row.getString(6),row.getInt(7),row.getInt(8),row.getLong(9),
+                        row.getInt(10),row.getInt(11),row.getString(12))).single();
+        assertThat(stored).containsExactly(
+                "approved-openai-compatible","chat-completions","chat-model","model-config-v1",
+                "c".repeat(64),"d".repeat(64),100,20,50L,2,1,"SUCCESS");
     }
 
     @Test

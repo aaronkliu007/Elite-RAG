@@ -19,6 +19,8 @@ spring:
 rag:
   ai:
     enabled: ${RAG_AI_ENABLED:false}
+    provider: ${RAG_AI_PROVIDER:}
+    config-version: ${RAG_AI_CONFIG_VERSION:}
     endpoint: ${RAG_AI_ENDPOINT:}
     approved-hosts: ${RAG_AI_APPROVED_HOSTS:}
     api-key: ${RAG_AI_API_KEY:}

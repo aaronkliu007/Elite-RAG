@@ -211,6 +211,8 @@ class RetrievalProductionWiringTest {
         try (var context = startContext(Map.ofEntries(
                 Map.entry("rag.workers.enabled", "false"),
                 Map.entry("rag.ai.enabled", "true"),
+                Map.entry("rag.ai.provider", "approved-openai-compatible"),
+                Map.entry("rag.ai.config-version", "wiring-config-v1"),
                 Map.entry("rag.ai.endpoint", modelEndpoint.toString()),
                 Map.entry("rag.ai.approved-hosts", "127.0.0.1"),
                 Map.entry("rag.ai.api-key", "sk-wiring-test"),

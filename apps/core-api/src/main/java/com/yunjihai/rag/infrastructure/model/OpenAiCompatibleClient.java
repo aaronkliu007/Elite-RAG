@@ -94,10 +94,12 @@ public final class OpenAiCompatibleClient implements AutoCloseable {
         ModelGatewayException last = null;
         for (int attempt = 0; attempt < 2; attempt++) {
             try {
-                return execute(endpoint, body, requestId, deadlineNanos);
+                return execute(endpoint, body, requestId, deadlineNanos).withRetryCount(attempt);
             } catch (ModelGatewayException exception) {
                 last = exception;
-                if (!isTransient(exception.kind()) || attempt == 1) throw exception;
+                if (!isTransient(exception.kind()) || attempt == 1) {
+                    throw exception.withRetryCount(attempt);
+                }
             }
         }
         throw last == null
@@ -222,12 +224,21 @@ public final class OpenAiCompatibleClient implements AutoCloseable {
     }
 
     public record GatewayResponse(
-            JsonNode body, String providerRequestId, Duration latency, int reportedTokens) {
+            JsonNode body, String providerRequestId, Duration latency, int reportedTokens, int retryCount) {
+        public GatewayResponse(JsonNode body, String providerRequestId, Duration latency, int reportedTokens) {
+            this(body, providerRequestId, latency, reportedTokens, 0);
+        }
+
         public GatewayResponse {
             Objects.requireNonNull(body, "body must not be null");
             Objects.requireNonNull(providerRequestId, "providerRequestId must not be null");
             Objects.requireNonNull(latency, "latency must not be null");
             if (reportedTokens < -1) throw new IllegalArgumentException("reported tokens are invalid");
+            if (retryCount < 0 || retryCount > 1) throw new IllegalArgumentException("retry count is invalid");
+        }
+
+        GatewayResponse withRetryCount(int value) {
+            return retryCount == value ? this : new GatewayResponse(body, providerRequestId, latency, reportedTokens, value);
         }
 
         @Override
@@ -235,6 +246,7 @@ public final class OpenAiCompatibleClient implements AutoCloseable {
             return "GatewayResponse[providerRequestId=" + providerRequestId
                     + ", latency=" + latency
                     + ", reportedTokens=" + reportedTokens
+                    + ", retryCount=" + retryCount
                     + ", body=<redacted>]";
         }
     }

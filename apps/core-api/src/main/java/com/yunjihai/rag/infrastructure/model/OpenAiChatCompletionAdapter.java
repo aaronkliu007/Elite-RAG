@@ -10,6 +10,7 @@ import com.yunjihai.rag.qa.domain.GroundedClaim;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.GroundedAnswerPrompt;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.model.ModelCallDescriptor;
 import com.yunjihai.rag.qa.model.ModelGeneration;
 import com.yunjihai.rag.qa.model.ModelUsage;
 
@@ -41,6 +42,13 @@ public final class OpenAiChatCompletionAdapter implements ChatCompletionPort {
     }
 
     @Override
+    public ModelCallDescriptor descriptor() {
+        return new ModelCallDescriptor(
+                properties.provider(), ModelEndpoint.CHAT_COMPLETIONS.identifier(),
+                properties.chatModel(), properties.configVersion());
+    }
+
+    @Override
     public ModelGeneration generate(GroundedAnswerPrompt prompt) {
         Objects.requireNonNull(prompt, "prompt must not be null");
         var response = client.post(ModelEndpoint.CHAT_COMPLETIONS, request(prompt));
@@ -61,9 +69,10 @@ public final class OpenAiChatCompletionAdapter implements ChatCompletionPort {
             return new ModelGeneration(
                     answer,
                     new ModelUsage(inputTokens, outputTokens, response.latency()),
-                    providerRequestId);
+                    providerRequestId,
+                    response.retryCount());
         } catch (ModelGatewayException exception) {
-            throw exception;
+            throw exception.withRetryCount(response.retryCount());
         } catch (RuntimeException exception) {
             throw invalidResponse();
         }

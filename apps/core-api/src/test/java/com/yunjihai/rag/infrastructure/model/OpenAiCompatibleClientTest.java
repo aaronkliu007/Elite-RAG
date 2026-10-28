@@ -134,9 +134,10 @@ class OpenAiCompatibleClientTest {
 
         try (var client = client(Duration.ofSeconds(2))) {
             assertThatThrownBy(() -> client.post(ModelEndpoint.RERANK, JSON.readTree("{}")))
-                    .isInstanceOf(ModelGatewayException.class)
-                    .extracting("kind")
-                    .isEqualTo(ModelGatewayException.Kind.UNAVAILABLE);
+                    .isInstanceOfSatisfying(ModelGatewayException.class, failure -> {
+                        assertThat(failure.kind()).isEqualTo(ModelGatewayException.Kind.UNAVAILABLE);
+                        assertThat(failure.retryCount()).isEqualTo(1);
+                    });
         }
         server.verify(2, postRequestedFor(urlEqualTo("/v1/rerank")));
         var requestIds = server.getAllServeEvents().stream()
@@ -144,6 +145,27 @@ class OpenAiCompatibleClientTest {
                 .toList();
         assertThat(requestIds).hasSize(2).doesNotContainNull();
         assertThat(requestIds).containsOnly(requestIds.getFirst());
+    }
+
+    @Test
+    void reportsOneRetryWhenTheSecondAttemptSucceeds() throws Exception {
+        server.stubFor(post("/v1/rerank")
+                .inScenario("successful-retry")
+                .whenScenarioStateIs(STARTED)
+                .willSetStateTo("retry")
+                .willReturn(aResponse().withStatus(503)));
+        server.stubFor(post("/v1/rerank")
+                .inScenario("successful-retry")
+                .whenScenarioStateIs("retry")
+                .willReturn(aResponse()
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{}")));
+
+        try (var client = client(Duration.ofSeconds(2))) {
+            assertThat(client.post(ModelEndpoint.RERANK, JSON.readTree("{}"))
+                    .retryCount()).isEqualTo(1);
+        }
+        server.verify(2, postRequestedFor(urlEqualTo("/v1/rerank")));
     }
 
     @Test
@@ -231,6 +253,8 @@ class OpenAiCompatibleClientTest {
             long dailyTokenLimit) {
         return new ApprovedModelGatewayProperties(
                 true,
+                "approved-openai-compatible",
+                "model-config-v1",
                 URI.create(server.baseUrl()),
                 Set.of("localhost"),
                 "sk-sensitive-key",

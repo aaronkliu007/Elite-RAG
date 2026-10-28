@@ -12,6 +12,8 @@ import java.util.stream.Collectors;
 @ConfigurationProperties("rag.ai")
 public record ApprovedModelGatewayProperties(
         boolean enabled,
+        String provider,
+        String configVersion,
         URI endpoint,
         Set<String> approvedHosts,
         String apiKey,
@@ -35,7 +37,7 @@ public record ApprovedModelGatewayProperties(
                         .map(host -> host.toLowerCase(Locale.ROOT))
                         .collect(Collectors.toUnmodifiableSet());
         if (enabled) validate(
-                endpoint, approvedHosts, apiKey, embeddingModel, rerankerModel, chatModel,
+                provider, configVersion, endpoint, approvedHosts, apiKey, embeddingModel, rerankerModel, chatModel,
                 connectTimeout, responseTimeout, totalTimeout, maxInputTokens, maxOutputTokens,
                 maxConcurrency, dailyDeploymentTokenLimit, allowInsecureLoopbackForTests);
     }
@@ -55,6 +57,8 @@ public record ApprovedModelGatewayProperties(
     @Override
     public String toString() {
         return "ApprovedModelGatewayProperties[enabled=" + enabled
+                + ", provider=" + provider
+                + ", configVersion=" + configVersion
                 + ", endpoint=" + endpoint
                 + ", approvedHosts=" + approvedHosts
                 + ", apiKey=<redacted>"
@@ -72,6 +76,8 @@ public record ApprovedModelGatewayProperties(
     }
 
     private static void validate(
+            String provider,
+            String configVersion,
             URI endpoint,
             Set<String> approvedHosts,
             String apiKey,
@@ -87,6 +93,8 @@ public record ApprovedModelGatewayProperties(
             long dailyDeploymentTokenLimit,
             boolean allowInsecureLoopbackForTests) {
         try {
+            requireIdentifier(provider);
+            requireIdentifier(configVersion);
             if (endpoint == null || !endpoint.isAbsolute() || endpoint.getHost() == null
                     || endpoint.getUserInfo() != null || endpoint.getQuery() != null || endpoint.getFragment() != null
                     || (endpoint.getPath() != null && !endpoint.getPath().isEmpty() && !"/".equals(endpoint.getPath()))) {
@@ -120,6 +128,12 @@ public record ApprovedModelGatewayProperties(
 
     private static void requireText(String value, int maxCodePoints) {
         if (value == null || value.isBlank() || value.codePointCount(0, value.length()) > maxCodePoints) {
+            throw configurationFailure();
+        }
+    }
+
+    private static void requireIdentifier(String value) {
+        if (value == null || !value.matches("[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")) {
             throw configurationFailure();
         }
     }

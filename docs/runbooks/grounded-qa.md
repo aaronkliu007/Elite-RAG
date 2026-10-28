@@ -26,6 +26,8 @@
 
 ```powershell
 $env:RAG_AI_ENABLED = 'true'
+$env:RAG_AI_PROVIDER = 'approved-openai-compatible'
+$env:RAG_AI_CONFIG_VERSION = 'model-config-v1'
 $env:RAG_AI_ENDPOINT = 'https://approved-model-gateway.example.com'
 $env:RAG_AI_APPROVED_HOSTS = 'approved-model-gateway.example.com'
 $env:RAG_AI_API_KEY = $env:APPROVED_RAG_API_KEY
@@ -46,7 +48,7 @@ $env:RAG_AI_OUTPUT_COST_PER_MILLION_TOKENS = '0'
 $env:RAG_SANITIZATION_BUSINESS_TERMS = '内部项目代号,受控业务术语'
 ```
 
-`RAG_QA_QUESTION_HMAC_KEY` 必须至少 32 个 UTF-8 字节，用于保存问题的 HMAC-SHA-256 摘要；不得与 API 密钥、登录摘要密钥或其他实例共用。`RAG_SANITIZATION_BUSINESS_TERMS` 是英文逗号分隔的阻断词，任何一项命中都会禁止该证据外发，变更后必须重新跑安全案例和黄金集。模型网关启用时三个模型名、审批主机和 API 密钥都必须非空，否则应用拒绝启动。
+`RAG_QA_QUESTION_HMAC_KEY` 必须至少 32 个 UTF-8 字节，用于保存问题的 HMAC-SHA-256 摘要；不得与 API 密钥、登录摘要密钥或其他实例共用。`RAG_SANITIZATION_BUSINESS_TERMS` 是英文逗号分隔的阻断词，任何一项命中都会禁止该证据外发，变更后必须重新跑安全案例和黄金集。模型网关启用时供应商标识、模型配置版本、三个模型名、审批主机和 API 密钥都必须非空，否则应用拒绝启动。供应商和配置版本只能使用受控短标识，不得填写完整 URL、密钥或自由文本；每次端点、模型、超时、Token 上限或脱敏策略变更都必须提升配置版本。
 
 启动后检查：
 
@@ -125,7 +127,7 @@ $env:RAG_QA_EVALUATION_FIXTURE_ENABLED = 'true'
 
 ## 9. 日志、审计与排障禁项
 
-日志和审计禁止记录：原始问题、完整提示词、证据正文、文档正文、原始模型响应、向量、ACL 明细、用户名、Cookie、Token、API/HMAC/数据库/AIStor 密钥或许可证内容。允许记录请求 ID、供应商请求 ID、模型配置版本、阶段、结果码、数量、耗时、Token、费用估算和不可逆摘要。
+日志和审计禁止记录：原始问题、完整提示词、证据正文、文档正文、原始模型响应、向量、ACL 明细、用户名、Cookie、Token、API/HMAC/数据库/AIStor 密钥或许可证内容。模型调用审计只记录受控供应商标识、端点类别（例如 `chat-completions`，不是完整 URL）、模型名、模型配置版本、重试次数、阶段、结果码、数量、耗时、Token 和不可逆请求/响应摘要。
 
 排障顺序：
 

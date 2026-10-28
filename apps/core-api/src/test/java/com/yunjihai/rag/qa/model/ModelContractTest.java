@@ -66,13 +66,15 @@ class ModelContractTest {
         var generation = new ModelGeneration(
                 candidate,
                 new ModelUsage(120, 30, Duration.ofMillis(250)),
-                "provider-request-1");
+                "provider-request-1",
+                1);
 
         supports.clear();
         claims.clear();
 
         assertThat(generation.answer().claims()).hasSize(1);
         assertThat(generation.usage().totalTokens()).isEqualTo(150);
+        assertThat(generation.retryCount()).isEqualTo(1);
         assertThatThrownBy(() -> new ModelUsage(-1, 0, Duration.ZERO))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ModelUsage(0, 0, Duration.ofMillis(-1)))
@@ -81,9 +83,10 @@ class ModelContractTest {
 
     @Test
     void model_gateway_exception_exposes_only_normalized_kind() {
-        var failure = new ModelGatewayException(ModelGatewayException.Kind.RATE_LIMITED);
+        var failure = new ModelGatewayException(ModelGatewayException.Kind.RATE_LIMITED, 1);
 
         assertThat(failure.kind()).isEqualTo(ModelGatewayException.Kind.RATE_LIMITED);
+        assertThat(failure.retryCount()).isEqualTo(1);
         assertThat(failure.getMessage()).isEqualTo("MODEL_GATEWAY_RATE_LIMITED");
         assertThat(failure.toString()).doesNotContain("key", "question", "evidence");
     }

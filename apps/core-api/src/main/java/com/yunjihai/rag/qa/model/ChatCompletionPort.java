@@ -1,6 +1,7 @@
 package com.yunjihai.rag.qa.model;
 
-@FunctionalInterface
 public interface ChatCompletionPort {
+    ModelCallDescriptor descriptor();
+
     ModelGeneration generate(GroundedAnswerPrompt prompt);
 }

@@ -10,6 +10,7 @@ import com.yunjihai.rag.qa.domain.RefusalReason;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.GroundedAnswerPrompt;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.model.ModelCallDescriptor;
 import com.yunjihai.rag.qa.model.ModelGeneration;
 import com.yunjihai.rag.qa.model.ModelUsage;
 import com.yunjihai.rag.qa.sanitization.SanitizationResult;
@@ -241,6 +242,7 @@ public final class GroundedQaService {
         GroundedAnswerPrompt prompt = new GroundedAnswerPrompt(
                 question, sanitized.evidence(), "zh-CN", POLICY_VERSION, PROMPT_VERSION,
                 policy.maxModelOutputCodePoints());
+        ModelCallDescriptor descriptor = chat.descriptor();
         long generationStarted = System.nanoTime();
         GenerationAttempt attempt;
         try {
@@ -253,7 +255,9 @@ public final class GroundedQaService {
 
         try {
             audits.record(new ModelCallAuditPort.ModelCallAudit(
-                    command.requestId(), questionDigest, responseDigest(attempt), attempt.usage(),
+                    command.requestId(), descriptor.provider(), descriptor.endpointIdentifier(),
+                    descriptor.model(), descriptor.configVersion(), questionDigest,
+                    responseDigest(attempt), attempt.usage(),
                     sanitizationHits(sanitized), attempt.retryCount(), attempt.resultCode(), clock.instant()));
         } catch (RuntimeException auditFailure) {
             return complete(state, command.actorId(), new QaOutcome.Failed(
@@ -339,10 +343,11 @@ public final class GroundedQaService {
 
     private GenerationAttempt generate(GroundedAnswerPrompt prompt, UUID requestId) {
         try {
-            return GenerationAttempt.success(chat.generate(prompt), 0);
+            ModelGeneration generation = chat.generate(prompt);
+            return GenerationAttempt.success(generation, generation.retryCount());
         } catch (ModelGatewayException failure) {
             safeMetric(requestId, () -> metrics.recordModelError(failure.kind()));
-            return GenerationAttempt.failure(failure, 0);
+            return GenerationAttempt.failure(failure, failure.retryCount());
         } catch (RuntimeException invalidResponse) {
             safeMetric(requestId, () -> metrics.recordModelError(
                     ModelGatewayException.Kind.INVALID_RESPONSE));

@@ -19,6 +19,8 @@ class ApprovedModelGatewayPropertiesTest {
     void acceptsApprovedHttpsEndpointAndRedactsCredential() {
         var properties = enabled(URI.create("https://models.example.com"), Set.of("models.example.com"), false);
 
+        assertThat(properties.provider()).isEqualTo("approved-openai-compatible");
+        assertThat(properties.configVersion()).isEqualTo("model-config-v1");
         assertThat(properties.endpointUri("/v1/embeddings"))
                 .isEqualTo(URI.create("https://models.example.com/v1/embeddings"));
         assertThat(properties.toString())
@@ -35,6 +37,18 @@ class ApprovedModelGatewayPropertiesTest {
 
         assertThatThrownBy(() -> enabled(
                 URI.create("http://models.example.com"), Set.of("models.example.com"), false))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("MODEL_GATEWAY_CONFIGURATION_INVALID");
+    }
+
+    @Test
+    void rejectsAuditIdentifiersThatCouldContainUrlsOrFreeText() {
+        assertThatThrownBy(() -> new ApprovedModelGatewayProperties(
+                true, "https://models.example.com", "model config v1",
+                URI.create("https://models.example.com"), Set.of("models.example.com"),
+                "sk-sensitive-key", "embedding-model", "reranker-model", "chat-model",
+                Duration.ofMillis(250), Duration.ofSeconds(2), Duration.ofSeconds(3),
+                8_000, 1_000, 4, 100_000, false))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("MODEL_GATEWAY_CONFIGURATION_INVALID");
     }
@@ -57,7 +71,8 @@ class ApprovedModelGatewayPropertiesTest {
     @Test
     void enforcesConcurrencyAndDailyDeploymentBudget() {
         var limited = new ApprovedModelGatewayProperties(
-                true, URI.create("https://models.example.com"), Set.of("models.example.com"),
+                true, "approved-openai-compatible", "model-config-v1",
+                URI.create("https://models.example.com"), Set.of("models.example.com"),
                 "sk-sensitive-key", "embedding-model", "reranker-model", "chat-model",
                 Duration.ofMillis(250), Duration.ofSeconds(2), Duration.ofSeconds(3),
                 1, 1, 1, 2, false);
@@ -81,7 +96,8 @@ class ApprovedModelGatewayPropertiesTest {
     @Test
     void doesNotRefundNewDayUsageWhenPreviousDayCallCompletesAfterMidnight() {
         var limited = new ApprovedModelGatewayProperties(
-                true, URI.create("https://models.example.com"), Set.of("models.example.com"),
+                true, "approved-openai-compatible", "model-config-v1",
+                URI.create("https://models.example.com"), Set.of("models.example.com"),
                 "sk-sensitive-key", "embedding-model", "reranker-model", "chat-model",
                 Duration.ofMillis(250), Duration.ofSeconds(2), Duration.ofSeconds(3),
                 1, 1, 3, 2, false);
@@ -106,6 +122,8 @@ class ApprovedModelGatewayPropertiesTest {
     static ApprovedModelGatewayProperties enabled(URI endpoint, Set<String> hosts, boolean loopbackHttp) {
         return new ApprovedModelGatewayProperties(
                 true,
+                "approved-openai-compatible",
+                "model-config-v1",
                 endpoint,
                 hosts,
                 "sk-sensitive-key",

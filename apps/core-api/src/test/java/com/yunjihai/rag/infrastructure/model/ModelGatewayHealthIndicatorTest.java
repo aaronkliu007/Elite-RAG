@@ -15,7 +15,7 @@ class ModelGatewayHealthIndicatorTest {
     @Test
     void reportsDisabledAsAnExplicitNonUpCapability() {
         var properties = new ApprovedModelGatewayProperties(
-                false, null, Set.of(), null, null, null, null,
+                false, null, null, null, Set.of(), null, null, null, null,
                 null, null, null, 0, 0, 0, 0, false);
 
         var health = new ModelGatewayHealthIndicator(properties).health();
@@ -27,7 +27,8 @@ class ModelGatewayHealthIndicatorTest {
     @Test
     void enabledHealthExposesNoEndpointCredentialOrModelConfiguration() {
         var properties = new ApprovedModelGatewayProperties(
-                true, URI.create("https://approved-model.example"), Set.of("approved-model.example"),
+                true, "approved-openai-compatible", "model-config-v1",
+                URI.create("https://approved-model.example"), Set.of("approved-model.example"),
                 "health-secret-api-key", "embedding-private-name", "reranker-private-name",
                 "chat-private-name", Duration.ofSeconds(1), Duration.ofSeconds(2),
                 Duration.ofSeconds(3), 8_000, 2_000, 4, 100_000, false);

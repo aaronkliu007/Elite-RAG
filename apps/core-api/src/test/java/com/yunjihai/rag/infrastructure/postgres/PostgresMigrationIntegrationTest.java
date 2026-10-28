@@ -299,7 +299,7 @@ class PostgresMigrationIntegrationTest {
         migrate();
         Flyway restartedApplication = flyway("classpath:db/migration");
         assertDoesNotThrow(restartedApplication::validate);
-        assertEquals(5, restartedApplication.info().applied().length);
+        assertEquals(6, restartedApplication.info().applied().length);
     }
 
     @Test
@@ -329,7 +329,7 @@ class PostgresMigrationIntegrationTest {
     }
 
     private static void migrate() {
-        assertEquals(5, flyway("classpath:db/migration").migrate().migrationsExecuted);
+        assertEquals(6, flyway("classpath:db/migration").migrate().migrationsExecuted);
     }
 
     private static Connection ownerConnection() throws SQLException {

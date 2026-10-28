@@ -314,6 +314,8 @@ final class GroundedQaAcceptanceEnvironment implements AutoCloseable {
                 Map.entry("rag.parser.endpoint", "http://127.0.0.1:9"),
                 Map.entry("rag.qa.hmac-key", "qa-acceptance-hmac-key-32-bytes!!"),
                 Map.entry("rag.ai.enabled", "true"),
+                Map.entry("rag.ai.provider", "approved-openai-compatible"),
+                Map.entry("rag.ai.config-version", "acceptance-config-v1"),
                 Map.entry("rag.ai.endpoint", gateway.baseUrl()),
                 Map.entry("rag.ai.approved-hosts", URI.create(gateway.baseUrl()).getHost()),
                 Map.entry("rag.ai.api-key", "qa-acceptance-test-key"),

@@ -8,6 +8,7 @@ import com.yunjihai.rag.qa.domain.QaStatus;
 import com.yunjihai.rag.qa.domain.RefusalReason;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.model.ModelCallDescriptor;
 import com.yunjihai.rag.qa.model.ModelGeneration;
 import com.yunjihai.rag.qa.model.ModelUsage;
 import com.yunjihai.rag.qa.sanitization.SanitizationResult;
@@ -65,6 +66,12 @@ class GroundedQaServiceTest {
                 QaStatus.RECEIVED, QaStatus.RETRIEVING, QaStatus.SANITIZING,
                 QaStatus.GENERATING, QaStatus.VERIFYING, QaStatus.ANSWERED);
         assertThat(harness.audits).hasSize(1);
+        assertThat(harness.audits.getFirst()).satisfies(audit -> {
+            assertThat(audit.provider()).isEqualTo("test-provider");
+            assertThat(audit.endpointIdentifier()).isEqualTo("chat-completions");
+            assertThat(audit.model()).isEqualTo("test-chat-model");
+            assertThat(audit.modelConfigVersion()).isEqualTo("test-config-v1");
+        });
     }
 
     @Test
@@ -142,7 +149,7 @@ class GroundedQaServiceTest {
         assertThat(harness.modelCalls).hasValue(1);
         assertThat(harness.audits).singleElement()
                 .extracting(ModelCallAuditPort.ModelCallAudit::retryCount)
-                .isEqualTo(0);
+                .isEqualTo(1);
         assertThat(metrics.modelErrors).containsExactly(ModelGatewayException.Kind.TIMEOUT);
     }
 
@@ -301,15 +308,24 @@ class GroundedQaServiceTest {
                     return new SanitizedText(text, Map.of(), false);
                 }
             };
-            ChatCompletionPort chat = value -> {
-                modelCalls.incrementAndGet();
-                prompt.set(value);
-                if (transientFailures-- > 0) {
-                    throw new ModelGatewayException(ModelGatewayException.Kind.TIMEOUT);
+            ChatCompletionPort chat = new ChatCompletionPort() {
+                @Override
+                public ModelCallDescriptor descriptor() {
+                    return new ModelCallDescriptor(
+                            "test-provider", "chat-completions", "test-chat-model", "test-config-v1");
                 }
-                if (modelFailure != null) throw modelFailure;
-                return new ModelGeneration(
-                        answer, new ModelUsage(100, 20, Duration.ofMillis(50)), "provider-1");
+
+                @Override
+                public ModelGeneration generate(com.yunjihai.rag.qa.model.GroundedAnswerPrompt value) {
+                    modelCalls.incrementAndGet();
+                    prompt.set(value);
+                    if (transientFailures-- > 0) {
+                        throw new ModelGatewayException(ModelGatewayException.Kind.TIMEOUT, 1);
+                    }
+                    if (modelFailure != null) throw modelFailure;
+                    return new ModelGeneration(
+                            answer, new ModelUsage(100, 20, Duration.ofMillis(50)), "provider-1", 0);
+                }
             };
             ModelCallAuditPort audit = event -> {
                 if (auditFailure) throw new IllegalStateException("audit unavailable");
