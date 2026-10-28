@@ -61,6 +61,28 @@ class JdbcSectionGenerationIntegrationTest {
         assertThat(sections.insertIfAbsent(draft)).isEqualTo(draft);
     }
 
+    @Test void evidenceSnapshotSurvivesDraftCommitAndRejectsChangedSource() {
+        var fixture = seed(1900);
+        var store = new JdbcGenerationEvidenceStore(jdbc,
+                new DataSourceTransactionManager(dataSource));
+        var draft = draft(fixture, id(1910));
+        var source = new GenerationEvidenceSource(1, draft.evidenceIds().iterator().next(),
+                fixture.key().solutionId(), fixture.key().solutionId(),
+                fixture.key().requirementVersionId(), "node-1", "a".repeat(64));
+        store.saveSnapshot(fixture.verifying().id(), List.of(source));
+        store.saveSnapshot(fixture.verifying().id(), List.of(source));
+        assertThat(store.findByAttemptId(fixture.verifying().id())).containsExactly(source);
+
+        var succeeded = fixture.verifying().succeed(draft.id(), NOW.plusSeconds(5));
+        assertThat(commits.commitIfCurrent(fixture.key(), fixture.verifying().id(), draft,
+                succeeded, fixture.verifying().revision())).isTrue();
+        assertThat(store.findBySectionVersionId(draft.id())).containsExactly(source);
+        assertThatThrownBy(() -> store.saveSnapshot(fixture.verifying().id(),
+                List.of(new GenerationEvidenceSource(1, source.evidenceId(), source.spaceId(),
+                        source.documentId(), source.versionId(), "node-2", source.excerptHash()))))
+                .isInstanceOf(GenerationRequestConflictException.class);
+    }
+
     @Test void staleBaselineRejectsBothWrites() {
         var fixture = seed(200);
         jdbc.sql("""

@@ -57,9 +57,9 @@
 
 **Interfaces:** Start/get/retry/adopt endpoints under `/api/v1/solutions/{solutionId}/sections/...` with session auth and `Idempotency-Key`.
 
-- [ ] Write failing tests for denied access, stale versions, interrupted attempts, invalid model references and model outage.
-- [ ] Implement adapter and recovery with bounded lease/retry semantics; wire HTTP and audit. Wrap human adoption in an outer transaction that includes section insert and solution CAS; the JDBC repository rejects ADOPTED writes without this transaction.
-- [ ] Run Java regression and commit.
+- [x] Write failing tests for denied access, stale versions, interrupted attempts, invalid model references and model outage.
+- [x] Implement adapter and recovery with bounded lease/retry semantics; wire HTTP and audit. Wrap human adoption in an outer transaction that includes section insert and solution CAS; the JDBC repository rejects ADOPTED writes without this transaction.
+- [x] Run Java regression and commit.
 
 ### Task 4: Vue closed loop and acceptance
 

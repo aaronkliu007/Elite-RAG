@@ -133,6 +133,8 @@ public final class SolutionController {
             allowed.remove(SolutionAction.CONFIRM_REQUIREMENTS);
         if (solution.requirementConfirmation().isEmpty() || !sourcesValid)
             allowed.remove(SolutionAction.EDIT_OUTLINE);
+        if (solution.outlineConfirmation().isEmpty() || !sourcesValid)
+            allowed.remove(SolutionAction.ADOPT_SECTION);
         if (solution.phase() != SolutionPhase.OUTLINE_DRAFT || outline == null || !sourcesValid
                 || !review.canConfirm(outline.createdBy(), actor))
             allowed.remove(SolutionAction.CONFIRM_OUTLINE);

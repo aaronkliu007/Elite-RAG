@@ -7,11 +7,16 @@ import com.yunjihai.rag.qa.model.ModelCallDescriptor;
 import com.yunjihai.rag.retrieval.embedding.EmbeddingPort;
 import com.yunjihai.rag.retrieval.embedding.EmbeddingUnavailableException;
 import com.yunjihai.rag.retrieval.selection.RerankerPort;
+import com.yunjihai.rag.solution.model.SolutionModelPort;
+import com.yunjihai.rag.solution.verification.CitationVerificationPort;
+import com.yunjihai.rag.solution.verification.SectionVerificationService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+
+import java.time.Clock;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(ApprovedModelGatewayProperties.class)
@@ -58,6 +63,34 @@ public class ModelGatewayConfiguration {
     ChatCompletionPort approvedChatCompletionPort(
             ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client) {
         return new OpenAiChatCompletionAdapter(properties, client, new ObjectMapper());
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "true")
+    SolutionModelPort approvedSolutionModelPort(
+            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client, Clock clock) {
+        return new OpenAiSolutionModelAdapter(properties, client, new ObjectMapper(), clock);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "false", matchIfMissing = true)
+    SolutionModelPort disabledSolutionModelPort() {
+        return new SolutionModelPort() {
+            @Override public <T> com.yunjihai.rag.solution.model.SolutionModelResponse<T> execute(
+                    com.yunjihai.rag.solution.model.SolutionModelRequest request, Class<T> type) {
+                throw new ModelGatewayException(ModelGatewayException.Kind.UNAVAILABLE);
+            }
+        };
+    }
+
+    @Bean
+    CitationVerificationPort citationVerificationPort() {
+        return new ConservativeCitationVerificationPort();
+    }
+
+    @Bean
+    SectionVerificationService sectionVerificationService(CitationVerificationPort citations) {
+        return new SectionVerificationService(citations);
     }
 
     @Bean

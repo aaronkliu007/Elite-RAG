@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -314,6 +315,104 @@ class SectionGenerationServiceTest {
     }
 
     @Test
+    void authorityRevokedDuringModelCancelsAttemptWithoutStoringDraft() {
+        var revoked = new AtomicBoolean(false);
+        var fixture = Fixture.ready((actor, space, solution, action, at) -> {
+            if (revoked.get()) throw new SecurityException("access revoked");
+        });
+        fixture.duringModel = () -> revoked.set(true);
+
+        assertThatThrownBy(() -> fixture.service.generate(command(SECTION_ID)))
+                .isInstanceOf(SecurityException.class);
+        assertThat(fixture.attempts.values.get("client-section-1").status())
+                .isEqualTo(GenerationStatus.CANCELLED);
+        assertThat(fixture.sections.values).isEmpty();
+    }
+
+    @Test
+    void sourceRevokedDuringRetrievalStopsBeforeCloudModelCall() {
+        var fixture = Fixture.ready();
+        fixture.duringRetrieval = () -> fixture.evidenceReadable = false;
+
+        assertThatThrownBy(() -> fixture.service.generate(command(SECTION_ID)))
+                .isInstanceOf(SecurityException.class);
+        assertThat(fixture.modelCalls).isZero();
+        assertThat(fixture.attempts.values.get("client-section-1").status())
+                .isEqualTo(GenerationStatus.CANCELLED);
+    }
+
+    @Test
+    void sourceRevokedAfterSuccessBlocksPostAndGetReplay() {
+        var fixture = Fixture.ready();
+        assertThat(fixture.service.generate(command(SECTION_ID)).attempt().status())
+                .isEqualTo(GenerationStatus.SUCCEEDED);
+        fixture.evidenceReadable = false;
+
+        assertThatThrownBy(() -> fixture.service.generate(command(SECTION_ID)))
+                .isInstanceOf(SecurityException.class);
+        assertThatThrownBy(() -> fixture.service.readAttempt(
+                ACTOR_ID, SPACE_ID, SOLUTION_ID, SECTION_ID, "client-section-1", NOW.plusSeconds(1)))
+                .isInstanceOf(SecurityException.class);
+        assertThat(fixture.modelCalls).isEqualTo(1);
+    }
+
+    @Test
+    void successfulReplayUsesSavedEvidenceSourcesWithoutRetrieval() {
+        var fixture = Fixture.ready();
+        fixture.randomEvidenceIdsAfterFirst = true;
+        assertThat(fixture.service.generate(command(SECTION_ID)).attempt().status())
+                .isEqualTo(GenerationStatus.SUCCEEDED);
+
+        assertThat(fixture.service.generate(command(SECTION_ID)).attempt().status())
+                .isEqualTo(GenerationStatus.SUCCEEDED);
+        assertThat(fixture.service.readAttempt(ACTOR_ID, SPACE_ID, SOLUTION_ID, SECTION_ID,
+                "client-section-1", NOW.plusSeconds(1)).sectionVersion()).isPresent();
+        assertThat(fixture.retrievalCalls).isEqualTo(1);
+    }
+
+    @Test
+    void revokedCitedDocumentPreventsAdoption() {
+        var fixture = Fixture.ready();
+        var draft = fixture.service.generate(command(SECTION_ID)).sectionVersion().orElseThrow();
+        fixture.evidenceReadable = false;
+
+        assertThatThrownBy(() -> fixture.service.adoptSection(
+                ACTOR_ID, SOLUTION_ID, draft.id(), 3, NOW.plusSeconds(1)))
+                .isInstanceOf(SecurityException.class);
+        assertThat(fixture.solutions.values.get(SOLUTION_ID).adoptedSectionVersionIds()).isEmpty();
+    }
+
+    @Test
+    void adoptionAllowsDraftToCiteSubsetOfRetrievedEvidence() {
+        var fixture = Fixture.ready();
+        var first = evidence();
+        var second = new Evidence(first.spaceId(), id(99), id(98), id(97), "node-2",
+                "补充材料", "该材料与本章节无关", 0.7,
+                new MarkdownLocator(List.of("补充材料"), "node-2"));
+        fixture.evidence = List.of(first, second);
+        var draft = fixture.service.generate(command(SECTION_ID)).sectionVersion().orElseThrow();
+        assertThat(draft.evidenceIds()).containsExactly(EVIDENCE_ID);
+
+        var adopted = fixture.service.adoptSection(
+                ACTOR_ID, SOLUTION_ID, draft.id(), 3, NOW.plusSeconds(1));
+        assertThat(adopted.adoptedSectionVersionIds()).containsKey(SECTION_ID);
+    }
+
+    @Test
+    void retryKeepsOriginalEvidenceIdsWhenRetrievalAllocatesNewIds() {
+        var fixture = Fixture.ready();
+        fixture.modelFailuresRemaining = 1;
+        fixture.randomEvidenceIdsAfterFirst = true;
+
+        var first = fixture.service.generate(command(SECTION_ID));
+        assertThat(first.attempt().status()).isEqualTo(GenerationStatus.FAILED_RETRYABLE);
+        var second = fixture.service.generate(command(SECTION_ID));
+
+        assertThat(second.attempt().status()).isEqualTo(GenerationStatus.SUCCEEDED);
+        assertThat(second.sectionVersion().orElseThrow().evidenceIds()).containsExactly(EVIDENCE_ID);
+    }
+
+    @Test
     void persistedVerifyingAttemptRecoversFromItsSectionCheckpointWithoutModelCall() {
         var fixture = Fixture.ready();
         var key = new GenerationKey(
@@ -324,6 +423,8 @@ class SectionGenerationServiceTest {
                 .recordEvidence(RETRIEVAL_REQUEST_ID, Set.of(EVIDENCE_ID), NOW)
                 .startVerification(new ModelUsage(100, 50, 1234, 800), NOW);
         fixture.attempts.values.put(key.clientKey(), verifying);
+        fixture.evidenceSources.saveSnapshot(ATTEMPT_ID,
+                List.of(GenerationEvidenceSource.from(1, evidence())));
         var draft = candidate(SECTION_VERSION_ID, CitationVerdict.SUPPORTED);
         fixture.sections.insertForAttempt(ATTEMPT_ID, draft);
 
@@ -347,10 +448,65 @@ class SectionGenerationServiceTest {
                 .startVerification(new ModelUsage(100, 50, 1234, 800), NOW);
         fixture.attempts.values.put(key.clientKey(), verifying);
 
-        var result = fixture.service.generate(command(SECTION_ID));
+        var result = fixture.service.generate(commandAt(NOW.plusSeconds(180)));
 
         assertThat(result.attempt().status()).isEqualTo(GenerationStatus.FAILED_MANUAL);
         assertThat(result.attempt().failureCode()).contains("VERIFICATION_CHECKPOINT_MISSING");
+        assertThat(fixture.retrievalCalls).isZero();
+        assertThat(fixture.modelCalls).isZero();
+    }
+
+    @Test
+    void recentVerifyingAttemptRemainsInProgressWithoutACheckpoint() {
+        var fixture = Fixture.ready();
+        var key = new GenerationKey("client-section-1", SOLUTION_ID, REQUIREMENT_ID,
+                OUTLINE_ID, SECTION_ID, Optional.empty());
+        var verifying = GenerationAttempt.start(ATTEMPT_ID, key, NOW)
+                .startRetrieval(NOW)
+                .recordEvidence(RETRIEVAL_REQUEST_ID, Set.of(EVIDENCE_ID), NOW)
+                .startVerification(new ModelUsage(100, 50, 1234, 800), NOW);
+        fixture.attempts.values.put(key.clientKey(), verifying);
+
+        var result = fixture.service.generate(command(SECTION_ID));
+
+        assertThat(result.attempt()).isEqualTo(verifying);
+        assertThat(fixture.retrievalCalls).isZero();
+        assertThat(fixture.modelCalls).isZero();
+    }
+
+    @Test
+    void expiredRetrievalAttemptResumesOnceAfterLease() {
+        var fixture = Fixture.ready();
+        var key = new GenerationKey("client-section-1", SOLUTION_ID, REQUIREMENT_ID,
+                OUTLINE_ID, SECTION_ID, Optional.empty());
+        var retrieving = GenerationAttempt.start(ATTEMPT_ID, key, NOW).startRetrieval(NOW);
+        fixture.attempts.values.put(key.clientKey(), retrieving);
+
+        var result = fixture.service.generate(commandAt(NOW.plusSeconds(180)));
+
+        assertThat(result.attempt().status()).isEqualTo(GenerationStatus.SUCCEEDED);
+        assertThat(result.attempt().executionCount()).isEqualTo(2);
+        assertThat(fixture.retrievalCalls).isEqualTo(1);
+        assertThat(fixture.modelCalls).isEqualTo(1);
+    }
+
+    @Test
+    void retryableAttemptStopsAfterConfiguredExecutionLimit() {
+        var fixture = Fixture.ready();
+        var key = new GenerationKey("client-section-1", SOLUTION_ID, REQUIREMENT_ID,
+                OUTLINE_ID, SECTION_ID, Optional.empty());
+        var attempt = GenerationAttempt.start(ATTEMPT_ID, key, NOW).startRetrieval(NOW);
+        for (int count = 1; count < 3; count++) {
+            attempt = attempt.failRetryable("RETRIEVAL_UNAVAILABLE", NOW).retry(NOW);
+        }
+        attempt = attempt.failRetryable("RETRIEVAL_UNAVAILABLE", NOW);
+        fixture.attempts.values.put(key.clientKey(), attempt);
+
+        var result = fixture.service.generate(commandAt(NOW.plusSeconds(180)));
+
+        assertThat(result.attempt().status()).isEqualTo(GenerationStatus.FAILED_MANUAL);
+        assertThat(result.attempt().failureCode()).contains("RETRY_LIMIT_REACHED");
+        assertThat(result.attempt().executionCount()).isEqualTo(3);
         assertThat(fixture.retrievalCalls).isZero();
         assertThat(fixture.modelCalls).isZero();
     }
@@ -392,6 +548,8 @@ class SectionGenerationServiceTest {
             var fixture = Fixture.ready();
             var draft = candidate(id(90 + verdict.ordinal()), verdict);
             fixture.sections.insertIfAbsent(draft);
+            fixture.evidenceSources.linkVersion(draft.id(),
+                    List.of(GenerationEvidenceSource.from(1, evidence())));
             var sectionCount = fixture.sections.values.size();
 
             assertThatThrownBy(() -> fixture.service.adoptSection(
@@ -410,6 +568,8 @@ class SectionGenerationServiceTest {
         var fixture = Fixture.ready();
         var draft = candidate(id(90), CitationVerdict.HUMAN_CONFIRMATION_REQUIRED);
         fixture.sections.insertIfAbsent(draft);
+        fixture.evidenceSources.linkVersion(draft.id(),
+                List.of(GenerationEvidenceSource.from(1, evidence())));
 
         var updated = fixture.service.adoptSection(
                 ACTOR_ID, SOLUTION_ID, draft.id(), 3, NOW.plusSeconds(1));
@@ -436,6 +596,12 @@ class SectionGenerationServiceTest {
                 "client-section-1", Optional.empty(), 3, NOW);
     }
 
+    private static GenerateSectionCommand commandAt(Instant at) {
+        return new GenerateSectionCommand(ACTOR_ID, SPACE_ID, SOLUTION_ID, SECTION_ID,
+                ATTEMPT_ID, SECTION_VERSION_ID, RETRIEVAL_REQUEST_ID,
+                "client-section-1", Optional.empty(), 3, at);
+    }
+
     private static UUID id(int suffix) {
         return UUID.fromString("00000000-0000-0000-0000-" + String.format("%012d", suffix));
     }
@@ -446,6 +612,7 @@ class SectionGenerationServiceTest {
         private final InMemoryRequirementRepository requirements = new InMemoryRequirementRepository();
         private final InMemoryOutlineRepository outlines = new InMemoryOutlineRepository();
         private final InMemoryAttemptStore attempts = new InMemoryAttemptStore(events);
+        private final InMemoryGenerationEvidenceStore evidenceSources = new InMemoryGenerationEvidenceStore();
         private final InMemorySectionRepository sections = new InMemorySectionRepository(events);
         private List<Evidence> evidence = List.of(evidence());
         private int retrievalCalls;
@@ -457,6 +624,9 @@ class SectionGenerationServiceTest {
         private int retrievalFailuresRemaining;
         private int modelFailuresRemaining;
         private Runnable duringModel = () -> { };
+        private Runnable duringRetrieval = () -> { };
+        private boolean evidenceReadable = true;
+        private boolean randomEvidenceIdsAfterFirst;
         private Runnable beforeCommit = () -> { };
         private final List<AuditCommand> audit = new ArrayList<>();
         private final SectionGenerationService service;
@@ -490,6 +660,14 @@ class SectionGenerationServiceTest {
                 if (retrievalFailuresRemaining-- > 0) {
                     throw new IllegalStateException("retrieval temporarily unavailable");
                 }
+                duringRetrieval.run();
+                if (randomEvidenceIdsAfterFirst && retrievalCalls > 1) {
+                    var original = evidence.getFirst();
+                    var replacement = new Evidence(original.spaceId(), id(1000 + retrievalCalls),
+                            original.documentId(), original.versionId(), original.nodeId(),
+                            original.title(), original.excerpt(), original.score(), original.locator());
+                    return pack(request.requestId(), List.of(replacement));
+                }
                 return pack(request.requestId(), evidence);
             };
             SolutionModelPort model = new SolutionModelPort() {
@@ -518,14 +696,18 @@ class SectionGenerationServiceTest {
                         .toList();
             });
             service = new SectionGenerationService(
-                    solutions, requirements, outlines, sections, attempts,
-                    authorization, retrieval, model, verification, GenerationPolicy.defaults(),
+                    solutions, requirements, outlines, sections, attempts, evidenceSources,
+                    authorization, retrieval, (actor, space, selected, at) -> {
+                        if (!evidenceReadable) throw new SecurityException("source revoked");
+                    }, model, verification, GenerationPolicy.defaults(),
                     (key, attemptId, version, succeeded, expectedRevision) -> {
                         beforeCommit.run();
                         if (!isCurrent(key)) {
                             return false;
                         }
                         sections.insertForAttempt(attemptId, version);
+                        evidenceSources.linkVersion(version.id(),
+                                evidenceSources.findByAttemptId(attemptId));
                         attempts.replace(succeeded, expectedRevision);
                         return true;
                     }, command -> {
@@ -723,6 +905,9 @@ class SectionGenerationServiceTest {
                 if (current == null || current.revision() != expectedRevision) {
                     throw new GenerationRequestConflictException();
                 }
+                if (next.revision() != expectedRevision + 1) {
+                    throw new GenerationStateException();
+                }
                 return next;
             });
         }
@@ -761,6 +946,28 @@ class SectionGenerationServiceTest {
             events.add("section:insert");
             values.putIfAbsent(version.id(), version);
             byAttempt.putIfAbsent(attemptId, version);
+        }
+    }
+
+    private static final class InMemoryGenerationEvidenceStore implements GenerationEvidenceStore {
+        private final Map<UUID, List<GenerationEvidenceSource>> byAttempt = new HashMap<>();
+        private final Map<UUID, List<GenerationEvidenceSource>> byVersion = new HashMap<>();
+
+        @Override public void saveSnapshot(UUID attemptId, List<GenerationEvidenceSource> sources) {
+            var original = byAttempt.putIfAbsent(attemptId, List.copyOf(sources));
+            if (original != null && !original.equals(sources)) throw new GenerationRequestConflictException();
+        }
+
+        @Override public List<GenerationEvidenceSource> findByAttemptId(UUID attemptId) {
+            return byAttempt.getOrDefault(attemptId, List.of());
+        }
+
+        @Override public List<GenerationEvidenceSource> findBySectionVersionId(UUID versionId) {
+            return byVersion.getOrDefault(versionId, List.of());
+        }
+
+        private void linkVersion(UUID versionId, List<GenerationEvidenceSource> sources) {
+            byVersion.put(versionId, List.copyOf(sources));
         }
     }
 }

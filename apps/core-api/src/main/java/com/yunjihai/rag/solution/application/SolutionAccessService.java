@@ -55,6 +55,7 @@ public final class SolutionAccessService implements SolutionAuthorizationPort {
         if (administrator || active.contains(SpaceRole.SPACE_ADMIN) || active.contains(SpaceRole.EDITOR)) {
             allowed.add(SolutionAction.EDIT_REQUIREMENTS);
             allowed.add(SolutionAction.EDIT_OUTLINE);
+            allowed.add(SolutionAction.ADOPT_SECTION);
         }
         if (administrator || active.contains(SpaceRole.SPACE_ADMIN) || active.contains(SpaceRole.REVIEWER_PUBLISHER)) {
             allowed.add(SolutionAction.CONFIRM_REQUIREMENTS);

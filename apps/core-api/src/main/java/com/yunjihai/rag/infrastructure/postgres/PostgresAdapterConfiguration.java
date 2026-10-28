@@ -67,6 +67,9 @@ import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaSourceAccessPort;
 import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.solution.application.SolutionAccessService;
+import com.yunjihai.rag.solution.application.SolutionGenerationAuthorizationService;
+import com.yunjihai.rag.solution.application.SolutionSectionAdoptionService;
+import com.yunjihai.rag.solution.application.CurrentGenerationEvidenceAuthorization;
 import com.yunjihai.rag.solution.application.SolutionSourceAccess;
 import com.yunjihai.rag.solution.application.SolutionReviewPolicy;
 import com.yunjihai.rag.solution.application.SolutionCommandService;
@@ -74,12 +77,18 @@ import com.yunjihai.rag.solution.SolutionWorkbenchService;
 import com.yunjihai.rag.solution.model.SolutionModelPort;
 import com.yunjihai.rag.solution.model.SolutionModelRequest;
 import com.yunjihai.rag.solution.model.SolutionModelResponse;
+import com.yunjihai.rag.solution.generation.GenerationPolicy;
+import com.yunjihai.rag.solution.generation.GenerationEvidenceAuthorizationPort;
+import com.yunjihai.rag.solution.generation.SectionGenerationService;
+import com.yunjihai.rag.solution.verification.SectionVerificationService;
+import com.yunjihai.rag.retrieval.TrustedRetrievalService;
 import com.yunjihai.rag.qa.evaluation.EvaluationDataset;
 import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
 import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
+import org.springframework.context.annotation.Primary;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -147,6 +156,70 @@ public class PostgresAdapterConfiguration {
     SolutionSourceAccess solutionSourceAccess(KnowledgeSpaceReadAuthorization spaces,
             JdbcSolutionDocumentSourcePort documents) {
         return new SolutionSourceAccess(spaces, documents);
+    }
+
+    @Bean
+    @Primary
+    SolutionGenerationAuthorizationService solutionGenerationAuthorizationService(
+            SolutionAccessService access, SolutionSourceAccess sources,
+            JdbcSolutionRepository solutions, JdbcRequirementVersionRepository requirements) {
+        return new SolutionGenerationAuthorizationService(access, sources, solutions, requirements);
+    }
+
+    @Bean
+    GenerationEvidenceAuthorizationPort generationEvidenceAuthorizationPort(
+            JdbcSolutionDocumentSourcePort documents) {
+        return new CurrentGenerationEvidenceAuthorization(documents);
+    }
+
+    @Bean
+    JdbcGenerationAttemptStore jdbcGenerationAttemptStore(JdbcClient jdbc) {
+        return new JdbcGenerationAttemptStore(jdbc);
+    }
+
+    @Bean
+    JdbcGenerationEvidenceStore jdbcGenerationEvidenceStore(
+            JdbcClient jdbc, PlatformTransactionManager transactions) {
+        return new JdbcGenerationEvidenceStore(jdbc, transactions);
+    }
+
+    @Bean
+    JdbcSectionVersionRepository jdbcSectionVersionRepository(
+            JdbcClient jdbc, PlatformTransactionManager transactions) {
+        return new JdbcSectionVersionRepository(jdbc, transactions);
+    }
+
+    @Bean
+    JdbcSectionGenerationCommitPort jdbcSectionGenerationCommitPort(
+            JdbcClient jdbc, PlatformTransactionManager transactions, JdbcSectionVersionRepository sections) {
+        return new JdbcSectionGenerationCommitPort(jdbc, transactions, sections);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    SectionGenerationService sectionGenerationService(
+            JdbcSolutionRepository solutions, JdbcRequirementVersionRepository requirements,
+            JdbcOutlineVersionRepository outlines, JdbcSectionVersionRepository sections,
+            JdbcGenerationAttemptStore attempts, JdbcGenerationEvidenceStore evidenceStore,
+            SolutionGenerationAuthorizationService authorization,
+            TrustedRetrievalService retrieval, GenerationEvidenceAuthorizationPort evidenceAuthorization,
+            SolutionModelPort model,
+            SectionVerificationService verification, JdbcSectionGenerationCommitPort commit,
+            AuditService audit, Clock clock) {
+        return new SectionGenerationService(solutions, requirements, outlines, sections,
+                attempts, evidenceStore, authorization, retrieval, evidenceAuthorization, model, verification,
+                GenerationPolicy.defaults(), commit, audit, clock);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    SolutionSectionAdoptionService solutionSectionAdoptionService(
+            JdbcSolutionRepository solutions, JdbcSectionVersionRepository sections,
+            SolutionGenerationAuthorizationService authorization,
+            JdbcSolutionCommandIdempotencyStore idempotency, PlatformTransactionManager transactions,
+            SectionGenerationService generation, AuditService audit, Clock clock) {
+        return new SolutionSectionAdoptionService(solutions, sections, authorization, idempotency,
+                new TransactionTemplate(transactions), generation::adoptSection, audit, clock);
     }
 
     @Bean

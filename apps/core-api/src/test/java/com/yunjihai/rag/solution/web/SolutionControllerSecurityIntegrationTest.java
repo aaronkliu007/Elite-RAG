@@ -9,6 +9,7 @@ import com.yunjihai.rag.access.role.*;
 import com.yunjihai.rag.solution.application.*;
 import com.yunjihai.rag.solution.domain.*;
 import com.yunjihai.rag.solution.port.*;
+import com.yunjihai.rag.solution.generation.*;
 import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
 import org.junit.jupiter.api.Test;
@@ -63,6 +64,22 @@ class SolutionControllerSecurityIntegrationTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test void sectionGenerationRequiresSessionCsrfAndIdempotencyKey() throws Exception {
+        String path = "/api/v1/solutions/{solutionId}/sections/{sectionId}/generation-attempts";
+        var sectionId = UUID.randomUUID();
+        var body = "{\"expectedRevision\":3,\"baselineSectionVersionId\":null}";
+        mvc.perform(post(path, SOLUTION, sectionId).with(csrf())
+                        .contentType("application/json").content(body))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post(path, SOLUTION, sectionId).with(authentication(session()))
+                        .header("Idempotency-Key", "generation-key")
+                        .contentType("application/json").content(body))
+                .andExpect(status().isForbidden());
+        mvc.perform(post(path, SOLUTION, sectionId).with(authentication(session())).with(csrf())
+                        .contentType("application/json").content(body))
+                .andExpect(status().isBadRequest());
+    }
+
     @Test void rejectsOutlineRevisionWithoutChangeReason() throws Exception {
         mvc.perform(put("/api/v1/solutions/{solutionId}/outline", SOLUTION)
                         .with(authentication(session())).with(csrf()).contentType("application/json")
@@ -109,6 +126,8 @@ class SolutionControllerSecurityIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.sourceAccessValid").value(false))
                     .andExpect(jsonPath("$.requirementVersion").isEmpty())
+                    .andExpect(jsonPath("$.allowedActions").value(
+                            org.hamcrest.Matchers.not(org.hamcrest.Matchers.hasItem("ADOPT_SECTION"))))
                     .andExpect(jsonPath("$.name").value("测试方案"));
         } finally {
             SOURCE_GRANTED.set(true);
@@ -191,6 +210,32 @@ class SolutionControllerSecurityIntegrationTest {
                             sample.phase(), sample.revision(), NOW, NOW)) : List.of();
             return new SolutionController(commands, solutions, query, requirements, outlines,
                     access, sources, new SolutionReviewPolicy(false), Clock.fixed(NOW, ZoneOffset.UTC));
+        }
+
+        @Bean SolutionSectionController solutionSectionController() {
+            SectionGenerationPort generation = new SectionGenerationPort() {
+                public SectionGenerationResult generate(GenerateSectionCommand command) {
+                    throw new UnsupportedOperationException();
+                }
+                public SectionGenerationResult readAttempt(UUID actor, UUID space, UUID solution,
+                        UUID section, String key, Instant at) { throw new UnsupportedOperationException(); }
+                public Solution adoptSection(UUID actor, UUID solution, UUID version,
+                        long revision, Instant at) { throw new UnsupportedOperationException(); }
+            };
+            SolutionRepository solutions = new SolutionRepository() {
+                public Optional<Solution> findById(UUID id) { return Optional.empty(); }
+                public void insert(Solution solution) { throw new UnsupportedOperationException(); }
+                public void replace(Solution solution, long revision) { throw new UnsupportedOperationException(); }
+            };
+            SectionVersionRepository sections = new SectionVersionRepository() {
+                public Optional<SectionVersion> findById(UUID id) { return Optional.empty(); }
+                public SectionVersion insertIfAbsent(SectionVersion version) { throw new UnsupportedOperationException(); }
+                public Optional<SectionVersion> findByAttemptId(UUID id) { return Optional.empty(); }
+            };
+            return new SolutionSectionController(generation,
+                    (actor, solution, section, version, revision, key) -> { throw new UnsupportedOperationException(); },
+                    solutions, sections, (actor, space, solution, action, at) -> {},
+                    Clock.fixed(NOW, ZoneOffset.UTC));
         }
     }
 }

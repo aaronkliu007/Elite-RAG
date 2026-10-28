@@ -147,9 +147,28 @@ final class InMemorySolutionWorkbenchScenario {
                 .map(input -> new ClaimVerification(
                         input.claimId(), CitationVerdict.SUPPORTED, "SEMANTIC_SUPPORTED"))
                 .toList());
+        var evidenceSources = new com.yunjihai.rag.solution.generation.GenerationEvidenceStore() {
+                    private final java.util.Map<UUID, java.util.List<com.yunjihai.rag.solution.generation.GenerationEvidenceSource>> snapshots = new java.util.HashMap<>();
+                    @Override public void saveSnapshot(UUID attemptId, java.util.List<com.yunjihai.rag.solution.generation.GenerationEvidenceSource> sources) {
+                        snapshots.put(attemptId, java.util.List.copyOf(sources));
+                    }
+                    @Override public java.util.List<com.yunjihai.rag.solution.generation.GenerationEvidenceSource> findByAttemptId(UUID attemptId) {
+                        return snapshots.getOrDefault(attemptId, java.util.List.of());
+                    }
+                    @Override public java.util.List<com.yunjihai.rag.solution.generation.GenerationEvidenceSource> findBySectionVersionId(UUID versionId) {
+                        for (var entry : snapshots.entrySet()) {
+                            if (sections.findByAttemptId(entry.getKey())
+                                    .map(version -> version.id().equals(versionId)).orElse(false)) {
+                                return entry.getValue();
+                            }
+                        }
+                        return java.util.List.of();
+                    }
+                };
         var generation = new SectionGenerationService(
-                solutions, requirements, outlines, sections, attempts,
-                authorization, retrieval, model, verification, GenerationPolicy.defaults(),
+                solutions, requirements, outlines, sections, attempts, evidenceSources,
+                authorization, retrieval, (actor, space, evidence, at) -> {},
+                model, verification, GenerationPolicy.defaults(),
                 (key, attemptId, version, succeeded, expectedAttemptRevision) -> {
                     var current = solutions.findById(key.solutionId()).orElseThrow();
                     if (!current.currentRequirementVersionId().equals(key.requirementVersionId())

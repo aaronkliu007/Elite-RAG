@@ -25,7 +25,10 @@ class SolutionAccessServiceTest {
         var editor = new SolutionAccessService((user, target, checked) -> {},
                 new Roles(false, Set.of(SpaceRole.EDITOR)));
         assertThat(editor.allowedActions(actor, space, at)).containsExactlyInAnyOrder(
-                SolutionAction.EDIT_REQUIREMENTS, SolutionAction.EDIT_OUTLINE);
+                SolutionAction.EDIT_REQUIREMENTS, SolutionAction.EDIT_OUTLINE,
+                SolutionAction.ADOPT_SECTION);
+        assertThatCode(() -> editor.requireAction(actor, space, UUID.randomUUID(),
+                SolutionAction.ADOPT_SECTION, at)).doesNotThrowAnyException();
         assertThatThrownBy(() -> editor.requireAction(actor, space, UUID.randomUUID(),
                 SolutionAction.CONFIRM_OUTLINE, at)).isInstanceOf(AccessDeniedAsNotFoundException.class);
         var reviewer = new SolutionAccessService((user, target, checked) -> {},

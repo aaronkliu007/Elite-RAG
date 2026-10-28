@@ -4,6 +4,7 @@ import com.yunjihai.rag.audit.AuditAction;
 import com.yunjihai.rag.audit.AuditCommand;
 import com.yunjihai.rag.audit.AuditOutcome;
 import com.yunjihai.rag.audit.AuditSink;
+import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.common.UuidV7;
 import com.yunjihai.rag.retrieval.RetrievalService;
 import com.yunjihai.rag.retrieval.domain.Evidence;
@@ -28,6 +29,7 @@ import com.yunjihai.rag.solution.port.RequirementVersionRepository;
 import com.yunjihai.rag.solution.port.SolutionRepository;
 import com.yunjihai.rag.solution.verification.SectionVerificationService;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -37,20 +39,23 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-public final class SectionGenerationService {
+public final class SectionGenerationService implements SectionGenerationPort {
 
     private final SolutionRepository solutions;
     private final RequirementVersionRepository requirements;
     private final OutlineVersionRepository outlines;
     private final SectionVersionRepository sections;
     private final GenerationAttemptStore attempts;
+    private final GenerationEvidenceStore evidenceStore;
     private final SolutionAuthorizationPort authorization;
     private final RetrievalService retrieval;
+    private final GenerationEvidenceAuthorizationPort evidenceAuthorization;
     private final SolutionModelPort model;
     private final SectionVerificationService verification;
     private final GenerationPolicy policy;
     private final SectionGenerationCommitPort commit;
     private final AuditSink audit;
+    private final Clock clock;
 
     public SectionGenerationService(
             SolutionRepository solutions,
@@ -58,25 +63,50 @@ public final class SectionGenerationService {
             OutlineVersionRepository outlines,
             SectionVersionRepository sections,
             GenerationAttemptStore attempts,
+            GenerationEvidenceStore evidenceStore,
             SolutionAuthorizationPort authorization,
             RetrievalService retrieval,
+            GenerationEvidenceAuthorizationPort evidenceAuthorization,
             SolutionModelPort model,
             SectionVerificationService verification,
             GenerationPolicy policy,
             SectionGenerationCommitPort commit,
             AuditSink audit) {
+        this(solutions, requirements, outlines, sections, attempts, evidenceStore, authorization,
+                retrieval, evidenceAuthorization, model, verification, policy, commit, audit, Clock.systemUTC());
+    }
+
+    public SectionGenerationService(
+            SolutionRepository solutions,
+            RequirementVersionRepository requirements,
+            OutlineVersionRepository outlines,
+            SectionVersionRepository sections,
+            GenerationAttemptStore attempts,
+            GenerationEvidenceStore evidenceStore,
+            SolutionAuthorizationPort authorization,
+            RetrievalService retrieval,
+            GenerationEvidenceAuthorizationPort evidenceAuthorization,
+            SolutionModelPort model,
+            SectionVerificationService verification,
+            GenerationPolicy policy,
+            SectionGenerationCommitPort commit,
+            AuditSink audit,
+            Clock clock) {
         this.solutions = Objects.requireNonNull(solutions, "solutions");
         this.requirements = Objects.requireNonNull(requirements, "requirements");
         this.outlines = Objects.requireNonNull(outlines, "outlines");
         this.sections = Objects.requireNonNull(sections, "sections");
         this.attempts = Objects.requireNonNull(attempts, "attempts");
+        this.evidenceStore = Objects.requireNonNull(evidenceStore, "evidenceStore");
         this.authorization = Objects.requireNonNull(authorization, "authorization");
         this.retrieval = Objects.requireNonNull(retrieval, "retrieval");
+        this.evidenceAuthorization = Objects.requireNonNull(evidenceAuthorization, "evidenceAuthorization");
         this.model = Objects.requireNonNull(model, "model");
         this.verification = Objects.requireNonNull(verification, "verification");
         this.policy = Objects.requireNonNull(policy, "policy");
         this.commit = Objects.requireNonNull(commit, "commit");
         this.audit = Objects.requireNonNull(audit, "audit");
+        this.clock = Objects.requireNonNull(clock, "clock");
     }
 
     public SectionGenerationResult generate(GenerateSectionCommand command) {
@@ -113,6 +143,8 @@ public final class SectionGenerationService {
         var attempt = registration.attempt();
         attempt.validateRequest(key);
         if (attempt.status() == GenerationStatus.SUCCEEDED) {
+            authorizeStoredEvidence(command.actorId(), command.spaceId(), attempt.id(),
+                    attempt.evidenceIds());
             var completedAttemptId = attempt.id();
             var completed = sections.findById(attempt.resultSectionVersionId().orElseThrow())
                     .or(() -> sections.findByAttemptId(completedAttemptId))
@@ -126,11 +158,25 @@ public final class SectionGenerationService {
         }
         if (!registration.created() && isActive(attempt.status())) {
             if (attempt.status() == GenerationStatus.VERIFYING) {
-                return recoverVerification(attempt, command);
+                if (sections.findByAttemptId(attempt.id()).isPresent()
+                        || leaseExpired(attempt, command.at())) {
+                    return recoverVerification(attempt, command);
+                }
+                return new SectionGenerationResult(attempt, Optional.empty());
             }
-            return new SectionGenerationResult(attempt, Optional.empty());
+            if (!leaseExpired(attempt, command.at())) {
+                return new SectionGenerationResult(attempt, Optional.empty());
+            }
+            var expired = attempt.failRetryable("WORKER_LEASE_EXPIRED", command.at());
+            saveAttempt(expired, attempt);
+            attempt = expired;
         }
         if (attempt.status() == GenerationStatus.FAILED_RETRYABLE) {
+            if (attempt.executionCount() >= policy.maxExecutions()) {
+                var exhausted = attempt.exhaustRetries(command.at());
+                saveAttempt(exhausted, attempt);
+                return new SectionGenerationResult(exhausted, Optional.empty());
+            }
             var retried = attempt.retry(command.at());
             saveAttempt(retried, attempt);
             attempt = retried;
@@ -163,18 +209,41 @@ public final class SectionGenerationService {
             return failRetryable(attempt, "RETRIEVAL_INCOMPLETE", command);
         }
 
-        var selectedEvidenceIds = evidenceIds(pack.evidence());
-        if (attempt.status() == GenerationStatus.GENERATING
-                && !attempt.evidenceIds().equals(selectedEvidenceIds)) {
-            var failed = attempt.failManual("EVIDENCE_SNAPSHOT_CHANGED", command.at());
-            saveAttempt(failed, attempt);
-            return new SectionGenerationResult(failed, Optional.empty());
+        List<Evidence> selectedEvidence = pack.evidence();
+        List<GenerationEvidenceSource> snapshot;
+        if (attempt.status() == GenerationStatus.GENERATING) {
+            snapshot = evidenceStore.findByAttemptId(attempt.id());
+            if (snapshot.isEmpty() || !sourceIds(snapshot).equals(attempt.evidenceIds())) {
+                var failed = attempt.failManual("EVIDENCE_SNAPSHOT_MISSING", command.at());
+                saveAttempt(failed, attempt);
+                return new SectionGenerationResult(failed, Optional.empty());
+            }
+            try {
+                selectedEvidence = alignEvidence(snapshot, pack.evidence());
+            } catch (IllegalArgumentException changed) {
+                var failed = attempt.failManual("EVIDENCE_SNAPSHOT_CHANGED", command.at());
+                saveAttempt(failed, attempt);
+                return new SectionGenerationResult(failed, Optional.empty());
+            }
+        } else {
+            snapshot = sourceSnapshot(selectedEvidence);
         }
+        var selectedEvidenceIds = evidenceIds(selectedEvidence);
         if (attempt.status() == GenerationStatus.RETRIEVING) {
             var generating = attempt.recordEvidence(
                     pack.requestId(), selectedEvidenceIds, command.at());
             saveAttempt(generating, attempt);
             attempt = generating;
+            evidenceStore.saveSnapshot(attempt.id(), snapshot);
+        }
+        try {
+            authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
+                    SolutionAction.ADOPT_SECTION, clock.instant());
+            evidenceAuthorization.requireReadable(command.actorId(), command.spaceId(),
+                    snapshot, clock.instant());
+        } catch (RuntimeException denied) {
+            cancel(attempt, command);
+            throw denied;
         }
         com.yunjihai.rag.solution.model.SolutionModelResponse<GeneratedSectionDraft> response;
         try {
@@ -182,7 +251,7 @@ public final class SectionGenerationService {
                     command.retrievalRequestId(), command.clientKey(), ModelScenario.SECTION_GENERATION,
                     policy.sectionPrompt(), context.requirements().items(), Optional.of(context.section()),
                     List.of("事实声明必须引用给定证据", "不得使用证据白名单以外的标识"),
-                    pack.evidence(), command.at().plus(policy.modelTimeout())),
+                    selectedEvidence, command.at().plus(policy.modelTimeout())),
                     GeneratedSectionDraft.class);
         } catch (RuntimeException unavailable) {
             return failRetryable(attempt, "MODEL_UNAVAILABLE", command);
@@ -193,16 +262,17 @@ public final class SectionGenerationService {
             return new SectionGenerationResult(failed, Optional.empty());
         }
         var verifying = attempt.startVerification(response.usage(), command.at());
+        saveAttempt(verifying, attempt);
         if (!isCurrent(key)) {
-            return cancel(verifying, attempt, command);
+            return cancel(verifying, command);
         }
         SectionVersion version;
         try {
             var governedClaims = applyOutlineRisks(response.body().claims(), context.section());
             var report = verification.verify(
-                    governedClaims, pack.evidence(), command.at().plus(policy.modelTimeout()));
+                    governedClaims, selectedEvidence, command.at().plus(policy.modelTimeout()));
             if (!isCurrent(key)) {
-                return cancel(verifying, attempt, command);
+                return cancel(verifying, command);
             }
             var draft = response.body();
             version = new SectionVersion(
@@ -212,15 +282,70 @@ public final class SectionGenerationService {
                     command.baselineSectionVersionId(), command.baselineSectionVersionId(),
                     Optional.empty(), Optional.of(response.modelId()), command.at(), report);
         } catch (IllegalArgumentException | NullPointerException invalidModelStructure) {
-            var failed = attempt.failManual("INVALID_MODEL_STRUCTURE", command.at());
-            saveAttempt(failed, attempt);
+            var failed = verifying.failManual("INVALID_MODEL_STRUCTURE", command.at());
+            saveAttempt(failed, verifying);
             return new SectionGenerationResult(failed, Optional.empty());
         }
+        try {
+            authorization.require(command.actorId(), command.spaceId(), command.solutionId(),
+                    SolutionAction.ADOPT_SECTION, clock.instant());
+            evidenceAuthorization.requireReadable(command.actorId(), command.spaceId(),
+                    snapshot, clock.instant());
+        } catch (RuntimeException denied) {
+            cancel(verifying, command);
+            throw denied;
+        }
         var succeeded = verifying.succeed(version.id(), command.at());
-        if (!commit.commitIfCurrent(key, attempt.id(), version, succeeded, attempt.revision())) {
-            return cancel(verifying, attempt, command);
+        if (!commit.commitIfCurrent(key, attempt.id(), version, succeeded, verifying.revision())) {
+            return cancel(verifying, command);
         }
         return new SectionGenerationResult(succeeded, Optional.of(version));
+    }
+
+    @Override
+    public SectionGenerationResult readAttempt(UUID actorId, UUID spaceId, UUID solutionId,
+            UUID sectionId, String clientKey, Instant at) {
+        Objects.requireNonNull(actorId);
+        Objects.requireNonNull(spaceId);
+        Objects.requireNonNull(solutionId);
+        Objects.requireNonNull(sectionId);
+        Objects.requireNonNull(clientKey);
+        Objects.requireNonNull(at);
+        authorization.require(actorId, spaceId, solutionId, SolutionAction.ADOPT_SECTION, clock.instant());
+        var attempt = attempts.findByClientKey(clientKey)
+                .orElseThrow(AccessDeniedAsNotFoundException::new);
+        var key = attempt.key();
+        if (!key.solutionId().equals(solutionId) || !key.sectionId().equals(sectionId)) {
+            throw new AccessDeniedAsNotFoundException();
+        }
+        var solution = loadSolution(solutionId, spaceId);
+        var context = loadContext(solutionId, spaceId, sectionId,
+                key.baselineSectionVersionId(), solution.revision());
+        if (!context.requirements().id().equals(key.requirementVersionId())
+                || !context.outline().id().equals(key.outlineVersionId())) {
+            throw new GenerationRequestConflictException();
+        }
+        if (attempt.status() != GenerationStatus.SUCCEEDED) {
+            return new SectionGenerationResult(attempt, Optional.empty());
+        }
+        authorizeStoredEvidence(actorId, spaceId, attempt.id(), attempt.evidenceIds());
+        var version = sections.findById(attempt.resultSectionVersionId().orElseThrow())
+                .orElseThrow(GenerationStateException::new);
+        if (!version.solutionId().equals(solutionId) || !version.sectionId().equals(sectionId)
+                || !version.requirementVersionId().equals(key.requirementVersionId())
+                || !version.outlineVersionId().equals(key.outlineVersionId())) {
+            throw new GenerationStateException();
+        }
+        return new SectionGenerationResult(attempt, Optional.of(version));
+    }
+
+    private void authorizeStoredEvidence(UUID actorId, UUID spaceId, UUID attemptId,
+            Set<UUID> expectedEvidenceIds) {
+        var snapshot = evidenceStore.findByAttemptId(attemptId);
+        if (snapshot.isEmpty() || !sourceIds(snapshot).equals(expectedEvidenceIds)) {
+            throw new AccessDeniedAsNotFoundException();
+        }
+        evidenceAuthorization.requireReadable(actorId, spaceId, snapshot, clock.instant());
     }
 
     public Solution adoptSection(
@@ -270,6 +395,14 @@ public final class SectionGenerationService {
         if (candidate.verification().hasBlockingVerdict()) {
             throw new SolutionLifecycleException("SECTION_VERIFICATION_BLOCKING");
         }
+        var candidateSources = evidenceStore.findBySectionVersionId(candidate.id());
+        var citedSources = candidateSources.stream()
+                .filter(source -> candidate.evidenceIds().contains(source.evidenceId()))
+                .toList();
+        if (citedSources.isEmpty() || !sourceIds(citedSources).equals(candidate.evidenceIds())) {
+            throw new AccessDeniedAsNotFoundException();
+        }
+        evidenceAuthorization.requireReadable(actorId, solution.spaceId(), citedSources, clock.instant());
         var outlineId = solution.currentOutlineVersionId()
                 .orElseThrow(() -> new SolutionLifecycleException("OUTLINE_NOT_CONFIRMED"));
         if (!solution.currentRequirementVersionId().equals(candidate.requirementVersionId())
@@ -337,6 +470,8 @@ public final class SectionGenerationService {
             GenerateSectionCommand command) {
         var checkpoint = sections.findByAttemptId(attempt.id());
         if (checkpoint.isPresent()) {
+            authorizeStoredEvidence(command.actorId(), command.spaceId(), attempt.id(),
+                    attempt.evidenceIds());
             var succeeded = attempt.succeed(checkpoint.orElseThrow().id(), command.at());
             saveAttempt(succeeded, attempt);
             return new SectionGenerationResult(succeeded, checkpoint);
@@ -347,8 +482,14 @@ public final class SectionGenerationService {
     }
 
     private Context loadContext(GenerateSectionCommand command) {
-        var solution = loadSolution(command.solutionId(), command.spaceId());
-        if (solution.revision() != command.expectedRevision()) {
+        return loadContext(command.solutionId(), command.spaceId(), command.sectionId(),
+                command.baselineSectionVersionId(), command.expectedRevision());
+    }
+
+    private Context loadContext(UUID solutionId, UUID spaceId, UUID sectionId,
+            Optional<UUID> baselineSectionVersionId, long expectedRevision) {
+        var solution = loadSolution(solutionId, spaceId);
+        if (solution.revision() != expectedRevision) {
             throw new ConcurrentSolutionUpdateException();
         }
         if (solution.requirementConfirmation().isEmpty()
@@ -367,11 +508,11 @@ public final class SectionGenerationService {
         var outline = outlines.findById(outlineId)
                 .orElseThrow(() -> new SolutionLifecycleException("OUTLINE_VERSION_NOT_FOUND"));
         var section = outline.nodes().stream()
-                .filter(node -> node.sectionId().equals(command.sectionId()))
+                .filter(node -> node.sectionId().equals(sectionId))
                 .findFirst()
                 .orElseThrow(() -> new SolutionLifecycleException("OUTLINE_SECTION_NOT_FOUND"));
-        var baseline = Optional.ofNullable(solution.adoptedSectionVersionIds().get(command.sectionId()));
-        if (!baseline.equals(command.baselineSectionVersionId())) {
+        var baseline = Optional.ofNullable(solution.adoptedSectionVersionIds().get(sectionId));
+        if (!baseline.equals(baselineSectionVersionId)) {
             throw new SolutionLifecycleException("SECTION_BASELINE_NOT_CURRENT");
         }
         return new Context(solution, requirement, outline, section);
@@ -411,6 +552,30 @@ public final class SectionGenerationService {
 
     private static Set<UUID> evidenceIds(List<Evidence> evidence) {
         return evidence.stream().map(Evidence::evidenceId).collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static Set<UUID> sourceIds(List<GenerationEvidenceSource> sources) {
+        return sources.stream().map(GenerationEvidenceSource::evidenceId)
+                .collect(Collectors.toUnmodifiableSet());
+    }
+
+    private static List<GenerationEvidenceSource> sourceSnapshot(List<Evidence> evidence) {
+        var sources = new java.util.ArrayList<GenerationEvidenceSource>(evidence.size());
+        for (int index = 0; index < evidence.size(); index++) {
+            sources.add(GenerationEvidenceSource.from(index + 1, evidence.get(index)));
+        }
+        return List.copyOf(sources);
+    }
+
+    private static List<Evidence> alignEvidence(
+            List<GenerationEvidenceSource> snapshot, List<Evidence> current) {
+        var aligned = new java.util.ArrayList<Evidence>(snapshot.size());
+        for (var source : snapshot) {
+            var match = current.stream().filter(source::matches).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("evidence source changed"));
+            aligned.add(source.withOriginalId(match));
+        }
+        return List.copyOf(aligned);
     }
 
     private static List<Claim> applyOutlineRisks(List<Claim> claims, OutlineNode section) {
@@ -482,6 +647,10 @@ public final class SectionGenerationService {
                 || status == GenerationStatus.RETRIEVING
                 || status == GenerationStatus.GENERATING
                 || status == GenerationStatus.VERIFYING;
+    }
+
+    private boolean leaseExpired(GenerationAttempt attempt, Instant at) {
+        return !at.isBefore(attempt.updatedAt().plus(policy.recoveryAfter()));
     }
 
     private static String queryText(RequirementVersion requirements, OutlineNode section) {

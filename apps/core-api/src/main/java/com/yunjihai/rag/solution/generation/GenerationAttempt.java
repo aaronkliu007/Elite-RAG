@@ -180,6 +180,13 @@ public record GenerationAttempt(
                 Optional.empty());
     }
 
+    public GenerationAttempt exhaustRetries(Instant at) {
+        requireStatus(GenerationStatus.FAILED_RETRYABLE);
+        return next(GenerationStatus.FAILED_MANUAL, executionCount, at,
+                retrievalRequestId, evidenceIds, modelUsage, resultSectionVersionId,
+                Optional.of("RETRY_LIMIT_REACHED"), Optional.empty());
+    }
+
     private GenerationAttempt next(
             GenerationStatus nextStatus,
             int nextExecutionCount,
