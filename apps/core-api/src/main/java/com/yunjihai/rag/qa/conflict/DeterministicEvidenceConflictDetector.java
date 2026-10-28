@@ -17,8 +17,9 @@ import java.util.regex.Pattern;
 
 public final class DeterministicEvidenceConflictDetector implements EvidenceConflictDetector {
     private static final Pattern FACT=Pattern.compile(
-            "([\\p{IsHan}A-Za-z0-9_（）()·\\-/]{2,40})\\s*"
-                    + "(?:设置为|设为|定为|[:：]|为|是)\\s*([^\\n。；;，,]{1,40})");
+            "([\\p{IsHan}A-Za-z0-9_（）()·\\-/ ]{2,40})\\s*"
+                    + "(?:设置为|设为|定为|[:：]|(?<!设置)(?<!设)(?<!定)为|是)"
+                    + "\\s*([^\\n。；;，,]{1,40})");
     private static final Pattern DATE=Pattern.compile(
             "^(\\d{4})\\s*(?:年|[-/.])\\s*(\\d{1,2})\\s*(?:月|[-/.])\\s*(\\d{1,2})\\s*日?");
     private static final Pattern QUANTITY=Pattern.compile(
@@ -59,7 +60,7 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
 
     private static List<Fact> extract(Evidence evidence){
         var facts=new ArrayList<Fact>();
-        var matcher=FACT.matcher(Normalizer.normalize(evidence.excerpt(),Normalizer.Form.NFKC));
+        var matcher=FACT.matcher(normalizeFactText(evidence.excerpt()));
         while(matcher.find()){
             String key=normalizeKey(matcher.group(1));
             canonicalValue(matcher.group(2)).ifPresent(value->
@@ -126,8 +127,15 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
                 .toUpperCase(Locale.ROOT);
     }
 
+    private static String normalizeFactText(String value){
+        return Normalizer.normalize(value,Normalizer.Form.NFKC)
+                .replaceAll("\\R","\n")
+                .replaceAll("[\\p{Zs}\\t]+"," ");
+    }
+
     private static String normalizeContent(String value){
-        return Normalizer.normalize(value,Normalizer.Form.NFKC).replaceAll("\\s+","").trim();
+        return Normalizer.normalize(value,Normalizer.Form.NFKC)
+                .replaceAll("[\\p{Z}\\p{javaWhitespace}]+","").trim();
     }
 
     private record Fact(UUID evidenceId,String key,String value){}

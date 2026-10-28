@@ -77,6 +77,8 @@ Embedding 与查询向量必须使用相同模型和维度。已有无向量索�
 - 向量关闭或 Embedding 不可用：保留 BM25 召回并标记 `VECTOR_UNAVAILABLE`。
 - Reranker 不可用：保留 BM25/向量经 RRF 融合后的顺序并标记 `RERANKER_UNAVAILABLE`。
 - OpenSearch、PostgreSQL 最终鉴权或最终证据再次鉴权不可用：整次问答失败关闭，不返回未复核答案。
+- 模型调用前会对不同证据中的显式键值事实做确定性冲突检测，覆盖日期、金额、期限、比例、容量、QPS/TPS、人数/设备数和启停状态，并先归一化万元/元、年/月、GB/MB 等等价值。发现冲突或检测器不可用时统一按 `CONFLICTING_EVIDENCE` 严格拒答，绝不降级为模型自由判断。
+- 当前冲突检测以高精度显式事实为边界，不承诺识别所有自然语言矛盾；未被结构化识别的自由文本仍受证据充分性、引用支持和黄金集门禁约束。
 - `NO_AUTHORIZED_SPACE`、`INSUFFICIENT_EVIDENCE`、`CONFLICTING_EVIDENCE`、`UNSAFE_TO_SEND`、`INVALID_MODEL_OUTPUT`、`UNSUPPORTED_CLAIM`：属于预期严格拒答；不得自动改为模型自由回答。
 - `MODEL_AUTHENTICATION`、`MODEL_RATE_LIMITED`、`MODEL_TIMEOUT`、`MODEL_UNAVAILABLE`、`MODEL_AUDIT_FAILED`、`FINAL_AUTHORIZATION_FAILED`、`QA_TIMEOUT`：属于系统故障；保留请求 ID 排障，但不得向用户泄露网关响应、提示词、证据或密钥。
 

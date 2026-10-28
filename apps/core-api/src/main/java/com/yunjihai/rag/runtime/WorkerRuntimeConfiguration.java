@@ -31,6 +31,7 @@ import com.yunjihai.rag.qa.QaMetrics;
 import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaPolicy;
 import com.yunjihai.rag.qa.QuestionDigestPort;
+import com.yunjihai.rag.qa.conflict.EvidenceConflictDetector;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.evaluation.EvaluationGate;
 import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
@@ -98,6 +99,7 @@ public class WorkerRuntimeConfiguration {
             QuestionDigestPort digests,
             SensitiveContentSanitizer sanitizer,
             ChatCompletionPort chat,
+            EvidenceConflictDetector conflictDetector,
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
             QaEvidenceAuthorizationPort evidenceAuthorization,
@@ -106,7 +108,7 @@ public class WorkerRuntimeConfiguration {
             EvaluationTraceRegistry evaluationTraces) {
         return new GroundedQaService(
                 authorizedSpaces,retrieval,persistence,audits,digests,sanitizer,chat,
-                citationVerifier,policy,evidenceAuthorization,clock,metrics,evaluationTraces);
+                conflictDetector,citationVerifier,policy,evidenceAuthorization,clock,metrics,evaluationTraces);
     }
 
     @Bean

@@ -26,10 +26,35 @@ class DeterministicEvidenceConflictDetectorTest {
     static Stream<Arguments> conflictingFacts(){
         return Stream.of(
                 Arguments.of("项目预算：1万元", "项目预算为2万元"),
+                Arguments.of("项目预算设置为1万元", "项目预算：2万元"),
+                Arguments.of("项目预算设为1万元", "项目预算为2万元"),
+                Arguments.of("项目预算定为1万元", "项目预算：2万元"),
                 Arguments.of("服务期限为12个月", "服务期限：24个月"),
                 Arguments.of("生效日期：2026年1月1日", "生效日期为2026-02-01"),
                 Arguments.of("折扣比例：10%", "折扣比例为20%"),
                 Arguments.of("功能状态：启用", "功能状态为停用"));
+    }
+
+    @ParameterizedTest
+    @MethodSource("factKeysWithUnicodeWhitespace")
+    void normalizesUnicodeWhitespaceInsideSemanticFactKeys(String left){
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,left),
+                evidence(2,"服务期限：24个月")))).isTrue();
+    }
+
+    static Stream<String> factKeysWithUnicodeWhitespace(){
+        return Stream.of(
+                "服务 期限：12个月",
+                "服务\u3000期限：12个月",
+                "服务\u2003期限：12个月");
+    }
+
+    @Test
+    void preservesLineBoundariesWhenExtractingMultipleFacts(){
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目预算：1万元\n服务期限：12个月"),
+                evidence(2,"项目预算：1万元\n服务期限：24个月")))).isTrue();
     }
 
     @ParameterizedTest

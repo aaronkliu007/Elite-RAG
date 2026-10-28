@@ -51,17 +51,20 @@
 **Files:**
 - Modify: `apps/core-api/src/main/java/com/yunjihai/rag/qa/GroundedQaService.java`
 - Modify: `apps/core-api/src/main/java/com/yunjihai/rag/runtime/WorkerRuntimeConfiguration.java`
+- Create: `apps/core-api/src/main/java/com/yunjihai/rag/qa/conflict/EvidenceConflictDetectorAutoConfiguration.java`
+- Create: `apps/core-api/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`
 - Modify: `apps/core-api/src/test/java/com/yunjihai/rag/qa/GroundedQaServiceTest.java`
 - Modify: `apps/core-api/src/test/java/com/yunjihai/rag/qa/web/QaTestHarness.java`
+- Create: `apps/core-api/src/test/java/com/yunjihai/rag/runtime/WorkerRuntimeConfigurationTest.java`
 - Modify: `docs/runbooks/grounded-qa.md`
 
 **Interfaces:**
 - Consumes: `EvidenceConflictDetector.hasConflict(List<Evidence>)`
 - Produces: 模型调用前的 `QaOutcome.Refused(..., CONFLICTING_EVIDENCE, ...)`
 
-- [ ] **Step 1:** 先写失败测试，证明跨文档语义冲突和检测器异常都严格拒答，且模型调用次数为零；非冲突继续原链路。
-- [ ] **Step 2:** 运行 `.\mvnw.cmd -pl apps/core-api '-Dtest=GroundedQaServiceTest' test`，确认当前编排未消费新端口而失败。
-- [ ] **Step 3:** 注入端口、替换旧私有检查、增加默认 Bean，并更新测试夹具和运行手册。
-- [ ] **Step 4:** 运行冲突检测与编排定向测试。
-- [ ] **Step 5:** 运行 `.\mvnw.cmd -pl apps/core-api test`、跳过测试打包、差异检查和敏感信息扫描。
-- [ ] **Step 6:** 完成整批只读代码审查，修复 Critical/Important 后创建本地提交，不推送远程。
+- [x] **Step 1:** 先写失败测试，证明跨文档语义冲突和检测器异常都严格拒答，且模型调用次数为零；非冲突继续原链路。
+- [x] **Step 2:** 运行 `.\mvnw.cmd -pl apps/core-api '-Dtest=GroundedQaServiceTest' test`，确认当前编排未消费新端口而失败。
+- [x] **Step 3:** 注入端口、替换旧私有检查、增加默认 Bean，并更新测试夹具和运行手册。
+- [x] **Step 4:** 运行冲突检测与编排定向测试。
+- [x] **Step 5:** 运行 `.\mvnw.cmd -pl apps/core-api test`、跳过测试打包、差异检查和敏感信息扫描。
+- [x] **Step 6:** 完成整批只读代码审查，修复 Critical/Important 后创建本地提交，不推送远程。

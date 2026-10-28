@@ -2,6 +2,7 @@ package com.yunjihai.rag.qa.web;
 
 import com.yunjihai.rag.api.idempotency.*;
 import com.yunjihai.rag.qa.*;
+import com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector;
 import com.yunjihai.rag.qa.domain.*;
 import com.yunjihai.rag.qa.model.*;
 import com.yunjihai.rag.qa.sanitization.*;
@@ -76,7 +77,8 @@ final class QaTestHarness {
             }
         };
         var service=new GroundedQaService(spaces,retrieval,persistence,ignored->{},
-                ignored->"a".repeat(64),sanitizer,chat,new ExactQuoteCitationSupportVerifier(),
+                ignored->"a".repeat(64),sanitizer,chat,new DeterministicEvidenceConflictDetector(),
+                new ExactQuoteCitationSupportVerifier(),
                 QaPolicy.defaults(),(requestId,actorId,at)->true,
                 Clock.fixed(NOW,ZoneOffset.UTC));
         var json=new ObjectMapper();

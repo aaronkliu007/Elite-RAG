@@ -7,6 +7,7 @@ import com.yunjihai.rag.qa.domain.QaOutcome;
 import com.yunjihai.rag.qa.domain.QaQuestion;
 import com.yunjihai.rag.qa.domain.QaStatus;
 import com.yunjihai.rag.qa.domain.RefusalReason;
+import com.yunjihai.rag.qa.conflict.EvidenceConflictDetector;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.GroundedAnswerPrompt;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
@@ -25,11 +26,9 @@ import com.yunjihai.rag.retrieval.domain.RetrievalQuery;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.text.Normalizer;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -49,6 +48,7 @@ public final class GroundedQaService {
     private final QuestionDigestPort digests;
     private final SensitiveContentSanitizer sanitizer;
     private final ChatCompletionPort chat;
+    private final EvidenceConflictDetector conflictDetector;
     private final CitationSupportVerifier citationVerifier;
     private final QaPolicy policy;
     private final QaEvidenceAuthorizationPort evidenceAuthorization;
@@ -64,12 +64,13 @@ public final class GroundedQaService {
             QuestionDigestPort digests,
             SensitiveContentSanitizer sanitizer,
             ChatCompletionPort chat,
+            EvidenceConflictDetector conflictDetector,
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
             QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock) {
         this(authorizedSpaces, retrieval, persistence, audits, digests, sanitizer, chat,
-                citationVerifier, policy, evidenceAuthorization, clock, QaMetrics.noop(),
+                conflictDetector, citationVerifier, policy, evidenceAuthorization, clock, QaMetrics.noop(),
                 new EvaluationTraceRegistry());
     }
 
@@ -81,13 +82,14 @@ public final class GroundedQaService {
             QuestionDigestPort digests,
             SensitiveContentSanitizer sanitizer,
             ChatCompletionPort chat,
+            EvidenceConflictDetector conflictDetector,
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
             QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock,
             QaMetrics metrics) {
         this(authorizedSpaces, retrieval, persistence, audits, digests, sanitizer, chat,
-                citationVerifier, policy, evidenceAuthorization, clock, metrics,
+                conflictDetector, citationVerifier, policy, evidenceAuthorization, clock, metrics,
                 new EvaluationTraceRegistry());
     }
 
@@ -99,6 +101,7 @@ public final class GroundedQaService {
             QuestionDigestPort digests,
             SensitiveContentSanitizer sanitizer,
             ChatCompletionPort chat,
+            EvidenceConflictDetector conflictDetector,
             CitationSupportVerifier citationVerifier,
             QaPolicy policy,
             QaEvidenceAuthorizationPort evidenceAuthorization,
@@ -112,6 +115,7 @@ public final class GroundedQaService {
         this.digests = Objects.requireNonNull(digests);
         this.sanitizer = Objects.requireNonNull(sanitizer);
         this.chat = Objects.requireNonNull(chat);
+        this.conflictDetector = Objects.requireNonNull(conflictDetector);
         this.citationVerifier = Objects.requireNonNull(citationVerifier);
         this.policy = Objects.requireNonNull(policy);
         this.evidenceAuthorization = Objects.requireNonNull(evidenceAuthorization);
@@ -197,7 +201,12 @@ public final class GroundedQaService {
             return complete(state, command.actorId(), new QaOutcome.Refused(
                     command.requestId(), RefusalReason.INSUFFICIENT_EVIDENCE, pack.degraded()));
         }
-        if (hasConflictingEvidence(pack)) {
+        try {
+            if (conflictDetector.hasConflict(pack.evidence())) {
+                return complete(state, command.actorId(), new QaOutcome.Refused(
+                        command.requestId(), RefusalReason.CONFLICTING_EVIDENCE, pack.degraded()));
+            }
+        } catch (RuntimeException detectorFailure) {
             return complete(state, command.actorId(), new QaOutcome.Refused(
                     command.requestId(), RefusalReason.CONFLICTING_EVIDENCE, pack.degraded()));
         }
@@ -419,24 +428,6 @@ public final class GroundedQaService {
     private static boolean timedOut(long deadline) {
         return System.nanoTime() - deadline >= 0;
     }
-
-    private static boolean hasConflictingEvidence(EvidencePack pack) {
-        var seen = new HashMap<EvidenceIdentity, String>();
-        for (Evidence item : pack.evidence()) {
-            var identity = new EvidenceIdentity(
-                    item.spaceId(), item.documentId(), item.versionId(), item.nodeId());
-            String content = normalizeForComparison(item.title()) + "\n" + normalizeForComparison(item.excerpt());
-            String existing = seen.putIfAbsent(identity, content);
-            if (existing != null && !existing.equals(content)) return true;
-        }
-        return false;
-    }
-
-    private static String normalizeForComparison(String value) {
-        return Normalizer.normalize(value, Normalizer.Form.NFKC).replaceAll("\\s+", " ").trim();
-    }
-
-    private record EvidenceIdentity(UUID spaceId, UUID documentId, UUID versionId, String nodeId) {}
 
     private record GenerationAttempt(
             ModelGeneration generation,

@@ -6,6 +6,8 @@ import com.yunjihai.rag.qa.domain.GroundedClaim;
 import com.yunjihai.rag.qa.domain.QaOutcome;
 import com.yunjihai.rag.qa.domain.QaStatus;
 import com.yunjihai.rag.qa.domain.RefusalReason;
+import com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector;
+import com.yunjihai.rag.qa.conflict.EvidenceConflictDetector;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
 import com.yunjihai.rag.qa.model.ModelCallDescriptor;
@@ -122,6 +124,41 @@ class GroundedQaServiceTest {
         assertThat(conflict.service().ask(command("问题")))
                 .isEqualTo(new QaOutcome.Refused(id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
         assertThat(empty.modelCalls.get() + low.modelCalls.get() + conflict.modelCalls.get()).isZero();
+    }
+
+    @Test
+    void refusesCrossDocumentSemanticConflictBeforeCallingModel() {
+        var harness = new Harness();
+        var conflicting = new ArrayList<>(evidence(8, 0.9));
+        Evidence first = conflicting.getFirst();
+        Evidence second = conflicting.get(1);
+        conflicting.set(0, new Evidence(
+                first.spaceId(), first.evidenceId(), first.documentId(), first.versionId(), first.nodeId(),
+                first.title(), "项目预算：1万元", first.score(), first.locator()));
+        conflicting.set(1, new Evidence(
+                second.spaceId(), second.evidenceId(), second.documentId(), second.versionId(), second.nodeId(),
+                second.title(), "项目预算为2万元", second.score(), second.locator()));
+        harness.pack = pack(conflicting);
+
+        QaOutcome outcome = harness.service().ask(command("项目预算是多少？"));
+
+        assertThat(outcome).isEqualTo(new QaOutcome.Refused(
+                id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void failsClosedWhenConflictDetectorIsUnavailable() {
+        var harness = new Harness();
+        harness.conflictDetector = ignored -> {
+            throw new IllegalStateException("detector unavailable");
+        };
+
+        QaOutcome outcome = harness.service().ask(command("问题"));
+
+        assertThat(outcome).isEqualTo(new QaOutcome.Refused(
+                id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
+        assertThat(harness.modelCalls).hasValue(0);
     }
 
     @Test
@@ -283,6 +320,7 @@ class GroundedQaServiceTest {
         private boolean finalAuthorization = true;
         private QaOutcome persistedOutcome;
         private QaMetrics metrics = QaMetrics.noop();
+        private EvidenceConflictDetector conflictDetector = new DeterministicEvidenceConflictDetector();
         private final List<com.yunjihai.rag.retrieval.domain.RetrievalQuery> queries = new ArrayList<>();
         private final AtomicReference<com.yunjihai.rag.qa.model.GroundedAnswerPrompt> prompt =
                 new AtomicReference<>();
@@ -333,7 +371,7 @@ class GroundedQaServiceTest {
             };
             return new GroundedQaService(
                     scope, retrieval, new FakePersistence(), audit, value -> "digest:" + value.length(),
-                    sanitizer, chat, new ExactQuoteCitationSupportVerifier(), QaPolicy.defaults(),
+                    sanitizer, chat, conflictDetector, new ExactQuoteCitationSupportVerifier(), QaPolicy.defaults(),
                     (requestId, actorId, at) -> finalAuthorization,
                     Clock.fixed(NOW, ZoneOffset.UTC), metrics);
         }
