@@ -135,6 +135,10 @@ public final class SolutionController {
             allowed.remove(SolutionAction.EDIT_OUTLINE);
         if (solution.outlineConfirmation().isEmpty() || !sourcesValid)
             allowed.remove(SolutionAction.ADOPT_SECTION);
+        if (solution.adoptedSectionVersionIds().isEmpty() || !sourcesValid) {
+            allowed.remove(SolutionAction.CONFIRM_RISK);
+            allowed.remove(SolutionAction.FINALIZE);
+        }
         if (solution.phase() != SolutionPhase.OUTLINE_DRAFT || outline == null || !sourcesValid
                 || !review.canConfirm(outline.createdBy(), actor))
             allowed.remove(SolutionAction.CONFIRM_OUTLINE);
@@ -145,6 +149,7 @@ public final class SolutionController {
                 solution.requirementConfirmation().map(c -> SolutionDtos.ConfirmationView.from(c, currentSourcesValid)).orElse(null),
                 solution.outlineConfirmation().map(c -> SolutionDtos.ConfirmationView.from(c, currentSourcesValid)).orElse(null),
                 sourcesValid, sourcesValid ? solution.adoptedSectionVersionIds() : Map.of(),
+                solution.finalizedVersionId().orElse(null),
                 allowed.stream().map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet()));
     }
 

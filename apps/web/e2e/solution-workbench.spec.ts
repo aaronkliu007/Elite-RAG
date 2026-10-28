@@ -182,6 +182,13 @@ test('章节生成、核验、人工采纳及窄屏冲突提示', async ({ page 
     const request = route.request()
     const path = new URL(request.url()).pathname
     if (request.method() === 'GET' && path.endsWith('/solution-3')) return route.fulfill({ json: current() })
+    if (request.method() === 'GET' && path.endsWith('/finalization-review')) {
+      return route.fulfill({ json: { solutionId: 'solution-3', revision: 4, risks: [{
+        sectionId: 'section-3', sectionTitle: '超长章节', sectionVersionId: 'adopted-3',
+        claimId: 'claim-3', claimText: '客户计划支持100名用户', riskTypes: [],
+        confirmed: false, confirmedBy: null, confirmedAt: null,
+      }] } })
+    }
     if (path.endsWith('/generation-attempts') && request.method() === 'POST') {
       requestBodies.push(request.postDataJSON() as Record<string, unknown>)
       if (adopted) return route.fulfill({ status: 409,

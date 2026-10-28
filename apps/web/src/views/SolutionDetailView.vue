@@ -6,7 +6,8 @@ import { ApiRequestError } from '../api/http'
 import SolutionSectionGenerationPanel from '../components/SolutionSectionGenerationPanel.vue'
 import { searchApi, type SearchEvidence, type SourceLocator } from '../api/search'
 import { solutionsApi, type OutlineNodeInput, type RequirementCategory, type RequirementItemInput,
-  type RiskType, type SolutionDetail, type SolutionLocator, type SolutionSource } from '../api/solutions'
+  type RiskType, type SolutionDetail, type SolutionLocator, type SolutionSource,
+  type FinalizationReview, type FinalizationRisk } from '../api/solutions'
 
 interface RequirementDraft extends RequirementItemInput {
   searchQuery: string
@@ -29,12 +30,24 @@ const outlineChangeReason = ref('')
 const dirtyRequirements = ref(false)
 const dirtyOutline = ref(false)
 const pendingKey = ref('')
+const finalizationReview = ref<FinalizationReview | null>(null)
+const reviewError = ref('')
+const riskReasons = ref<Record<string, string>>({})
+const downloading = ref(false)
 
 const canEditRequirements = computed(() => solution.value?.allowedActions.includes('EDIT_REQUIREMENTS') ?? false)
 const canEditOutline = computed(() => solution.value?.allowedActions.includes('EDIT_OUTLINE') ?? false)
 const canConfirmRequirements = computed(() => solution.value?.allowedActions.includes('CONFIRM_REQUIREMENTS') ?? false)
 const canConfirmOutline = computed(() => solution.value?.allowedActions.includes('CONFIRM_OUTLINE') ?? false)
 const canGenerateSections = computed(() => solution.value?.allowedActions.includes('ADOPT_SECTION') ?? false)
+const canConfirmRisk = computed(() => solution.value?.allowedActions.includes('CONFIRM_RISK') ?? false)
+const canFinalize = computed(() => {
+  const current = solution.value
+  if (!current?.allowedActions.includes('FINALIZE') || !finalizationReview.value || dirty.value) return false
+  const required = current.outlineVersion?.nodes.filter((node) => node.required) ?? []
+  return required.length > 0 && required.every((node) => !!current.adoptedSectionVersionIds[node.sectionId])
+    && finalizationReview.value.risks.every((risk) => risk.confirmed)
+})
 const dirty = computed(() => dirtyRequirements.value || dirtyOutline.value)
 const phaseLabel: Record<SolutionDetail['phase'], string> = {
   REQUIREMENTS_DRAFT: '需求草稿', REQUIREMENTS_CONFIRMED: '需求已确认',
@@ -71,6 +84,9 @@ function blankOutline(order: number): OutlineNodeInput {
 
 function adoptLoaded(value: SolutionDetail) {
   solution.value = value
+  finalizationReview.value = null
+  reviewError.value = ''
+  riskReasons.value = {}
   requirementDrafts.value = value.requirementVersion?.items.map((item) => ({
     category: item.category, text: item.text, sources: item.sources.map((source) => ({ ...source })),
     searchQuery: '', evidence: [], searching: false,
@@ -94,6 +110,14 @@ async function load(force = false) {
   mutationError.value = ''
   try {
     adoptLoaded(await solutionsApi.get(solutionId.value))
+    if (solution.value?.sourceAccessValid && solution.value.outlineConfirmation?.valid
+        && Object.keys(solution.value.adoptedSectionVersionIds ?? {}).length > 0) {
+      try {
+        finalizationReview.value = await solutionsApi.finalizationReview(solutionId.value)
+      } catch (failure) {
+        reviewError.value = message(failure, '加载定稿核验失败，请重试')
+      }
+    }
   } catch (failure) {
     if (!dirty.value) solution.value = null
     error.value = message(failure, '加载方案失败，请稍后重试')
@@ -224,6 +248,45 @@ async function confirmOutline() {
   const version = solution.value.outlineVersion
   await mutate((key) => solutionsApi.confirmOutline(solutionId.value,
     version.id, solution.value!.revision, key))
+}
+
+function riskKey(risk: FinalizationRisk) { return `${risk.sectionVersionId}:${risk.claimId}` }
+function riskLabel(value: RiskType) { return risks.find((item) => item.value === value)?.label ?? value }
+
+async function confirmRisk(risk: FinalizationRisk) {
+  const reason = riskReasons.value[riskKey(risk)]?.trim()
+  if (!canConfirmRisk.value || !reason || dirty.value) return
+  await mutate(() => solutionsApi.confirmRisk(solutionId.value, risk.sectionVersionId, risk.claimId, reason))
+}
+
+async function finalizeSolution() {
+  if (!solution.value || !canFinalize.value) return
+  await mutate(() => solutionsApi.finalize(solutionId.value, solution.value!.revision))
+}
+
+async function downloadWord() {
+  const versionId = solution.value?.finalizedVersionId
+  if (!versionId || downloading.value) return
+  downloading.value = true
+  mutationError.value = ''
+  try {
+    const blob = await solutionsApi.downloadWord(solutionId.value, versionId)
+    const url = URL.createObjectURL(blob)
+    try {
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `solution-${versionId}.docx`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  } catch (failure) {
+    mutationError.value = message(failure, 'Word 导出失败，请检查来源权限后重试')
+  } finally {
+    downloading.value = false
+  }
 }
 
 onBeforeRouteLeave(() => !dirty.value || window.confirm('存在未保存的修改，确定离开方案吗？'))
@@ -670,6 +733,120 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           </div>
         </template>
       </section>
+      <section
+        class="step-card"
+        aria-labelledby="finalization-heading"
+      >
+        <div class="step-heading">
+          <div>
+            <p class="eyebrow">
+              步骤 4
+            </p>
+            <h3 id="finalization-heading">
+              风险确认与方案定稿
+            </h3>
+          </div>
+          <span
+            v-if="solution.finalizedVersionId"
+            class="version-tag"
+          >第 {{ solution.solutionRevision }} 版</span>
+        </div>
+        <p class="step-note">
+          必填章节采纳齐全、风险事实逐项确认且来源仍可访问后，才能定稿并导出 Word。
+        </p>
+        <div
+          v-if="reviewError"
+          class="state state-error"
+          role="alert"
+        >
+          {{ reviewError }}
+          <button
+            type="button"
+            @click="load(true)"
+          >
+            重新加载
+          </button>
+        </div>
+        <template v-else-if="finalizationReview">
+          <p
+            v-if="!finalizationReview.risks.length"
+            class="step-note"
+          >
+            当前已采纳章节没有待人工确认的风险事实。
+          </p>
+          <div
+            v-for="risk in finalizationReview.risks"
+            :key="riskKey(risk)"
+            class="item-card risk-review"
+          >
+            <div class="item-heading">
+              <strong :title="risk.sectionTitle">{{ risk.sectionTitle }}</strong>
+              <span class="version-tag">{{ risk.confirmed ? '已确认' : '待确认' }}</span>
+            </div>
+            <p class="risk-claim">
+              {{ risk.claimText }}
+            </p>
+            <p class="step-note">
+              风险类型：{{ risk.riskTypes.map(riskLabel).join('、') }}
+            </p>
+            <p
+              v-if="risk.confirmed"
+              class="confirmation"
+            >
+              确认人 {{ risk.confirmedBy }} · {{ risk.confirmedAt ? new Date(risk.confirmedAt).toLocaleString('zh-CN') : '' }}
+            </p>
+            <div
+              v-else-if="canConfirmRisk"
+              class="editor-actions"
+            >
+              <label class="reason-field">确认理由<input
+                v-model="riskReasons[riskKey(risk)]"
+                :name="`risk-reason-${risk.claimId}`"
+                maxlength="500"
+                placeholder="写明核实依据或承担的确认责任"
+              ></label>
+              <button
+                class="button button-primary"
+                type="button"
+                :disabled="saving || dirty || !riskReasons[riskKey(risk)]?.trim()"
+                @click="confirmRisk(risk)"
+              >
+                确认此项风险
+              </button>
+            </div>
+          </div>
+        </template>
+        <div
+          v-if="solution.finalizedVersionId"
+          class="confirm-block"
+        >
+          <span :title="solution.finalizedVersionId">定稿版本 {{ solution.finalizedVersionId }}</span>
+          <button
+            class="button button-primary"
+            data-action="download-word"
+            type="button"
+            :disabled="downloading || !solution.sourceAccessValid"
+            @click="downloadWord"
+          >
+            {{ downloading ? '正在生成 Word…' : '下载 Word 方案' }}
+          </button>
+        </div>
+        <div
+          v-else-if="solution.allowedActions.includes('FINALIZE')"
+          class="confirm-block"
+        >
+          <span>定稿将锁定当前需求、大纲和已采纳章节。若条件不满足，服务端会拒绝提交。</span>
+          <button
+            class="button button-primary"
+            data-action="finalize-solution"
+            type="button"
+            :disabled="saving || !canFinalize"
+            @click="finalizeSolution"
+          >
+            {{ saving ? '正在定稿…' : '确认定稿' }}
+          </button>
+        </div>
+      </section>
     </template>
   </section>
 </template>
@@ -690,7 +867,8 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
 .outline-grid { grid-template-columns: minmax(0, 1fr) 120px 120px; }.outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: span 2; }.required-check { display: flex !important; align-items: center; gap: 8px; }.risk-options { display: flex; gap: 8px 16px; flex-wrap: wrap; margin: 0; padding: 10px; border: 1px solid var(--color-border-soft); border-radius: 8px; }.risk-options legend { color: var(--color-muted); font-size: 13px; font-weight: 750; }.risk-options label { display: flex; gap: 5px; align-items: center; font-size: 12px; }
 .state { padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); color: var(--color-muted); background: #fff; }.state-error { color: #a51f32; background: #fff8f8; }.state-warning { color: #86500a; background: #fff8e7; }.state button { margin-left: 8px; min-height: 34px; border: 1px solid var(--color-border); border-radius: 7px; color: var(--color-primary); background: #fff; font: inherit; cursor: pointer; }
 .section-panels { display: grid; gap: 14px; min-width: 0; }
+.risk-review strong, .risk-claim { min-width: 0; overflow-wrap: anywhere; }.risk-claim { margin: 0; white-space: pre-wrap; line-height: 1.65; }.risk-review .step-note { margin: 0; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
 @media (max-width: 850px) { .outline-grid { grid-template-columns: minmax(0, 1fr) 100px; }.outline-grid label:nth-child(3) { grid-column: 1 / -1; }.outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: 1 / -1; } }
-@media (max-width: 620px) { .detail-header { flex-direction: column; }.header-meta { justify-items: start; }.field-grid, .outline-grid { grid-template-columns: 1fr; }.outline-grid label:nth-child(3), .outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: auto; }.item-card, .detail-header, .step-card { padding: 16px; }.editor-actions, .confirm-block { align-items: stretch; flex-direction: column; }.reason-field { flex: 0 1 auto; width: 100%; }.editor-actions .button, .confirm-block .button { width: 100%; } }
+@media (max-width: 620px) { .detail-header { flex-direction: column; }.header-meta { justify-items: start; }.field-grid, .outline-grid { grid-template-columns: 1fr; }.outline-grid label:nth-child(3), .outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: auto; }.item-card, .detail-header, .step-card { padding: 16px; }.editor-actions, .confirm-block { align-items: stretch; flex-direction: column; }.confirm-block span { flex: 0 1 auto; width: 100%; }.reason-field { flex: 0 1 auto; width: 100%; }.editor-actions .button, .confirm-block .button { width: 100%; } }
 </style>

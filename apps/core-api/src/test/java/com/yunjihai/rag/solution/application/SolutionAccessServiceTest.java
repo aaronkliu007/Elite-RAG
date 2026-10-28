@@ -34,7 +34,8 @@ class SolutionAccessServiceTest {
         var reviewer = new SolutionAccessService((user, target, checked) -> {},
                 new Roles(false, Set.of(SpaceRole.REVIEWER_PUBLISHER)));
         assertThat(reviewer.allowedActions(actor, space, at)).containsExactlyInAnyOrder(
-                SolutionAction.CONFIRM_REQUIREMENTS, SolutionAction.CONFIRM_OUTLINE);
+                SolutionAction.CONFIRM_REQUIREMENTS, SolutionAction.CONFIRM_OUTLINE,
+                SolutionAction.CONFIRM_RISK, SolutionAction.FINALIZE);
     }
 
     @Test void defaultReviewPolicyRejectsSelfConfirmation() {

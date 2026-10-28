@@ -18,7 +18,66 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   status, headers: { 'Content-Type': 'application/json' },
 })
 
-beforeEach(() => vi.restoreAllMocks())
+beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+it('风险确认后才允许定稿，定稿后展示 Word 下载', async () => {
+  let confirmed = false
+  let finalized = false
+  let revision = 4
+  const requests: string[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input)
+    if (path.endsWith('/session/csrf')) return json({ headerName: 'X-CSRF-TOKEN', token: 'csrf', parameterName: '_csrf' })
+    if (path.endsWith('/finalization-review')) return json({ solutionId: 'solution-1', revision,
+      risks: [{ sectionId: 'section-1', sectionTitle: '总体设计', sectionVersionId: 'adopted-1',
+        claimId: 'claim-1', claimText: '性能达到目标', riskTypes: ['PERFORMANCE_OR_SLA'],
+        confirmed, confirmedBy: confirmed ? 'reviewer-1' : null, confirmedAt: confirmed ? '2026-10-29T00:00:00Z' : null }] })
+    if (path.endsWith('/risk-confirmations')) {
+      requests.push(`risk:${JSON.parse(String(init?.body)).reason}`)
+      confirmed = true
+      return json({ id: 'confirmation-1' })
+    }
+    if (path.endsWith('/finalize')) {
+      requests.push(`finalize:${JSON.parse(String(init?.body)).expectedRevision}`)
+      finalized = true
+      revision += 1
+      return json({ id: 'final-1', solutionRevision: 1, contentHash: 'a'.repeat(64),
+        createdAt: '2026-10-29T00:00:00Z' })
+    }
+    if (path.endsWith('/solutions/solution-1')) return json({ ...detail,
+      phase: finalized ? 'FINALIZED' : 'IN_REVIEW', revision,
+      outlineVersion: { id: 'outline-1', number: 1, nodes: [{ sectionId: 'section-1', title: '总体设计',
+        level: 1, order: 1, required: true, objective: '设计', retrievalHint: '检索', riskTypes: [] }],
+        createdBy: 'user-1', createdAt: '2026-10-28T10:00:00Z', changeReason: '初版' },
+      outlineConfirmation: { versionId: 'outline-1', confirmedBy: 'reviewer-1',
+        confirmedAt: '2026-10-28T10:00:00Z', valid: true },
+      requirementConfirmation: { versionId: 'requirement-1', confirmedBy: 'reviewer-1',
+        confirmedAt: '2026-10-28T10:00:00Z', valid: true },
+      adoptedSectionVersionIds: { 'section-1': 'adopted-1' },
+      finalizedVersionId: finalized ? 'final-1' : null,
+      allowedActions: finalized ? [] : ['CONFIRM_RISK', 'FINALIZE'] })
+    throw new Error(path)
+  }))
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/solutions/:solutionId', component: SolutionDetailView },
+    { path: '/spaces/:spaceId/solutions', component: { template: '<div />' } },
+  ] })
+  await router.push('/solutions/solution-1')
+  await router.isReady()
+  const wrapper = mount(SolutionDetailView, { global: { plugins: [router] } })
+  await flushPromises()
+  expect(wrapper.get('[data-action="finalize-solution"]').element).toHaveProperty('disabled', true)
+  await wrapper.get('input[name="risk-reason-claim-1"]').setValue('已核实测试报告')
+  await wrapper.findAll('button').find((button) => button.text() === '确认此项风险')!.trigger('click')
+  await flushPromises()
+  expect(requests).toEqual(['risk:已核实测试报告'])
+  expect(wrapper.get('[data-action="finalize-solution"]').element).toHaveProperty('disabled', false)
+  await wrapper.get('[data-action="finalize-solution"]').trigger('click')
+  await flushPromises()
+  expect(requests).toEqual(['risk:已核实测试报告', 'finalize:4'])
+  expect(wrapper.get('[data-action="download-word"]').text()).toContain('下载 Word')
+  wrapper.unmount()
+})
 
 it('无确认权限时隐藏确认按钮，保存失败保留输入', async () => {
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {

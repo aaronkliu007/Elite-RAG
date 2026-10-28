@@ -58,14 +58,20 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   return request<T>(path, init, true)
 }
 
-async function request<T>(path: string, init: RequestInit, attachCsrf: boolean): Promise<T> {
+export async function apiRequestBlob(path: string): Promise<Blob> {
+  return request<Blob>(path, { method: 'GET' }, true, true)
+}
+
+async function request<T>(path: string, init: RequestInit, attachCsrf: boolean, blob = false): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase()
   if (attachCsrf && MUTATING_METHODS.has(method)) {
     await loadCsrfToken()
   }
 
   const headers = new Headers(init.headers)
-  headers.set('Accept', 'application/json')
+  headers.set('Accept', blob
+    ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    : 'application/json')
   headers.set('X-Request-Id', crypto.randomUUID())
   if (typeof init.body === 'string' && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
@@ -91,6 +97,7 @@ async function request<T>(path: string, init: RequestInit, attachCsrf: boolean):
   if (response.status === 204) {
     return undefined as T
   }
+  if (blob) return (await response.blob()) as T
   return (await response.json()) as T
 }
 

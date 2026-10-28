@@ -1,9 +1,9 @@
-import { apiRequest } from './http'
+import { apiRequest, apiRequestBlob } from './http'
 
 export type SolutionPhase =
   | 'REQUIREMENTS_DRAFT' | 'REQUIREMENTS_CONFIRMED' | 'OUTLINE_DRAFT'
   | 'OUTLINE_CONFIRMED' | 'GENERATING' | 'IN_REVIEW' | 'READY_TO_FINALIZE' | 'FINALIZED'
-export type SolutionAction = 'EDIT_REQUIREMENTS' | 'EDIT_OUTLINE' | 'CONFIRM_REQUIREMENTS' | 'CONFIRM_OUTLINE' | 'ADOPT_SECTION'
+export type SolutionAction = 'EDIT_REQUIREMENTS' | 'EDIT_OUTLINE' | 'CONFIRM_REQUIREMENTS' | 'CONFIRM_OUTLINE' | 'ADOPT_SECTION' | 'CONFIRM_RISK' | 'FINALIZE'
 export type RequirementCategory =
   | 'GOAL' | 'SCOPE' | 'CONSTRAINT' | 'DELIVERABLE' | 'STAKEHOLDER' | 'DATE' | 'RISK' | 'UNKNOWN'
 export type RiskType =
@@ -40,8 +40,16 @@ export interface SolutionDetail {
   solutionRevision: number, createdAt: string, requirementVersion: RequirementVersion | null,
   outlineVersion: OutlineVersion | null, requirementConfirmation: Confirmation | null,
   outlineConfirmation: Confirmation | null, sourceAccessValid: boolean,
-  adoptedSectionVersionIds: Record<string, string>, allowedActions: SolutionAction[]
+  adoptedSectionVersionIds: Record<string, string>, finalizedVersionId: string | null,
+  allowedActions: SolutionAction[]
 }
+export interface FinalizationRisk {
+  sectionId: string, sectionTitle: string, sectionVersionId: string, claimId: string,
+  claimText: string, riskTypes: RiskType[], confirmed: boolean,
+  confirmedBy: string | null, confirmedAt: string | null
+}
+export interface FinalizationReview { solutionId: string, revision: number, risks: FinalizationRisk[] }
+export interface FinalizedVersion { id: string, solutionRevision: number, contentHash: string, createdAt: string }
 export type SectionGenerationStatus = 'PENDING' | 'RETRIEVING' | 'GENERATING' | 'VERIFYING'
   | 'SUCCEEDED' | 'INSUFFICIENT_EVIDENCE' | 'FAILED_RETRYABLE' | 'FAILED_MANUAL' | 'CANCELLED'
 export type CitationVerdict = 'SUPPORTED' | 'HUMAN_CONFIRMATION_REQUIRED' | 'PARTIAL' | 'UNSUPPORTED'
@@ -99,4 +107,15 @@ export const solutionsApi = {
     apiRequest<SolutionCommandResult>(`${path(solutionId)}/sections/${encodeURIComponent(sectionId)}/versions/${encodeURIComponent(sectionVersionId)}/adopt`, {
       method: 'POST', headers: keyHeader(key), body: JSON.stringify({ expectedRevision }),
     }),
+  finalizationReview: (solutionId: string) => apiRequest<FinalizationReview>(`${path(solutionId)}/finalization-review`),
+  confirmRisk: (solutionId: string, sectionVersionId: string, claimId: string, reason: string) =>
+    apiRequest<{ id: string }>(`${path(solutionId)}/risk-confirmations`, {
+      method: 'POST', body: JSON.stringify({ sectionVersionId, claimId, reason }),
+    }),
+  finalize: (solutionId: string, expectedRevision: number) =>
+    apiRequest<FinalizedVersion>(`${path(solutionId)}/finalize`, {
+      method: 'POST', body: JSON.stringify({ expectedRevision }),
+    }),
+  downloadWord: (solutionId: string, versionId: string) =>
+    apiRequestBlob(`${path(solutionId)}/finalized-versions/${encodeURIComponent(versionId)}/word`),
 }

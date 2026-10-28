@@ -117,6 +117,10 @@ public final class SolutionFinalizationService {
         if (verdict.verdict() != CitationVerdict.HUMAN_CONFIRMATION_REQUIRED) {
             throw new SolutionLifecycleException("RISK_CONFIRMATION_NOT_ALLOWED");
         }
+        var allowedEvidence = evidenceAccess.authorize(actorId, solution.spaceId(), claim.evidenceIds(), at);
+        if (allowedEvidence == null || !allowedEvidence.equals(claim.evidenceIds())) {
+            throw new SolutionLifecycleException("EVIDENCE_ACCESS_DENIED");
+        }
         var confirmation = RiskConfirmation.create(
                 UuidV7.generate(at), solutionId, section, claim, actorId, reason, at);
         var stored = confirmations.insertIfAbsent(confirmation);

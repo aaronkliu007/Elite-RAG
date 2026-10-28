@@ -18,7 +18,8 @@ class SolutionWorkbenchCoreAcceptanceTest {
         assertThat(result.unsupportedAdoptionBlocked()).isTrue();
         assertThat(result.riskBlockedFinalization()).isTrue();
         assertThat(result.finalizedSnapshotCreated()).isTrue();
-        assertThat(result.evidenceReauthorizationCalls()).isEqualTo(1);
+        // Risk signing and finalization each recheck current evidence access.
+        assertThat(result.evidenceReauthorizationCalls()).isEqualTo(2);
         assertThat(result.finalizedSectionCount()).isEqualTo(1);
         assertThat(result.finalizedRiskConfirmationCount()).isEqualTo(1);
         assertThat(result.finalizedContentHash()).matches("[0-9a-f]{64}");

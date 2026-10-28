@@ -39,7 +39,8 @@ public final class SolutionDtos {
             long solutionRevision, Instant createdAt, RequirementVersionView requirementVersion,
             OutlineVersionView outlineVersion, ConfirmationView requirementConfirmation,
             ConfirmationView outlineConfirmation, boolean sourceAccessValid,
-            Map<UUID, UUID> adoptedSectionVersionIds, Set<String> allowedActions) { }
+            Map<UUID, UUID> adoptedSectionVersionIds, UUID finalizedVersionId,
+            Set<String> allowedActions) { }
 
     public record RequirementVersionView(UUID id, long number, List<RequirementItemView> items,
             UUID createdBy, Instant createdAt, String changeReason) {

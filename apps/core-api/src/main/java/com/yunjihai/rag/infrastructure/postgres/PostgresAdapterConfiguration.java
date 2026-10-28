@@ -69,6 +69,7 @@ import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.solution.application.SolutionAccessService;
 import com.yunjihai.rag.solution.application.SolutionGenerationAuthorizationService;
 import com.yunjihai.rag.solution.application.SolutionSectionAdoptionService;
+import com.yunjihai.rag.solution.application.SolutionRiskConfirmationCommandService;
 import com.yunjihai.rag.solution.application.CurrentGenerationEvidenceAuthorization;
 import com.yunjihai.rag.solution.application.SolutionSourceAccess;
 import com.yunjihai.rag.solution.application.SolutionReviewPolicy;
@@ -80,6 +81,9 @@ import com.yunjihai.rag.solution.model.SolutionModelResponse;
 import com.yunjihai.rag.solution.generation.GenerationPolicy;
 import com.yunjihai.rag.solution.generation.GenerationEvidenceAuthorizationPort;
 import com.yunjihai.rag.solution.generation.SectionGenerationService;
+import com.yunjihai.rag.solution.finalization.SolutionFinalizationService;
+import com.yunjihai.rag.solution.finalization.SolutionWordExportService;
+import com.yunjihai.rag.solution.finalization.SolutionWordRenderer;
 import com.yunjihai.rag.solution.verification.SectionVerificationService;
 import com.yunjihai.rag.retrieval.TrustedRetrievalService;
 import com.yunjihai.rag.qa.evaluation.EvaluationDataset;
@@ -187,6 +191,65 @@ public class PostgresAdapterConfiguration {
     JdbcSectionVersionRepository jdbcSectionVersionRepository(
             JdbcClient jdbc, PlatformTransactionManager transactions) {
         return new JdbcSectionVersionRepository(jdbc, transactions);
+    }
+
+    @Bean
+    JdbcRiskConfirmationRepository jdbcRiskConfirmationRepository(
+            JdbcClient jdbc, PlatformTransactionManager transactions) {
+        return new JdbcRiskConfirmationRepository(jdbc, transactions);
+    }
+
+    @Bean
+    JdbcSolutionFinalizationStore jdbcSolutionFinalizationStore(
+            JdbcClient jdbc, JdbcSolutionRepository solutions, AuditService audit,
+            PlatformTransactionManager transactions) {
+        return new JdbcSolutionFinalizationStore(jdbc, solutions, audit, transactions);
+    }
+
+    @Bean
+    JdbcSolutionEvidenceAccess jdbcSolutionEvidenceAccess(
+            JdbcClient jdbc, JdbcSolutionDocumentSourcePort documents) {
+        return new JdbcSolutionEvidenceAccess(jdbc, documents);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    SolutionFinalizationService solutionFinalizationService(
+            JdbcSolutionRepository solutions, JdbcOutlineVersionRepository outlines,
+            JdbcSectionVersionRepository sections, JdbcRiskConfirmationRepository confirmations,
+            SolutionGenerationAuthorizationService authorization,
+            JdbcSolutionEvidenceAccess evidenceAccess, JdbcSolutionFinalizationStore store,
+            AuditService audit) {
+        return new SolutionFinalizationService(solutions, outlines, sections, confirmations,
+                authorization, evidenceAccess, store, audit);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    SolutionRiskConfirmationCommandService solutionRiskConfirmationCommandService(
+            SolutionFinalizationService finalization, PlatformTransactionManager manager,
+            AuditService audit) {
+        return new SolutionRiskConfirmationCommandService(finalization,
+                new TransactionTemplate(manager), audit);
+    }
+
+    @Bean
+    SolutionWordRenderer solutionWordRenderer() {
+        return new SolutionWordRenderer();
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    SolutionWordExportService solutionWordExportService(
+            JdbcSolutionRepository solutions, JdbcSolutionFinalizationStore finals,
+            JdbcRequirementVersionRepository requirements, JdbcOutlineVersionRepository outlines,
+            JdbcSectionVersionRepository sections, JdbcGenerationEvidenceStore evidenceSources,
+            SolutionAccessService access,
+            SolutionSourceAccess sources, JdbcSolutionEvidenceAccess evidence,
+            SolutionWordRenderer renderer, AuditService audit, Clock clock) {
+        return new SolutionWordExportService(solutions, finals, requirements, outlines, sections,
+                evidenceSources,
+                access, sources, evidence, renderer, audit, clock);
     }
 
     @Bean

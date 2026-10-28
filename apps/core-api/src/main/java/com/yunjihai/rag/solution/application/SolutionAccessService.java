@@ -60,6 +60,8 @@ public final class SolutionAccessService implements SolutionAuthorizationPort {
         if (administrator || active.contains(SpaceRole.SPACE_ADMIN) || active.contains(SpaceRole.REVIEWER_PUBLISHER)) {
             allowed.add(SolutionAction.CONFIRM_REQUIREMENTS);
             allowed.add(SolutionAction.CONFIRM_OUTLINE);
+            allowed.add(SolutionAction.CONFIRM_RISK);
+            allowed.add(SolutionAction.FINALIZE);
         }
         return Set.copyOf(allowed);
     }
