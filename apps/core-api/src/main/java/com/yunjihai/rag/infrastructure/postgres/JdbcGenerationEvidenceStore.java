@@ -70,12 +70,22 @@ public final class JdbcGenerationEvidenceStore implements GenerationEvidenceStor
     public List<GenerationEvidenceSource> findBySectionVersionId(UUID sectionVersionId) {
         Objects.requireNonNull(sectionVersionId);
         return query("""
+                WITH RECURSIVE ancestry AS (
+                    SELECT id, parent_version_id, attempt_id, kind, ARRAY[id] AS visited
+                    FROM solution_section_version WHERE id = :id
+                    UNION ALL
+                    SELECT parent.id, parent.parent_version_id, parent.attempt_id, parent.kind,
+                           child.visited || parent.id
+                    FROM solution_section_version parent
+                    JOIN ancestry child ON parent.id = child.parent_version_id
+                    WHERE child.kind <> 'MODEL_DRAFT' AND parent.id <> ALL(child.visited)
+                )
                 SELECT source.evidence_order, source.evidence_id, source.space_id,
                        source.document_id, source.version_id, source.node_id, source.excerpt_hash
-                  FROM solution_section_version section
+                  FROM ancestry section
                   JOIN solution_generation_evidence_source source
                     ON source.attempt_id = section.attempt_id
-                 WHERE section.id = :id AND section.kind = 'MODEL_DRAFT'
+                 WHERE section.kind = 'MODEL_DRAFT'
                  ORDER BY source.evidence_order
                 """, sectionVersionId);
     }

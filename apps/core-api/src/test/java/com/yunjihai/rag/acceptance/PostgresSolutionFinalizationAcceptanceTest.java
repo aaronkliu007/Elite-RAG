@@ -162,6 +162,87 @@ class PostgresSolutionFinalizationAcceptanceTest {
             var current = solutions.findById(created.solutionId()).orElseThrow();
             solutions.replace(current.adoptSection(SECTION, adopted, current.revision()), current.revision());
         });
+        var evidenceStore = new JdbcGenerationEvidenceStore(jdbc, manager);
+        UUID regeneratedAttempt = UUID.randomUUID(), regeneratedDraft = UUID.randomUUID();
+        UUID newerEvidence = UUID.randomUUID();
+        jdbc.sql("""
+                INSERT INTO solution_generation_attempt
+                  (id, client_key, solution_id, requirement_version_id, outline_version_id,
+                   section_id, baseline_section_version_id, input_fingerprint, status,
+                   execution_count, revision, created_at, updated_at)
+                VALUES (:id, :key, :solution, :requirement, :outline, :section,
+                        :baseline, :hash, 'SUCCEEDED', 1, 0, :at, :at)
+                """).param("id", regeneratedAttempt).param("key", "regenerate-" + regeneratedAttempt)
+                .param("solution", created.solutionId()).param("requirement", created.requirementVersionId())
+                .param("outline", outlined.outlineVersionId().orElseThrow()).param("section", SECTION)
+                .param("baseline", adopted).param("hash", "c".repeat(64))
+                .param("at", OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC)).update();
+        jdbc.sql("""
+                INSERT INTO solution_section_version
+                    (id, solution_id, section_id, kind, content, requirement_version_id,
+                     outline_version_id, baseline_section_version_id, parent_version_id,
+                     model_id, created_at, attempt_id)
+                VALUES (:id, :solution, :section, 'MODEL_DRAFT', '重新生成的草稿', :requirement,
+                        :outline, :baseline, :baseline, 'test-model', :at, :attempt)
+                """).param("id", regeneratedDraft).param("solution", created.solutionId())
+                .param("section", SECTION).param("requirement", created.requirementVersionId())
+                .param("outline", outlined.outlineVersionId().orElseThrow())
+                .param("baseline", adopted).param("at", OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC))
+                .param("attempt", regeneratedAttempt).update();
+        jdbc.sql("""
+                INSERT INTO solution_generation_evidence_source
+                    (attempt_id, evidence_id, evidence_order, space_id, document_id, version_id,
+                     node_id, excerpt_hash)
+                VALUES (:attempt, :evidence, 1, :space, :document, :version, 'node-2', :hash)
+                """).param("attempt", regeneratedAttempt).param("evidence", newerEvidence)
+                .param("space", SPACE).param("document", DOCUMENT).param("version", DOCUMENT_VERSION)
+                .param("hash", "d".repeat(64)).update();
+        assertThat(evidenceStore.findBySectionVersionId(regeneratedDraft))
+                .extracting(GenerationEvidenceSource::evidenceId).containsExactly(newerEvidence);
+        var versionQuery = new JdbcSectionEditVersionQuery(jdbc, sections);
+        var editing = new SolutionSectionEditingService(solutions, sections, versionQuery,
+                evidenceStore, new CurrentGenerationEvidenceAuthorization(documents),
+                authorization, tx, audit, Clock.fixed(NOW, ZoneOffset.UTC));
+        var beforeEdit = solutions.findById(created.solutionId()).orElseThrow();
+        var failingEditing = new SolutionSectionEditingService(solutions, sections, versionQuery,
+                evidenceStore, new CurrentGenerationEvidenceAuthorization(documents),
+                authorization, tx, command -> { throw new IllegalStateException("audit unavailable"); },
+                Clock.fixed(NOW, ZoneOffset.UTC));
+        assertThatThrownBy(() -> failingEditing.save(EDITOR, created.solutionId(), SECTION, adopted, null,
+                beforeEdit.revision(), "审计失败不能留下候选", "audit-failure"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(jdbc.sql("SELECT count(*) FROM solution_section_version WHERE kind = 'HUMAN_EDIT'")
+                .query(Long.class).single()).isZero();
+        var edited = editing.save(EDITOR, created.solutionId(), SECTION, adopted, null,
+                beforeEdit.revision(), "人工修订后的正文 <script>alert(1)</script>", "human-edit-1");
+        assertThat(edited.verification().verifications()).singleElement().satisfies(check ->
+                assertThat(check.verdict()).isEqualTo(CitationVerdict.HUMAN_CONFIRMATION_REQUIRED));
+        assertThat(evidenceStore.findBySectionVersionId(edited.id())).extracting(GenerationEvidenceSource::evidenceId)
+                .containsExactly(EVIDENCE);
+        assertThat(versionQuery.latestEdit(created.solutionId(), SECTION, adopted)).contains(edited);
+        assertThatThrownBy(() -> editing.save(EDITOR, created.solutionId(), SECTION, adopted,
+                null, beforeEdit.revision(), "并发覆盖", "human-edit-2"))
+                .isInstanceOf(ConcurrentSolutionUpdateException.class);
+        var finalEdit = editing.save(EDITOR, created.solutionId(), SECTION, adopted, edited.id(),
+                beforeEdit.revision(), "人工二次修订后的正文 <script>alert(1)</script>", "human-edit-3");
+        assertThat(versionQuery.latestEdit(created.solutionId(), SECTION, adopted)).contains(finalEdit);
+        assertThat(editing.save(EDITOR, created.solutionId(), SECTION, adopted, null,
+                beforeEdit.revision() - 1, edited.content(), "human-edit-1")).isEqualTo(edited);
+        assertThat(evidenceStore.findBySectionVersionId(finalEdit.id()))
+                .extracting(GenerationEvidenceSource::evidenceId).containsExactly(EVIDENCE);
+        UUID editedAdoptedId = UUID.randomUUID();
+        var editedAdopted = new SectionVersion(editedAdoptedId, created.solutionId(), SECTION,
+                SectionVersionKind.ADOPTED, finalEdit.content(), finalEdit.claims(), finalEdit.evidenceIds(),
+                finalEdit.requirementVersionId(), finalEdit.outlineVersionId(), Optional.of(adopted),
+                Optional.of(finalEdit.id()), Optional.of(EDITOR), Optional.empty(), NOW,
+                finalEdit.verification());
+        tx.executeWithoutResult(status -> {
+            sections.insertIfAbsent(editedAdopted);
+            var latest = solutions.findById(created.solutionId()).orElseThrow();
+            solutions.replace(latest.adoptSection(SECTION, editedAdoptedId, latest.revision()), latest.revision());
+        });
+        assertThat(evidenceStore.findBySectionVersionId(editedAdoptedId))
+                .extracting(GenerationEvidenceSource::evidenceId).containsExactly(EVIDENCE);
         var current = solutions.findById(created.solutionId()).orElseThrow();
         assertThatThrownBy(() -> finalization.finalizeSolution(REVIEWER,
                 created.solutionId(), current.revision(), NOW))
@@ -172,10 +253,12 @@ class PostgresSolutionFinalizationAcceptanceTest {
                 command -> { throw new IllegalStateException("audit unavailable"); });
         var failingRiskCommand = new SolutionRiskConfirmationCommandService(failingRiskService, tx, audit);
         assertThatThrownBy(() -> failingRiskCommand.confirm(REVIEWER, created.solutionId(),
-                adopted, CLAIM, "已核验测试报告", NOW)).isInstanceOf(IllegalStateException.class);
+                editedAdoptedId, finalEdit.claims().getFirst().claimId(), "已核验测试报告", NOW))
+                .isInstanceOf(IllegalStateException.class);
         assertThat(confirmations.findBySolutionId(created.solutionId())).isEmpty();
         var riskCommand = new SolutionRiskConfirmationCommandService(finalization, tx, audit);
-        var signature = riskCommand.confirm(REVIEWER, created.solutionId(), adopted, CLAIM,
+        var signature = riskCommand.confirm(REVIEWER, created.solutionId(), editedAdoptedId,
+                finalEdit.claims().getFirst().claimId(),
                 "已核验测试报告", NOW);
         assertThat(confirmations.findBySolutionId(created.solutionId())).contains(signature);
         var failingStore = new JdbcSolutionFinalizationStore(jdbc, solutions,
@@ -192,12 +275,16 @@ class PostgresSolutionFinalizationAcceptanceTest {
         assertThat(finalStore.findById(finalized.id())).contains(finalized);
         assertThat(solutions.findById(created.solutionId()).orElseThrow().finalizedVersionId())
                 .contains(finalized.id());
+        assertThatThrownBy(() -> editing.save(EDITOR, created.solutionId(), SECTION, editedAdoptedId,
+                null, solutions.findById(created.solutionId()).orElseThrow().revision(),
+                "定稿后不得原位修订", "edit-after-final"))
+                .isInstanceOf(SolutionLifecycleException.class).hasMessageContaining("SOLUTION_FINALIZED");
         assertThat(jdbc.sql("SELECT count(*) FROM audit_event WHERE action = 'SOLUTION_FINALIZE' AND result = 'SUCCEEDED'")
                 .query(Long.class).single()).isEqualTo(1);
         try (var docx = new XWPFDocument(new ByteArrayInputStream(
                 export.export(REVIEWER, created.solutionId(), finalized.id())))) {
             assertThat(docx.getParagraphs().stream().map(p -> p.getText()).toList())
-                    .contains("正文 <script>alert(1)</script>");
+                    .contains("人工二次修订后的正文 <script>alert(1)</script>");
             assertThat(docx.getParagraphs().stream().map(p -> p.getText()).toList())
                     .anyMatch(line -> line.contains("节点 node-1"));
             assertThat(docx.getParagraphs().stream().map(p -> p.getText()).toList())

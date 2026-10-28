@@ -164,19 +164,8 @@ public final class SolutionWordExportService {
     }
 
     private List<GenerationEvidenceSource> provenance(SectionVersion adopted) {
-        var cursor = adopted;
-        for (int i = 0; i < 16; i++) {
-            if (cursor.kind() == SectionVersionKind.MODEL_DRAFT) {
-                return evidenceSources.findBySectionVersionId(cursor.id());
-            }
-            cursor = sections.findById(cursor.parentVersionId()
-                    .orElseThrow(AccessDeniedAsNotFoundException::new))
-                    .orElseThrow(AccessDeniedAsNotFoundException::new);
-            if (!cursor.solutionId().equals(adopted.solutionId())
-                    || !cursor.sectionId().equals(adopted.sectionId())) {
-                throw new AccessDeniedAsNotFoundException();
-            }
-        }
-        throw new AccessDeniedAsNotFoundException();
+        var sources = evidenceSources.findBySectionVersionId(adopted.id());
+        if (sources.isEmpty()) throw new AccessDeniedAsNotFoundException();
+        return sources;
     }
 }

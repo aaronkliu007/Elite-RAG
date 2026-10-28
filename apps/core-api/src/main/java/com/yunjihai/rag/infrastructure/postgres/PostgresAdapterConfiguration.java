@@ -69,6 +69,7 @@ import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.solution.application.SolutionAccessService;
 import com.yunjihai.rag.solution.application.SolutionGenerationAuthorizationService;
 import com.yunjihai.rag.solution.application.SolutionSectionAdoptionService;
+import com.yunjihai.rag.solution.application.SolutionSectionEditingService;
 import com.yunjihai.rag.solution.application.SolutionRiskConfirmationCommandService;
 import com.yunjihai.rag.solution.application.CurrentGenerationEvidenceAuthorization;
 import com.yunjihai.rag.solution.application.SolutionSourceAccess;
@@ -191,6 +192,24 @@ public class PostgresAdapterConfiguration {
     JdbcSectionVersionRepository jdbcSectionVersionRepository(
             JdbcClient jdbc, PlatformTransactionManager transactions) {
         return new JdbcSectionVersionRepository(jdbc, transactions);
+    }
+
+    @Bean
+    JdbcSectionEditVersionQuery jdbcSectionEditVersionQuery(
+            JdbcClient jdbc, JdbcSectionVersionRepository sections) {
+        return new JdbcSectionEditVersionQuery(jdbc, sections);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    SolutionSectionEditingService solutionSectionEditingService(
+            JdbcSolutionRepository solutions, JdbcSectionVersionRepository sections,
+            JdbcSectionEditVersionQuery versions, JdbcGenerationEvidenceStore evidence,
+            GenerationEvidenceAuthorizationPort evidenceAuthorization,
+            SolutionGenerationAuthorizationService authorization, PlatformTransactionManager manager,
+            AuditService audit, Clock clock) {
+        return new SolutionSectionEditingService(solutions, sections, versions, evidence,
+                evidenceAuthorization, authorization, new TransactionTemplate(manager), audit, clock);
     }
 
     @Bean

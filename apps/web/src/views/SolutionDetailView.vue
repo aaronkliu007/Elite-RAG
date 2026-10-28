@@ -4,6 +4,7 @@ import { RouterLink, onBeforeRouteLeave, useRoute } from 'vue-router'
 
 import { ApiRequestError } from '../api/http'
 import SolutionSectionGenerationPanel from '../components/SolutionSectionGenerationPanel.vue'
+import SolutionSectionEditor from '../components/SolutionSectionEditor.vue'
 import { searchApi, type SearchEvidence, type SourceLocator } from '../api/search'
 import { solutionsApi, type OutlineNodeInput, type RequirementCategory, type RequirementItemInput,
   type RiskType, type SolutionDetail, type SolutionLocator, type SolutionSource,
@@ -703,7 +704,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
               步骤 3
             </p>
             <h3 id="sections-heading">
-              章节生成与人工采纳
+              章节生成、人工修订与版本对比
             </h3>
           </div>
         </div>
@@ -718,18 +719,31 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
             逐章检查正文、引用和核验结论。采纳后将生成新的不可变章节版本。
           </p>
           <div class="section-panels">
-            <SolutionSectionGenerationPanel
+            <div
               v-for="node in solution.outlineVersion?.nodes ?? []"
               :key="`${solution.id}:${node.sectionId}:${canGenerateSections}`"
-              :solution-id="solution.id"
-              :section="node"
-              :revision="solution.revision"
-              :baseline-version-id="solution.adoptedSectionVersionIds?.[node.sectionId] ?? null"
-              :can-generate="canGenerateSections"
-              :disabled="saving || dirty"
-              @adopted="load(true)"
-              @reload="load(true)"
-            />
+              class="section-stack"
+            >
+              <SolutionSectionGenerationPanel
+                :solution-id="solution.id"
+                :section="node"
+                :revision="solution.revision"
+                :baseline-version-id="solution.adoptedSectionVersionIds?.[node.sectionId] ?? null"
+                :can-generate="canGenerateSections"
+                :disabled="saving || dirty"
+                @adopted="load(true)"
+                @reload="load(true)"
+              />
+              <SolutionSectionEditor
+                :solution-id="solution.id"
+                :section-id="node.sectionId"
+                :revision="solution.revision"
+                :baseline-version-id="solution.adoptedSectionVersionIds?.[node.sectionId] ?? null"
+                :can-edit="canGenerateSections && solution.phase !== 'FINALIZED'"
+                :disabled="saving || dirty"
+                @adopted="load(true)"
+              />
+            </div>
           </div>
         </template>
       </section>
@@ -787,7 +801,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
               {{ risk.claimText }}
             </p>
             <p class="step-note">
-              风险类型：{{ risk.riskTypes.map(riskLabel).join('、') }}
+              {{ risk.riskTypes.length ? `风险类型：${risk.riskTypes.map(riskLabel).join('、')}` : '人工修订内容需重新确认' }}
             </p>
             <p
               v-if="risk.confirmed"
@@ -867,6 +881,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
 .outline-grid { grid-template-columns: minmax(0, 1fr) 120px 120px; }.outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: span 2; }.required-check { display: flex !important; align-items: center; gap: 8px; }.risk-options { display: flex; gap: 8px 16px; flex-wrap: wrap; margin: 0; padding: 10px; border: 1px solid var(--color-border-soft); border-radius: 8px; }.risk-options legend { color: var(--color-muted); font-size: 13px; font-weight: 750; }.risk-options label { display: flex; gap: 5px; align-items: center; font-size: 12px; }
 .state { padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); color: var(--color-muted); background: #fff; }.state-error { color: #a51f32; background: #fff8f8; }.state-warning { color: #86500a; background: #fff8e7; }.state button { margin-left: 8px; min-height: 34px; border: 1px solid var(--color-border); border-radius: 7px; color: var(--color-primary); background: #fff; font: inherit; cursor: pointer; }
 .section-panels { display: grid; gap: 14px; min-width: 0; }
+.section-stack { display: grid; gap: 10px; min-width: 0; }
 .risk-review strong, .risk-claim { min-width: 0; overflow-wrap: anywhere; }.risk-claim { margin: 0; white-space: pre-wrap; line-height: 1.65; }.risk-review .step-note { margin: 0; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
 @media (max-width: 850px) { .outline-grid { grid-template-columns: minmax(0, 1fr) 100px; }.outline-grid label:nth-child(3) { grid-column: 1 / -1; }.outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: 1 / -1; } }

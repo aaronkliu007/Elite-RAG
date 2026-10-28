@@ -58,6 +58,13 @@ export interface SectionClaim { claimId: string, text: string, factual: boolean,
 export interface SectionVersion { id: string, content: string, claims: SectionClaim[],
   evidenceIds: string[], verification: { verifications: {
     claimId: string, verdict: CitationVerdict, reason: string }[] } }
+export interface SectionVersionSummary { id: string, kind: 'MODEL_DRAFT' | 'HUMAN_EDIT' | 'ADOPTED',
+  parentVersionId: string | null, baselineVersionId: string | null,
+  createdBy: string | null, createdAt: string }
+export interface SectionVersionDetail extends SectionVersionSummary {
+  content: string, claims: SectionClaim[],
+  verification: { verifications: { claimId: string, verdict: CitationVerdict, reasonCode: string }[] }
+}
 export interface SectionGenerationAttempt { id: string, status: SectionGenerationStatus,
   executionCount: number, revision: number, failureCode: string | null,
   sectionVersion: SectionVersion | null }
@@ -106,6 +113,19 @@ export const solutionsApi = {
     expectedRevision: number, key: string) =>
     apiRequest<SolutionCommandResult>(`${path(solutionId)}/sections/${encodeURIComponent(sectionId)}/versions/${encodeURIComponent(sectionVersionId)}/adopt`, {
       method: 'POST', headers: keyHeader(key), body: JSON.stringify({ expectedRevision }),
+    }),
+  sectionVersions: (solutionId: string, sectionId: string) =>
+    apiRequest<SectionVersionSummary[]>(`${path(solutionId)}/sections/${encodeURIComponent(sectionId)}/versions`),
+  sectionVersion: (solutionId: string, sectionId: string, versionId: string) =>
+    apiRequest<SectionVersionDetail>(`${path(solutionId)}/sections/${encodeURIComponent(sectionId)}/versions/${encodeURIComponent(versionId)}`),
+  latestSectionEdit: (solutionId: string, sectionId: string, baselineVersionId: string) =>
+    apiRequest<{ version: SectionVersionDetail | null }>(`${path(solutionId)}/sections/${encodeURIComponent(sectionId)}/edits/latest?baselineVersionId=${encodeURIComponent(baselineVersionId)}`),
+  saveSectionEdit: (solutionId: string, sectionId: string, baselineVersionId: string,
+    expectedDraftVersionId: string | null, expectedRevision: number, content: string, key: string) =>
+    apiRequest<SectionVersionDetail>(`${path(solutionId)}/sections/${encodeURIComponent(sectionId)}/edits`, {
+      method: 'POST', headers: keyHeader(key), body: JSON.stringify({
+        baselineVersionId, expectedDraftVersionId, expectedRevision, content,
+      }),
     }),
   finalizationReview: (solutionId: string) => apiRequest<FinalizationReview>(`${path(solutionId)}/finalization-review`),
   confirmRisk: (solutionId: string, sectionVersionId: string, claimId: string, reason: string) =>
