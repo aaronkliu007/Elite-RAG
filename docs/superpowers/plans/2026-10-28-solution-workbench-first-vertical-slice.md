@@ -42,7 +42,7 @@
 
 ---
 
-### 任务 1：领域契约与版本重建
+### Task 1 / 任务 1：领域契约与版本重建
 
 **文件：** 修改 `solution/domain/Solution.java`、`solution/SolutionAction.java`、`solution/SolutionWorkbenchService.java`；新增 `solution/domain/SolutionName.java` 和对应领域测试。
 
@@ -53,7 +53,7 @@
 - [ ] 实现受约束重建和动作分离；不改变已确认需求/大纲的失效语义。
 - [ ] 重跑上述测试并确认通过；提交 `feat: prepare solution domain for persistence`。
 
-### 任务 2：Flyway 与持久仓储
+### Task 2 / 任务 2：Flyway 与持久仓储
 
 **文件：** 新增 `V008__solution_workbench.sql`、`JdbcSolutionRepository.java`、`JdbcRequirementVersionRepository.java`、`JdbcOutlineVersionRepository.java`；修改 `PostgresAdapterConfiguration.java`；新增 `JdbcSolutionRepositoryIntegrationTest.java`。
 
@@ -64,7 +64,7 @@
 - [ ] 实现表约束与 JDBC 适配，版本内容使用关系行保存，定位 JSON 只解析白名单结构。
 - [ ] 重跑上述测试并确认通过；提交 `feat: persist solution requirements and outlines`。
 
-### 任务 3：空间授权、来源与双人复核
+### Task 3 / 任务 3：空间授权、来源与双人复核
 
 **文件：** 新增 `solution/application/SolutionAccessService.java`、`SolutionSourceAccess.java`、`SolutionReviewPolicy.java` 和测试；接入 `KnowledgeSpaceReadAuthorization`、现有角色和文档权限/发布状态端口。
 
@@ -75,7 +75,7 @@
 - [ ] 实现权限映射、来源校验和实例级双人复核默认策略；保留历史确认，详情动态计算有效性。
 - [ ] 重跑上述测试并确认通过；提交 `feat: authorize solution edits and evidence sources`。
 
-### 任务 4：事务应用服务与精简幂等
+### Task 4 / 任务 4：事务应用服务与精简幂等
 
 **文件：** 新增 `JdbcSolutionCommandIdempotencyStore.java`、`solution/application/SolutionCommandService.java`、对应真实 PostgreSQL 集成测试；修改 `PostgresAdapterConfiguration.java`。
 
@@ -86,7 +86,7 @@
 - [ ] 在事务边界实现写入与幂等结果完成；重放先复核权限与历史来源，再由结果引用恢复原响应。来源已撤权返回不含正文的固定冲突码。
 - [ ] 重跑上述测试并确认通过；提交 `feat: transact and deduplicate solution commands`。
 
-### 任务 5：HTTP API 与授权视图
+### Task 5 / 任务 5：HTTP API 与授权视图
 
 **文件：** 新增 `solution/web/SolutionController.java`、`SolutionDtos.java`、`SolutionControllerSecurityIntegrationTest.java`；修改 `ApiExceptionHandler.java`、`PostgresAdapterConfiguration.java`。
 
@@ -97,7 +97,7 @@
 - [ ] 实现 Controller、输入边界和错误投影；`allowedActions` 每次由当前权限及流程状态计算。
 - [ ] 重跑上述测试并确认通过；提交 `feat: expose governed solution workbench api`。
 
-### 任务 6：Vue 方案列表、需求与大纲页面
+### Task 6 / 任务 6：Vue 方案列表、需求与大纲页面
 
 **文件：** 新增 `apps/web/src/api/solutions.ts`、`apps/web/src/views/SolutionListView.vue`、`SolutionDetailView.vue` 及测试；修改 `apps/web/src/router/index.ts`、`App.vue`；新增 `apps/web/e2e/solution-workbench.spec.ts`。
 
@@ -108,7 +108,7 @@
 - [ ] 实现 API 包装及页面路由，依据后端 `allowedActions` 渲染操作；不把正文写入 URL 或浏览器日志。
 - [ ] 运行 `corepack pnpm --dir apps/web test --run`、`corepack pnpm --dir apps/web build`、`corepack pnpm --dir apps/web exec playwright test solution-workbench.spec.ts`，确认通过；提交 `feat: add solution requirements and outline views`。
 
-### 任务 7：纵向验收、运行说明与完整回归
+### Task 7 / 任务 7：纵向验收、运行说明与完整回归
 
 **文件：** 新增 `apps/core-api/src/test/java/com/yunjihai/rag/acceptance/PostgresSolutionWorkbenchAcceptanceTest.java`、`docs/runbooks/solution-workbench-first-slice.md`；更新 `README.md` 当前状态。
 

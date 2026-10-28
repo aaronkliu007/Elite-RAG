@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -227,6 +229,55 @@ class SolutionAggregateTest {
 
         assertThatThrownBy(() -> solution.adoptedSectionVersionIds().put(id(120), id(121)))
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void namedSolutionRestoresCurrentConfirmationWithoutChangingItsRevision() {
+        var initial = requirements(id(130), 1, "首次需求");
+        var solution = Solution.create(id(131), id(132), ACTOR_ID,
+                SolutionName.of("  制造业　知识库方案  "), initial, NOW);
+        solution = solution.confirmRequirements(id(133), NOW.plusSeconds(1), 0);
+        solution = solution.reviseOutline(outlineVersion(id(134), 1, id(135)), 1);
+        var restored = Solution.restore(solution.snapshot());
+
+        assertThat(restored.name().value()).isEqualTo("制造业 知识库方案");
+        assertThat(restored.revision()).isEqualTo(2);
+        assertThat(restored.phase()).isEqualTo(SolutionPhase.OUTLINE_DRAFT);
+        assertThat(restored.requirementConfirmation()).contains(solution.requirementConfirmation().orElseThrow());
+        assertThat(restored.currentOutlineVersionId()).contains(id(134));
+    }
+
+    @Test
+    void restoreRejectsConfirmationPointingAtDifferentRequirementVersion() {
+        var initial = requirements(id(140), 1, "首次需求");
+        var solution = Solution.create(id(141), id(142), ACTOR_ID,
+                SolutionName.of("测试方案"), initial, NOW);
+        var invalid = new SolutionSnapshot(solution.id(), solution.spaceId(), solution.createdBy(),
+                solution.createdAt(), solution.name(), solution.solutionRevision(), solution.revision(),
+                solution.currentRequirementVersionId(), Optional.empty(),
+                Optional.of(new VersionConfirmation(id(143), ACTOR_ID, NOW)), Optional.empty(),
+                Map.of(), SolutionPhase.REQUIREMENTS_CONFIRMED, Optional.empty());
+        assertThatThrownBy(() -> Solution.restore(invalid)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void restoreRejectsConfirmedPhaseWithoutMatchingConfirmation() {
+        var initial = requirements(id(150), 1, "首次需求");
+        var solution = Solution.create(id(151), id(152), ACTOR_ID,
+                SolutionName.of("测试方案"), initial, NOW);
+        var invalid = new SolutionSnapshot(solution.id(), solution.spaceId(), solution.createdBy(),
+                solution.createdAt(), solution.name(), solution.solutionRevision(), solution.revision(),
+                solution.currentRequirementVersionId(), Optional.empty(), Optional.empty(),
+                Optional.empty(), Map.of(), SolutionPhase.REQUIREMENTS_CONFIRMED, Optional.empty());
+        assertThatThrownBy(() -> Solution.restore(invalid)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void solutionNameRejectsBlankAndOverlongValues() {
+        assertThatThrownBy(() -> SolutionName.of(" 　"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SolutionName.of("方".repeat(201)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private static RequirementSource source(int suffix) {

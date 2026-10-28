@@ -13,6 +13,7 @@ public final class Solution {
     private final UUID spaceId;
     private final UUID createdBy;
     private final Instant createdAt;
+    private final SolutionName name;
     private final long solutionRevision;
     private final long revision;
     private final UUID currentRequirementVersionId;
@@ -28,6 +29,7 @@ public final class Solution {
             UUID spaceId,
             UUID createdBy,
             Instant createdAt,
+            SolutionName name,
             long solutionRevision,
             long revision,
             UUID currentRequirementVersionId,
@@ -41,6 +43,7 @@ public final class Solution {
         this.spaceId = Objects.requireNonNull(spaceId, "spaceId");
         this.createdBy = Objects.requireNonNull(createdBy, "createdBy");
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt");
+        this.name = Objects.requireNonNull(name, "name");
         if (solutionRevision < 1 || revision < 0) {
             throw new IllegalArgumentException("invalid solution revision");
         }
@@ -56,6 +59,47 @@ public final class Solution {
                 Objects.requireNonNull(adoptedSectionVersionIds, "adoptedSectionVersionIds"));
         this.phase = Objects.requireNonNull(phase, "phase");
         this.finalizedVersionId = Objects.requireNonNull(finalizedVersionId, "finalizedVersionId");
+        if (requirementConfirmation.isPresent()
+                && !requirementConfirmation.orElseThrow().versionId().equals(currentRequirementVersionId)) {
+            throw new IllegalArgumentException("requirement confirmation does not match current version");
+        }
+        if (outlineConfirmation.isPresent()
+                && (currentOutlineVersionId.isEmpty()
+                || !outlineConfirmation.orElseThrow().versionId().equals(currentOutlineVersionId.orElseThrow()))) {
+            throw new IllegalArgumentException("outline confirmation does not match current version");
+        }
+        if ((currentOutlineVersionId.isPresent() && requirementConfirmation.isEmpty())
+                || (outlineConfirmation.isPresent() && requirementConfirmation.isEmpty())
+                || (!adoptedSectionVersionIds.isEmpty() && outlineConfirmation.isEmpty())
+                || (phase == SolutionPhase.FINALIZED) != finalizedVersionId.isPresent()) {
+            throw new IllegalArgumentException("inconsistent solution state");
+        }
+        boolean phaseMatches = switch (phase) {
+            case REQUIREMENTS_DRAFT -> requirementConfirmation.isEmpty() && currentOutlineVersionId.isEmpty();
+            case REQUIREMENTS_CONFIRMED -> requirementConfirmation.isPresent() && currentOutlineVersionId.isEmpty();
+            case OUTLINE_DRAFT -> requirementConfirmation.isPresent() && currentOutlineVersionId.isPresent()
+                    && outlineConfirmation.isEmpty();
+            case OUTLINE_CONFIRMED -> outlineConfirmation.isPresent() && adoptedSectionVersionIds.isEmpty();
+            case GENERATING, IN_REVIEW, READY_TO_FINALIZE, FINALIZED -> outlineConfirmation.isPresent();
+        };
+        if (!phaseMatches) {
+            throw new IllegalArgumentException("phase does not match current versions");
+        }
+    }
+
+    public static Solution restore(SolutionSnapshot snapshot) {
+        Objects.requireNonNull(snapshot, "snapshot");
+        return new Solution(snapshot.id(), snapshot.spaceId(), snapshot.createdBy(), snapshot.createdAt(),
+                snapshot.name(), snapshot.solutionRevision(), snapshot.revision(),
+                snapshot.currentRequirementVersionId(), snapshot.currentOutlineVersionId(),
+                snapshot.requirementConfirmation(), snapshot.outlineConfirmation(),
+                snapshot.adoptedSectionVersionIds(), snapshot.phase(), snapshot.finalizedVersionId());
+    }
+
+    public SolutionSnapshot snapshot() {
+        return new SolutionSnapshot(id, spaceId, createdBy, createdAt, name, solutionRevision, revision,
+                currentRequirementVersionId, currentOutlineVersionId, requirementConfirmation,
+                outlineConfirmation, adoptedSectionVersionIds, phase, finalizedVersionId);
     }
 
     public static Solution create(
@@ -64,12 +108,23 @@ public final class Solution {
             UUID actorId,
             RequirementVersion initial,
             Instant at) {
+        return create(solutionId, spaceId, actorId, SolutionName.of("未命名方案"), initial, at);
+    }
+
+    public static Solution create(
+            UUID solutionId,
+            UUID spaceId,
+            UUID actorId,
+            SolutionName name,
+            RequirementVersion initial,
+            Instant at) {
         Objects.requireNonNull(initial, "initial");
         return new Solution(
                 solutionId,
                 spaceId,
                 actorId,
                 at,
+                name,
                 1,
                 0,
                 initial.id(),
@@ -224,6 +279,7 @@ public final class Solution {
                 spaceId,
                 createdBy,
                 createdAt,
+                name,
                 nextSolutionRevision,
                 revision + 1,
                 nextRequirementVersionId,
@@ -261,6 +317,10 @@ public final class Solution {
 
     public Instant createdAt() {
         return createdAt;
+    }
+
+    public SolutionName name() {
+        return name;
     }
 
     public long solutionRevision() {

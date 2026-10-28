@@ -12,6 +12,7 @@ import com.yunjihai.rag.solution.domain.RequirementItem;
 import com.yunjihai.rag.solution.domain.RequirementSource;
 import com.yunjihai.rag.solution.domain.RequirementVersion;
 import com.yunjihai.rag.solution.domain.Solution;
+import com.yunjihai.rag.solution.domain.SolutionName;
 import com.yunjihai.rag.solution.domain.SolutionLifecycleException;
 import com.yunjihai.rag.solution.domain.SolutionPhase;
 import com.yunjihai.rag.solution.model.SolutionModelPort;
@@ -178,8 +179,20 @@ class SolutionWorkbenchServiceTest {
                 .containsExactly(
                         SolutionAction.EDIT_REQUIREMENTS,
                         SolutionAction.CONFIRM_REQUIREMENTS,
-                        SolutionAction.CONFIRM_OUTLINE,
+                        SolutionAction.EDIT_OUTLINE,
                         SolutionAction.CONFIRM_OUTLINE);
+    }
+
+    @Test
+    void createSolutionPreservesUserSuppliedName() {
+        var fixture = new Fixture(SolutionAuthorizationPort.allowAll());
+        var initial = requirements(id(110), 1, "首次需求");
+
+        var solution = fixture.service.createSolution(new SolutionWorkbenchService.CreateSolutionCommand(
+                ACTOR_ID, SPACE_ID, SOLUTION_ID, SolutionName.of("制造业方案"), initial,
+                0, id(111), NOW));
+
+        assertThat(solution.name().value()).isEqualTo("制造业方案");
     }
 
     @Test
@@ -200,9 +213,10 @@ class SolutionWorkbenchServiceTest {
     }
 
     @Test
-    void authorizationActionsRemainTheSixSupplierNeutralBusinessActions() {
+    void authorizationActionsIncludeIndependentOutlineEditing() {
         assertThat(SolutionAction.values()).containsExactly(
                 SolutionAction.EDIT_REQUIREMENTS,
+                SolutionAction.EDIT_OUTLINE,
                 SolutionAction.CONFIRM_REQUIREMENTS,
                 SolutionAction.CONFIRM_OUTLINE,
                 SolutionAction.ADOPT_SECTION,

@@ -11,6 +11,7 @@ import com.yunjihai.rag.solution.domain.RequirementItem;
 import com.yunjihai.rag.solution.domain.RequirementVersion;
 import com.yunjihai.rag.solution.domain.RiskType;
 import com.yunjihai.rag.solution.domain.Solution;
+import com.yunjihai.rag.solution.domain.SolutionName;
 import com.yunjihai.rag.solution.domain.ConcurrentSolutionUpdateException;
 import com.yunjihai.rag.solution.domain.SolutionLifecycleException;
 import com.yunjihai.rag.solution.model.GeneratedOutlineProposal;
@@ -64,7 +65,7 @@ public final class SolutionWorkbenchService {
                 SolutionAction.EDIT_REQUIREMENTS, AuditAction.SOLUTION_CREATE,
                 command.requestId(), command.at());
         var solution = Solution.create(
-                command.solutionId(), command.spaceId(), command.actorId(), command.requirements(), command.at());
+                command.solutionId(), command.spaceId(), command.actorId(), command.name(), command.requirements(), command.at());
         requirements.insert(command.requirements());
         solutions.insert(solution);
         record(command.actorId(), command.solutionId(), AuditAction.SOLUTION_CREATE,
@@ -162,7 +163,7 @@ public final class SolutionWorkbenchService {
     public Solution reviseOutline(ReviseOutlineCommand command) {
         Objects.requireNonNull(command, "command");
         authorize(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.CONFIRM_OUTLINE, AuditAction.EDIT,
+                SolutionAction.EDIT_OUTLINE, AuditAction.EDIT,
                 command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         var updated = current.reviseOutline(command.outline(), command.expectedRevision());
@@ -178,7 +179,7 @@ public final class SolutionWorkbenchService {
     public Solution proposeOutline(ProposeOutlineCommand command) {
         Objects.requireNonNull(command, "command");
         authorize(command.actorId(), command.spaceId(), command.solutionId(),
-                SolutionAction.CONFIRM_OUTLINE, AuditAction.EDIT,
+                SolutionAction.EDIT_OUTLINE, AuditAction.EDIT,
                 command.requestId(), command.at());
         var current = load(command.solutionId(), command.spaceId());
         requireRevision(current, command.expectedRevision());
@@ -375,12 +376,20 @@ public final class SolutionWorkbenchService {
             UUID actorId,
             UUID spaceId,
             UUID solutionId,
+            SolutionName name,
             RequirementVersion requirements,
             long expectedRevision,
             UUID requestId,
             Instant at) {
+        public CreateSolutionCommand(UUID actorId, UUID spaceId, UUID solutionId,
+                RequirementVersion requirements, long expectedRevision, UUID requestId, Instant at) {
+            this(actorId, spaceId, solutionId, SolutionName.of("未命名方案"),
+                    requirements, expectedRevision, requestId, at);
+        }
+
         public CreateSolutionCommand {
             common(actorId, spaceId, solutionId, expectedRevision, requestId, at);
+            Objects.requireNonNull(name, "name");
             Objects.requireNonNull(requirements, "requirements");
             if (expectedRevision != 0) {
                 throw new IllegalArgumentException("initial expectedRevision must be zero");
