@@ -9,6 +9,10 @@ public interface SolutionRepository {
 
     Optional<Solution> findById(UUID solutionId);
 
+    default void lockById(UUID solutionId) {
+        if (findById(solutionId).isEmpty()) throw new com.yunjihai.rag.access.AccessDeniedAsNotFoundException();
+    }
+
     void insert(Solution solution);
 
     void replace(Solution solution, long expectedRevision);

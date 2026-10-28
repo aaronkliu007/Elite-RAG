@@ -18,7 +18,7 @@ public final class SolutionDtos {
     public record ReviseRequirementsRequest(List<RequirementItemRequest> items,
             String changeReason, Long expectedRevision) { }
     public record ConfirmRequest(Long expectedRevision) { }
-    public record ReviseOutlineRequest(List<OutlineNodeRequest> nodes, Long expectedRevision) { }
+    public record ReviseOutlineRequest(List<OutlineNodeRequest> nodes, String changeReason, Long expectedRevision) { }
     public record RequirementItemRequest(String category, String text, List<SourceRequest> sources) { }
     public record SourceRequest(UUID documentId, UUID versionId, Map<String, Object> locator) { }
     public record OutlineNodeRequest(String title, int level, int order, boolean required,
@@ -65,11 +65,11 @@ public final class SolutionDtos {
     }
 
     public record OutlineVersionView(UUID id, long number, List<OutlineNodeView> nodes,
-            UUID createdBy, Instant createdAt) {
+            UUID createdBy, Instant createdAt, String changeReason) {
         static OutlineVersionView from(OutlineVersion version) {
             return new OutlineVersionView(version.id(), version.number(),
                     version.nodes().stream().map(OutlineNodeView::from).toList(),
-                    version.createdBy(), version.createdAt());
+                    version.createdBy(), version.createdAt(), version.changeReason());
         }
     }
 

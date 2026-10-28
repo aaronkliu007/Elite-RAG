@@ -97,6 +97,7 @@ public final class SolutionController {
         return SolutionDtos.CommandResponse.from(commands.reviseOutline(actor, key,
                 new SolutionCommandService.ReviseOutlineInput(solutionId,
                         SolutionDtos.nodes(request.nodes(), actor, solutionId, key),
+                        request.changeReason(),
                         revision(request.expectedRevision()))));
     }
 

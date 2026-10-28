@@ -11,6 +11,16 @@ public final class JdbcOutlineVersionRepository implements OutlineVersionReposit
     private final JdbcClient jdbc;
     public JdbcOutlineVersionRepository(JdbcClient jdbc) { this.jdbc = Objects.requireNonNull(jdbc); }
 
+    @Override public long nextNumber(UUID solutionId) {
+        Objects.requireNonNull(solutionId);
+        try {
+            return jdbc.sql("SELECT COALESCE(MAX(number), 0) + 1 FROM solution_outline_version WHERE solution_id = :solution")
+                    .param("solution", solutionId).query(Long.class).single();
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
     @Override public void insert(OutlineVersion version) {
         throw new IllegalArgumentException("solution id is required");
     }
@@ -20,10 +30,11 @@ public final class JdbcOutlineVersionRepository implements OutlineVersionReposit
         Objects.requireNonNull(version);
         try {
             jdbc.sql("""
-                    INSERT INTO solution_outline_version (id, solution_id, number, created_by, created_at)
-                    VALUES (:id, :solution, :number, :actor, :at)
+                    INSERT INTO solution_outline_version (id, solution_id, number, created_by, created_at, change_reason)
+                    VALUES (:id, :solution, :number, :actor, :at, :reason)
                     """).param("id", version.id()).param("solution", solutionId).param("number", version.number())
-                    .param("actor", version.createdBy()).param("at", at(version.createdAt())).update();
+                    .param("actor", version.createdBy()).param("at", at(version.createdAt()))
+                    .param("reason", version.changeReason()).update();
             for (var node : version.nodes()) {
                 jdbc.sql("""
                         INSERT INTO solution_outline_node
@@ -50,11 +61,12 @@ public final class JdbcOutlineVersionRepository implements OutlineVersionReposit
         Objects.requireNonNull(versionId);
         try {
             return jdbc.sql("""
-                    SELECT id, number, created_by, created_at FROM solution_outline_version WHERE id = :id
+                    SELECT id, number, created_by, created_at, change_reason FROM solution_outline_version WHERE id = :id
                     """).param("id", versionId).query((row, ignored) -> new OutlineVersion(
                             row.getObject("id", UUID.class), row.getLong("number"), nodes(versionId),
                             row.getObject("created_by", UUID.class),
-                            row.getObject("created_at", OffsetDateTime.class).toInstant())).optional();
+                            row.getObject("created_at", OffsetDateTime.class).toInstant(),
+                            row.getString("change_reason"))).optional();
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }

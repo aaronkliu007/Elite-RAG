@@ -41,9 +41,47 @@ it('无确认权限时隐藏确认按钮，保存失败保留输入', async () =
   expect(wrapper.find('[data-action="confirm-requirements"]').exists()).toBe(false)
   await wrapper.get('textarea[name="requirement-text-0"]').setValue('修改后的正文')
   await wrapper.get('input[name="change-reason"]').setValue('补充目标')
+  const leaveWithDraft = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(leaveWithDraft)
+  expect(leaveWithDraft.defaultPrevented).toBe(true)
   await wrapper.get('[data-action="save-requirements"]').trigger('click')
   await flushPromises()
   expect((wrapper.get('textarea[name="requirement-text-0"]').element as HTMLTextAreaElement).value)
     .toBe('修改后的正文')
   expect(wrapper.get('[role="alert"]').text()).toContain('暂时不可用')
+  wrapper.unmount()
+  const leaveAfterUnmount = new Event('beforeunload', { cancelable: true })
+  window.dispatchEvent(leaveAfterUnmount)
+  expect(leaveAfterUnmount.defaultPrevented).toBe(false)
+})
+
+it('保存请求未返回时锁定编辑器，避免刷新覆盖新输入', async () => {
+  let releaseSave: ((response: Response) => void) | undefined
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.endsWith('/session/csrf')) return Promise.resolve(json({ headerName: 'X-CSRF-TOKEN', token: 'csrf', parameterName: '_csrf' }))
+    if (path.endsWith('/solutions/solution-1') && !path.includes('/requirements')) return Promise.resolve(json(detail))
+    if (path.endsWith('/solutions/solution-1/requirements')) return new Promise<Response>((resolve) => { releaseSave = resolve })
+    throw new Error(path)
+  }))
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/solutions/:solutionId', component: SolutionDetailView },
+    { path: '/spaces/:spaceId/solutions', component: { template: '<div />' } },
+  ] })
+  await router.push('/solutions/solution-1')
+  await router.isReady()
+  const wrapper = mount(SolutionDetailView, { global: { plugins: [router] } })
+  await flushPromises()
+  await wrapper.get('textarea[name="requirement-text-0"]').setValue('发送时的正文')
+  await wrapper.get('input[name="change-reason"]').setValue('修订目标')
+  await wrapper.get('[data-action="save-requirements"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.get('textarea[name="requirement-text-0"]').element.closest('section')?.hasAttribute('inert')).toBe(true)
+  expect(wrapper.get('input[name="change-reason"]').element.closest('section')?.hasAttribute('inert')).toBe(true)
+  expect(releaseSave).toBeTypeOf('function')
+  releaseSave!(json({ solutionId: 'solution-1', revision: 1, requirementVersionId: 'requirement-2',
+    outlineVersionId: null, phase: 'REQUIREMENTS_DRAFT' }))
+  await vi.waitFor(() => expect(wrapper.get('textarea[name="requirement-text-0"]').element.closest('section')
+    ?.hasAttribute('inert')).toBe(false))
+  wrapper.unmount()
 })

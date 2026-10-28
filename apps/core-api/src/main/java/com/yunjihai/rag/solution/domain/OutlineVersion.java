@@ -11,7 +11,12 @@ public record OutlineVersion(
         long number,
         List<OutlineNode> nodes,
         UUID createdBy,
-        Instant createdAt) {
+        Instant createdAt,
+        String changeReason) {
+
+    public OutlineVersion(UUID id, long number, List<OutlineNode> nodes, UUID createdBy, Instant createdAt) {
+        this(id, number, nodes, createdBy, createdAt, "初次编制");
+    }
 
     public OutlineVersion {
         Objects.requireNonNull(id, "id");
@@ -34,5 +39,9 @@ public record OutlineVersion(
         }
         Objects.requireNonNull(createdBy, "createdBy");
         Objects.requireNonNull(createdAt, "createdAt");
+        if (changeReason == null || changeReason.isBlank()) {
+            throw new IllegalArgumentException("change reason required");
+        }
+        changeReason = changeReason.strip();
     }
 }

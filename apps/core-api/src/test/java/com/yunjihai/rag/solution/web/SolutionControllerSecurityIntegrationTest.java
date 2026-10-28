@@ -63,6 +63,18 @@ class SolutionControllerSecurityIntegrationTest {
                 .andExpect(status().isBadRequest());
     }
 
+    @Test void rejectsOutlineRevisionWithoutChangeReason() throws Exception {
+        mvc.perform(put("/api/v1/solutions/{solutionId}/outline", SOLUTION)
+                        .with(authentication(session())).with(csrf()).contentType("application/json")
+                        .header("Idempotency-Key", "outline-no-reason")
+                        .content("""
+                                {"expectedRevision":1,"nodes":[{"title":"现状","level":1,"order":1,
+                                "required":true,"objective":"梳理现状","retrievalHint":"查找现状",
+                                "riskTypes":[]}],"changeReason":"  "}
+                                """))
+                .andExpect(status().isBadRequest());
+    }
+
     @Test void projectsConflictGateAndAuthorityErrorsWithoutBody() throws Exception {
         String body = """
                 {"name":"项目方案","expectedRevision":0,"items":[{"category":"UNKNOWN","text":"待确认","sources":[]}]}

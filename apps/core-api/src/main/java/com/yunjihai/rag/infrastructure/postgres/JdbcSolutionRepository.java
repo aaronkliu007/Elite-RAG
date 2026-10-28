@@ -11,6 +11,18 @@ public final class JdbcSolutionRepository implements SolutionRepository, Solutio
     private final JdbcClient jdbc;
     public JdbcSolutionRepository(JdbcClient jdbc) { this.jdbc = Objects.requireNonNull(jdbc); }
 
+    @Override public void lockById(UUID solutionId) {
+        Objects.requireNonNull(solutionId);
+        try {
+            if (jdbc.sql("SELECT id FROM solution WHERE id = :id FOR UPDATE")
+                    .param("id", solutionId).query(UUID.class).optional().isEmpty()) {
+                throw new com.yunjihai.rag.access.AccessDeniedAsNotFoundException();
+            }
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
     @Override public void insert(Solution solution) {
         Objects.requireNonNull(solution);
         var s = solution.snapshot();

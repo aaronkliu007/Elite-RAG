@@ -74,10 +74,11 @@ test('创建、修订来源需求、确认需求、保存并确认大纲', async
       phase = 'REQUIREMENTS_CONFIRMED'
       requirementConfirmation = { versionId: requirementId, confirmedBy: 'user-2', confirmedAt: now, valid: true }
     } else if (path.endsWith('/outline')) {
+      expect(body.changeReason).toBe('依据客户目标编制大纲')
       revision += 1
       phase = 'OUTLINE_DRAFT'
       outline = { id: 'outline-1', number: 1, nodes: body.nodes.map((node: unknown) => ({ ...node as object, sectionId: 'section-1' })),
-        createdBy: 'user-1', createdAt: now }
+        createdBy: 'user-1', createdAt: now, changeReason: body.changeReason }
     } else if (path.endsWith('/outline/outline-1/confirm')) {
       revision += 1
       phase = 'OUTLINE_CONFIRMED'
@@ -114,6 +115,7 @@ test('创建、修订来源需求、确认需求、保存并确认大纲', async
   await page.locator('input[name="outline-title-0"]').fill('项目概述')
   await page.getByLabel('章节目标').fill('说明客户目标和方案范围')
   await page.getByLabel('检索提示').fill('查找客户需求和范围')
+  await page.locator('input[name="outline-change-reason"]').fill('依据客户目标编制大纲')
   await page.locator('[data-action="save-outline"]').click()
   await expect(page.locator('[data-action="confirm-outline"]')).toBeVisible()
   await page.locator('[data-action="confirm-outline"]').click()

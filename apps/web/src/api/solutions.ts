@@ -27,7 +27,9 @@ export interface OutlineNodeInput {
   objective: string, retrievalHint: string, riskTypes: RiskType[]
 }
 export interface OutlineNode extends OutlineNodeInput { sectionId: string }
-export interface OutlineVersion { id: string, number: number, nodes: OutlineNode[], createdBy: string, createdAt: string }
+export interface OutlineVersion {
+  id: string, number: number, nodes: OutlineNode[], createdBy: string, createdAt: string, changeReason: string
+}
 export interface Confirmation { versionId: string, confirmedBy: string, confirmedAt: string, valid: boolean }
 export interface SolutionSummary {
   id: string, spaceId: string, name: string, phase: SolutionPhase, revision: number,
@@ -64,9 +66,10 @@ export const solutionsApi = {
     apiRequest<SolutionCommandResult>(`${path(solutionId)}/requirements/${encodeURIComponent(versionId)}/confirm`, {
       method: 'POST', headers: keyHeader(key), body: JSON.stringify({ expectedRevision }),
     }),
-  reviseOutline: (solutionId: string, nodes: OutlineNodeInput[], expectedRevision: number, key: string) =>
+  reviseOutline: (solutionId: string, nodes: OutlineNodeInput[], changeReason: string,
+    expectedRevision: number, key: string) =>
     apiRequest<SolutionCommandResult>(`${path(solutionId)}/outline`, {
-      method: 'PUT', headers: keyHeader(key), body: JSON.stringify({ nodes, expectedRevision }),
+      method: 'PUT', headers: keyHeader(key), body: JSON.stringify({ nodes, changeReason, expectedRevision }),
     }),
   confirmOutline: (solutionId: string, versionId: string, expectedRevision: number, key: string) =>
     apiRequest<SolutionCommandResult>(`${path(solutionId)}/outline/${encodeURIComponent(versionId)}/confirm`, {

@@ -41,7 +41,7 @@ public final class SolutionCommandService implements SolutionCommandPort {
     public SolutionCommandResult create(UUID actor, String clientKey, CreateInput input) {
         Objects.requireNonNull(input);
         var key = key(actor, input.spaceId(), "CREATE", clientKey);
-        return execute(key, SolutionRequestDigest.create(input), input.spaceId(), () -> {
+        return execute(key, SolutionRequestDigest.create(input), input.spaceId(), null, () -> {
             var at = Instant.now(clock);
             var version = new RequirementVersion(UuidV7.generate(at), 1, input.items(), actor, at, "初始录入");
             sources.requireCurrentSources(actor, input.spaceId(), version, at);
@@ -95,9 +95,9 @@ public final class SolutionCommandService implements SolutionCommandPort {
                     var current = solutions.findById(input.solutionId()).orElseThrow(AccessDeniedAsNotFoundException::new);
                     var at = Instant.now(clock);
                     requireRequirementSources(actor, current, at);
-                    long number = current.currentOutlineVersionId()
-                            .map(id -> outlines.findById(id).orElseThrow().number() + 1).orElse(1L);
-                    var version = new OutlineVersion(UuidV7.generate(at), number, input.nodes(), actor, at);
+                    long number = outlines.nextNumber(current.id());
+                    var version = new OutlineVersion(UuidV7.generate(at), number, input.nodes(), actor, at,
+                            input.changeReason());
                     return SolutionCommandResult.from(workbench.reviseOutline(
                             new SolutionWorkbenchService.ReviseOutlineCommand(actor, current.spaceId(), current.id(),
                                     version, input.expectedRevision(), UuidV7.generate(at), at)));
@@ -127,11 +127,11 @@ public final class SolutionCommandService implements SolutionCommandPort {
     private SolutionCommandResult executeForSolution(UUID actor, String keyText, String action,
             UUID solutionId, String digest, Supplier<SolutionCommandResult> operation) {
         var current = solutions.findById(solutionId).orElseThrow(AccessDeniedAsNotFoundException::new);
-        return execute(key(actor, solutionId, action, keyText), digest, current.spaceId(), operation);
+        return execute(key(actor, solutionId, action, keyText), digest, current.spaceId(), solutionId, operation);
     }
 
     private SolutionCommandResult execute(SolutionCommandIdempotencyStore.Key key, String digest,
-            UUID spaceId, Supplier<SolutionCommandResult> operation) {
+            UUID spaceId, UUID lockId, Supplier<SolutionCommandResult> operation) {
         return transactions.execute(status -> {
             var at = Instant.now(clock);
             access.requireView(key.actorId(), spaceId, at);
@@ -148,6 +148,7 @@ public final class SolutionCommandService implements SolutionCommandPort {
                 }
                 return result;
             }
+            if (lockId != null) solutions.lockById(lockId);
             var result = operation.get();
             idempotency.complete(key, result);
             return result;
@@ -182,9 +183,12 @@ public final class SolutionCommandService implements SolutionCommandPort {
         }
     }
 
-    public record ReviseOutlineInput(UUID solutionId, List<OutlineNode> nodes, long expectedRevision) {
+    public record ReviseOutlineInput(UUID solutionId, List<OutlineNode> nodes,
+            String changeReason, long expectedRevision) {
         public ReviseOutlineInput {
             Objects.requireNonNull(solutionId); nodes = List.copyOf(Objects.requireNonNull(nodes));
+            if (changeReason == null || changeReason.isBlank()) throw new IllegalArgumentException("change reason required");
+            changeReason = changeReason.strip();
             if (expectedRevision < 0) throw new IllegalArgumentException("negative revision");
         }
     }

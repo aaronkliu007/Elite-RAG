@@ -149,6 +149,40 @@ class SolutionCommandServiceIntegrationTest {
                 .param("space", space).query(Long.class).single()).isEqualTo(1);
     }
 
+    @Test void differentKeysWithSameRevisionYieldOneConflictWithoutPersistenceFailure() throws Exception {
+        var actor = id(51); var space = id(52);
+        seed(actor, space);
+        var commands = service(AuditSink.noop());
+        var created = commands.create(actor, "different-keys-create", create(space, "并发修订"));
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var gate = new CountDownLatch(1);
+            Callable<Object> first = () -> reviseInRace(commands, actor, created, "different-key-a", id(53), gate);
+            Callable<Object> second = () -> reviseInRace(commands, actor, created, "different-key-b", id(54), gate);
+            var one = executor.submit(first);
+            var two = executor.submit(second);
+            gate.countDown();
+            var outcomes = List.of(one.get(10, TimeUnit.SECONDS), two.get(10, TimeUnit.SECONDS));
+            assertThat(outcomes.stream().filter(SolutionCommandResult.class::isInstance).count()).isEqualTo(1);
+            assertThat(outcomes.stream().filter(ConcurrentSolutionUpdateException.class::isInstance).count())
+                    .isEqualTo(1);
+        }
+        assertThat(jdbc.sql("SELECT count(*) FROM solution_requirement_version WHERE solution_id = :id")
+                .param("id", created.solutionId()).query(Long.class).single()).isEqualTo(2);
+    }
+
+    private static Object reviseInRace(SolutionCommandService commands, UUID actor,
+            SolutionCommandResult created, String key, UUID itemId, CountDownLatch gate) throws InterruptedException {
+        gate.await();
+        try {
+            return commands.reviseRequirements(actor, key,
+                    new SolutionCommandService.ReviseRequirementsInput(created.solutionId(),
+                            List.of(new RequirementItem(itemId, RequirementCategory.UNKNOWN, "并发修订内容", List.of())),
+                            "并发修订", created.revision()));
+        } catch (RuntimeException conflict) {
+            return conflict;
+        }
+    }
+
     private static SolutionCommandService service(AuditSink audit) {
         return service(audit, (actor, space, at) -> {},
                 (actor, space, document, version, at) -> true);

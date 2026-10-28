@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, onBeforeRouteLeave, useRoute } from 'vue-router'
 
 import { ApiRequestError } from '../api/http'
@@ -24,6 +24,7 @@ const conflict = ref(false)
 const requirementDrafts = ref<RequirementDraft[]>([])
 const outlineDrafts = ref<OutlineNodeInput[]>([])
 const changeReason = ref('')
+const outlineChangeReason = ref('')
 const dirtyRequirements = ref(false)
 const dirtyOutline = ref(false)
 const pendingKey = ref('')
@@ -79,6 +80,7 @@ function adoptLoaded(value: SolutionDetail) {
   dirtyRequirements.value = false
   dirtyOutline.value = false
   changeReason.value = ''
+  outlineChangeReason.value = ''
   pendingKey.value = ''
   conflict.value = false
 }
@@ -203,7 +205,7 @@ async function confirmRequirements() {
 }
 
 async function saveOutline() {
-  if (!solution.value || !canEditOutline.value) return
+  if (!solution.value || !canEditOutline.value || !outlineChangeReason.value.trim()) return
   if (dirtyRequirements.value) { mutationError.value = '请先处理未保存的需求修改'; return }
   const nodes = outlineDrafts.value.map((node, index) => ({ ...node, order: index + 1 }))
   if (nodes.some((node) => !node.title.trim() || !node.objective.trim() || !node.retrievalHint.trim())
@@ -211,7 +213,8 @@ async function saveOutline() {
     mutationError.value = '请填写章节标题、目标和检索提示，并保留至少一个必填章节'
     return
   }
-  await mutate((key) => solutionsApi.reviseOutline(solutionId.value, nodes, solution.value!.revision, key))
+  await mutate((key) => solutionsApi.reviseOutline(solutionId.value, nodes,
+    outlineChangeReason.value.trim(), solution.value!.revision, key))
 }
 
 async function confirmOutline() {
@@ -222,7 +225,13 @@ async function confirmOutline() {
 }
 
 onBeforeRouteLeave(() => !dirty.value || window.confirm('存在未保存的修改，确定离开方案吗？'))
-onMounted(() => { void load() })
+function beforeUnload(event: BeforeUnloadEvent) {
+  if (!dirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+onMounted(() => { window.addEventListener('beforeunload', beforeUnload); void load() })
+onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
 </script>
 
 <template>
@@ -295,6 +304,7 @@ onMounted(() => { void load() })
 
       <section
         class="step-card"
+        :inert="saving ? true : undefined"
         aria-labelledby="requirements-heading"
       >
         <div class="step-heading">
@@ -457,6 +467,7 @@ onMounted(() => { void load() })
 
       <section
         class="step-card"
+        :inert="saving ? true : undefined"
         aria-labelledby="outline-heading"
       >
         <div class="step-heading">
@@ -584,11 +595,17 @@ onMounted(() => { void load() })
             >
               添加章节
             </button>
+            <label class="reason-field">修改原因<input
+              v-model="outlineChangeReason"
+              name="outline-change-reason"
+              placeholder="说明本次大纲修订原因"
+              @input="dirtyOutline = true"
+            ></label>
             <button
               class="button button-primary"
               data-action="save-outline"
               type="button"
-              :disabled="saving || dirtyRequirements"
+              :disabled="saving || !outlineChangeReason.trim() || dirtyRequirements"
               @click="saveOutline"
             >
               {{ saving ? '正在保存…' : '保存大纲新版本' }}
@@ -617,6 +634,7 @@ onMounted(() => { void load() })
 
 <style scoped>
 .solution-detail { display: grid; gap: 20px; min-width: 0; }.back-link { justify-self: start; color: var(--color-accent); font-weight: 750; text-decoration: none; }
+.step-card[inert] { opacity: .72; }
 .detail-header, .step-card { min-width: 0; padding: 24px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: #fff; box-shadow: var(--shadow-panel); }
 .detail-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; }.header-copy { min-width: 0; }.header-copy h2 { margin: 4px 0 8px; overflow-wrap: anywhere; font-size: clamp(25px, 3vw, 35px); }.header-copy p:last-child { margin: 0; overflow-wrap: anywhere; color: var(--color-muted); font-family: var(--font-mono); font-size: 12px; }
 .eyebrow { margin: 0; color: var(--color-accent); font-size: 12px; font-weight: 800; letter-spacing: .08em; }.header-meta { display: grid; justify-items: end; gap: 8px; flex: 0 0 auto; color: var(--color-muted); font-size: 12px; }.phase-tag, .version-tag { padding: 6px 10px; border-radius: 999px; color: #126456; background: #e4f3f1; font-size: 12px; font-weight: 750; }

@@ -33,7 +33,7 @@ final class SolutionRequestDigest {
 
     static String outline(SolutionCommandService.ReviseOutlineInput input) {
         var value = new SolutionRequestDigest();
-        value.add("REVISE_OUTLINE").add(input.solutionId()).add(input.expectedRevision())
+        value.add("REVISE_OUTLINE").add(input.solutionId()).add(input.expectedRevision()).add(input.changeReason())
                 .add(input.nodes().size());
         for (var node : input.nodes()) {
             value.add(node.sectionId()).add(node.title()).add(node.level()).add(node.order())
