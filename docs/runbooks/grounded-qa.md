@@ -8,7 +8,7 @@
 
 ## 2. 默认关闭与安全边界
 
-默认配置 `RAG_AI_ENABLED=false`、`RAG_VECTOR_ENABLED=false`，且 `RAG_QA_QUESTION_HMAC_KEY` 为空。此时不装配真实模型客户端，问答 HTTP 能力也不开放；检索保留 BM25 路径并显式报告向量能力不可用。
+默认配置 `RAG_AI_ENABLED=false`、`RAG_VECTOR_ENABLED=false`、`RAG_QA_EVALUATION_FIXTURE_ENABLED=false`，且 `RAG_QA_QUESTION_HMAC_KEY` 为空。此时不装配真实模型客户端，不写入黄金集虚构知识，问答 HTTP 能力也不开放；检索保留 BM25 路径并显式报告向量能力不可用。
 
 启用前必须同时满足：
 
@@ -90,6 +90,16 @@ Embedding 与查询向量必须使用相同模型和维度。已有无向量索�
 ## 7. 黄金集与发布门禁
 
 仓库内 `contracts/qa/golden-dataset-v1.json` 是 50 条脱敏、虚构案例，覆盖 Word、PDF、PPT、Excel、Markdown、PNG OCR、跨文档、同义词、缩写、冲突、拒答和权限陷阱。评测必须复用生产问答的检索、鉴权、脱敏、模型和引用校验路径，不得创建绕过权限的“评测捷径”。
+
+在全新的隔离评测数据库中，可在启动 Native Spring Boot 进程前显式设置：
+
+```powershell
+$env:RAG_QA_EVALUATION_FIXTURE_ENABLED = 'true'
+```
+
+该开关只在 `local` profile 生效，默认关闭。启动时会以固定 ID 事务性安装 1 个虚构评测用户、2 个评测空间、50 条已授权虚构文档和 4 条无授权的权限陷阱文档，并为两个空间各写入一条 OpenSearch 投影事件。初始化可重复执行；若固定 ID 已被其他数据占用或只存在部分夹具，应用以 `EVALUATION_FIXTURE_ID_CONFLICT` 拒绝启动，禁止覆盖或修补现有数据。不要在承载真实知识或真实用户的数据库启用该开关。
+
+初始化完成不等于索引已就绪。必须等待 `retrieval_projection_event` 中两条空间事件处理成功，并确认 OpenSearch 投影 readiness 为 `UP` 后，才能发起评测。评测完成后应销毁隔离数据库和对应测试索引；不要把虚构夹具迁移到生产实例。
 
 系统管理员通过 `POST /api/admin/qa/evaluation-runs` 启动评测，请求只允许 `datasetId`、`codeVersion`、`policyVersion`、`modelConfigVersion`；非管理员按不存在处理。首版固定门槛为：
 

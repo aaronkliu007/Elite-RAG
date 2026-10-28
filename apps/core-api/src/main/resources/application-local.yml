@@ -37,6 +37,9 @@ rag:
     business-terms: ${RAG_SANITIZATION_BUSINESS_TERMS:}
   qa:
     hmac-key: ${RAG_QA_QUESTION_HMAC_KEY:}
+    evaluation:
+      fixture:
+        enabled: ${RAG_QA_EVALUATION_FIXTURE_ENABLED:false}
     metrics:
       input-cost-per-million-tokens: ${RAG_AI_INPUT_COST_PER_MILLION_TOKENS:0}
       output-cost-per-million-tokens: ${RAG_AI_OUTPUT_COST_PER_MILLION_TOKENS:0}

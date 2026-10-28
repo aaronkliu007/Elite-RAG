@@ -134,16 +134,22 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
-    EvaluationRepository evaluationRepository(JdbcClient jdbc,EvaluationTraceRegistry traces) {
+    EvaluationDataset evaluationDataset() {
         var json=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
         try(var input=PostgresAdapterConfiguration.class.getResourceAsStream(
                 "/contracts/qa/golden-dataset-v1.json")) {
             if(input==null)throw new IllegalStateException("grounded QA golden dataset is missing");
-            EvaluationDataset dataset=json.readValue(input,EvaluationDataset.class);
-            return new JdbcEvaluationRepository(jdbc,json,Map.of(dataset.id(),dataset),traces);
+            return json.readValue(input,EvaluationDataset.class);
         } catch(IOException failure) {
             throw new IllegalStateException("grounded QA golden dataset is invalid",failure);
         }
+    }
+
+    @Bean
+    EvaluationRepository evaluationRepository(
+            JdbcClient jdbc, EvaluationDataset dataset, EvaluationTraceRegistry traces) {
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        return new JdbcEvaluationRepository(jdbc, json, Map.of(dataset.id(), dataset), traces);
     }
 
     @Bean
