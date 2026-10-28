@@ -20,7 +20,13 @@ public final class SolutionAccessService implements SolutionAuthorizationPort {
         Objects.requireNonNull(actorId);
         Objects.requireNonNull(spaceId);
         Objects.requireNonNull(at);
-        spaces.requireRead(actorId, spaceId, at);
+        try {
+            spaces.requireRead(actorId, spaceId, at);
+        } catch (AccessDeniedAsNotFoundException denied) {
+            throw denied;
+        } catch (RuntimeException unavailable) {
+            throw new SolutionAuthorityUnavailableException();
+        }
     }
 
     public void requireAction(UUID actorId, UUID spaceId, UUID solutionId, SolutionAction action, Instant at) {
@@ -37,8 +43,14 @@ public final class SolutionAccessService implements SolutionAuthorizationPort {
 
     public Set<SolutionAction> allowedActions(UUID actorId, UUID spaceId, Instant at) {
         requireView(actorId, spaceId, at);
-        boolean administrator = roles.hasSystemRole(actorId, SystemRole.SYSTEM_ADMIN);
-        Set<SpaceRole> active = Objects.requireNonNull(roles.activeSpaceRoles(actorId, spaceId));
+        final boolean administrator;
+        final Set<SpaceRole> active;
+        try {
+            administrator = roles.hasSystemRole(actorId, SystemRole.SYSTEM_ADMIN);
+            active = Objects.requireNonNull(roles.activeSpaceRoles(actorId, spaceId));
+        } catch (RuntimeException unavailable) {
+            throw new SolutionAuthorityUnavailableException();
+        }
         EnumSet<SolutionAction> allowed = EnumSet.noneOf(SolutionAction.class);
         if (administrator || active.contains(SpaceRole.SPACE_ADMIN) || active.contains(SpaceRole.EDITOR)) {
             allowed.add(SolutionAction.EDIT_REQUIREMENTS);

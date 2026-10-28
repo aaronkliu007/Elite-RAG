@@ -6,12 +6,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yunjihai.rag.retrieval.domain.*;
 import java.util.*;
 
-final class SolutionLocatorJson {
+public final class SolutionLocatorJson {
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private SolutionLocatorJson() { }
 
-    static String write(SourceLocator locator) {
+    public static String write(SourceLocator locator) {
         Objects.requireNonNull(locator);
         Map<String, Object> fields = new LinkedHashMap<>();
         switch (locator) {
@@ -49,7 +49,7 @@ final class SolutionLocatorJson {
         }
     }
 
-    static SourceLocator read(String value) {
+    public static SourceLocator read(String value) {
         try {
             JsonNode node = JSON.readTree(value);
             if (node == null || !node.isObject()) throw new IllegalArgumentException("invalid locator");

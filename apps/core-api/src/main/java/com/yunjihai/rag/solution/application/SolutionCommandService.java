@@ -10,7 +10,7 @@ import java.time.*;
 import java.util.*;
 import java.util.function.Supplier;
 
-public final class SolutionCommandService {
+public final class SolutionCommandService implements SolutionCommandPort {
     private final SolutionWorkbenchService workbench;
     private final SolutionRepository solutions;
     private final RequirementVersionRepository requirements;

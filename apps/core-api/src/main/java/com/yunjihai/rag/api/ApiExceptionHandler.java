@@ -16,6 +16,10 @@ import com.yunjihai.rag.retrieval.RetrievalAuthorizationUnavailableException;
 import com.yunjihai.rag.retrieval.search.RetrievalUnavailableException;
 import com.yunjihai.rag.qa.QaRateLimitExceededException;
 import com.yunjihai.rag.solution.generation.GenerationRequestConflictException;
+import com.yunjihai.rag.solution.application.SolutionAuthorityUnavailableException;
+import com.yunjihai.rag.solution.application.SolutionCommandConflictException;
+import com.yunjihai.rag.solution.domain.ConcurrentSolutionUpdateException;
+import com.yunjihai.rag.solution.domain.SolutionLifecycleException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
@@ -111,16 +115,34 @@ public class ApiExceptionHandler {
             IngestionRequestConflictException.class,
             IngestionLeaseConflictException.class,
             UploadConflictException.class,
-            IdempotencyConflictException.class
+            IdempotencyConflictException.class,
+            SolutionCommandConflictException.class,
+            ConcurrentSolutionUpdateException.class
     })
     ResponseEntity<ApiError> conflict(Exception failure, HttpServletRequest request) {
         String code = failure instanceof IdempotencyConflictException conflict
                 ? conflict.code()
+                : failure instanceof SolutionCommandConflictException conflict
+                ? conflict.code()
+                : failure instanceof ConcurrentSolutionUpdateException
+                ? "SOLUTION_CONCURRENT_UPDATE"
                 : "CONFLICT";
         String message = failure instanceof IdempotencyConflictException conflict
                 ? conflict.publicMessage()
                 : "请求与当前状态冲突";
         return response(HttpStatus.CONFLICT, code, message, request, Map.of());
+    }
+
+    @ExceptionHandler(SolutionLifecycleException.class)
+    ResponseEntity<ApiError> solutionGate(SolutionLifecycleException failure, HttpServletRequest request) {
+        return response(HttpStatus.UNPROCESSABLE_ENTITY, failure.errorCode(),
+                "方案当前状态不允许此操作", request, Map.of());
+    }
+
+    @ExceptionHandler(SolutionAuthorityUnavailableException.class)
+    ResponseEntity<ApiError> solutionAuthorityUnavailable(Exception failure, HttpServletRequest request) {
+        return response(HttpStatus.SERVICE_UNAVAILABLE, "SOLUTION_AUTHORITY_UNAVAILABLE",
+                "权限服务暂时不可用", request, Map.of());
     }
 
     @ExceptionHandler(PostgresPersistenceExceptionTranslator.Failure.class)

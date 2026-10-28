@@ -18,15 +18,27 @@ public final class SolutionSourceAccess {
 
     public void requireCurrentSources(UUID actorId, UUID spaceId, RequirementVersion version, Instant at) {
         Objects.requireNonNull(version);
-        spaces.requireRead(actorId, spaceId, at);
+        try {
+            spaces.requireRead(actorId, spaceId, at);
+        } catch (AccessDeniedAsNotFoundException denied) {
+            throw denied;
+        } catch (RuntimeException unavailable) {
+            throw new SolutionAuthorityUnavailableException();
+        }
         for (var item : version.items()) {
             if (item.category() != RequirementCategory.UNKNOWN && item.sources().isEmpty()) {
                 throw new AccessDeniedAsNotFoundException();
             }
             for (var source : item.sources()) {
                 var reference = source.documentVersion();
-                if (!documents.isCurrentPublishedAndReadable(actorId, spaceId,
-                        reference.documentId(), reference.versionId(), at)) {
+                final boolean readable;
+                try {
+                    readable = documents.isCurrentPublishedAndReadable(actorId, spaceId,
+                            reference.documentId(), reference.versionId(), at);
+                } catch (RuntimeException unavailable) {
+                    throw new SolutionAuthorityUnavailableException();
+                }
+                if (!readable) {
                     throw new AccessDeniedAsNotFoundException();
                 }
             }

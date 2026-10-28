@@ -74,16 +74,21 @@ public final class JdbcSolutionRepository implements SolutionRepository, Solutio
         }
     }
 
-    @Override public List<Solution> listBySpace(UUID spaceId, int page, int pageSize) {
+    @Override public List<SolutionListItem> listBySpace(UUID spaceId, int page, int pageSize) {
         Objects.requireNonNull(spaceId);
         if (page < 0 || pageSize < 1 || pageSize > 100 || page > Integer.MAX_VALUE / pageSize)
             throw new IllegalArgumentException("invalid page bounds");
         try {
             return jdbc.sql("""
-                    SELECT id FROM solution WHERE space_id = :space
+                    SELECT id, space_id, name, phase, revision, created_at, updated_at
+                    FROM solution WHERE space_id = :space
                     ORDER BY updated_at DESC, id DESC OFFSET :offset LIMIT :limit
                     """).param("space", spaceId).param("offset", page * pageSize).param("limit", pageSize)
-                    .query(UUID.class).list().stream().map(id -> findById(id).orElseThrow()).toList();
+                    .query((row, ignored) -> new SolutionListItem(
+                            row.getObject("id", UUID.class), row.getObject("space_id", UUID.class),
+                            row.getString("name"), SolutionPhase.valueOf(row.getString("phase")),
+                            row.getLong("revision"), row.getObject("created_at", OffsetDateTime.class).toInstant(),
+                            row.getObject("updated_at", OffsetDateTime.class).toInstant())).list();
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }
