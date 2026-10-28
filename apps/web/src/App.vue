@@ -42,6 +42,9 @@ async function logout() {
         <RouterLink to="/qa">
           知识问答
         </RouterLink>
+        <RouterLink to="/solutions">
+          方案工作台
+        </RouterLink>
       </nav>
       <div class="session-actions">
         <div class="session-chip">

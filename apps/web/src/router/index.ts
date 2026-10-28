@@ -7,6 +7,8 @@ import KnowledgeHomeView from '../views/KnowledgeHomeView.vue'
 import LoginView from '../views/LoginView.vue'
 import QaView from '../views/QaView.vue'
 import SearchView from '../views/SearchView.vue'
+import SolutionListView from '../views/SolutionListView.vue'
+import SolutionDetailView from '../views/SolutionDetailView.vue'
 import SpaceDetailView from '../views/SpaceDetailView.vue'
 import UploadView from '../views/UploadView.vue'
 import UserAdminView from '../views/UserAdminView.vue'
@@ -45,6 +47,21 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
         path: '/qa',
         name: 'knowledge-qa',
         component: QaView,
+      },
+      {
+        path: '/solutions',
+        name: 'solution-home',
+        component: SolutionListView,
+      },
+      {
+        path: '/spaces/:spaceId/solutions',
+        name: 'solution-list',
+        component: SolutionListView,
+      },
+      {
+        path: '/solutions/:solutionId',
+        name: 'solution-detail',
+        component: SolutionDetailView,
       },
       {
         path: '/spaces/:spaceId',

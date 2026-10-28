@@ -1,0 +1,75 @@
+import { apiRequest } from './http'
+
+export type SolutionPhase =
+  | 'REQUIREMENTS_DRAFT' | 'REQUIREMENTS_CONFIRMED' | 'OUTLINE_DRAFT'
+  | 'OUTLINE_CONFIRMED' | 'GENERATING' | 'IN_REVIEW' | 'READY_TO_FINALIZE' | 'FINALIZED'
+export type SolutionAction = 'EDIT_REQUIREMENTS' | 'EDIT_OUTLINE' | 'CONFIRM_REQUIREMENTS' | 'CONFIRM_OUTLINE'
+export type RequirementCategory =
+  | 'GOAL' | 'SCOPE' | 'CONSTRAINT' | 'DELIVERABLE' | 'STAKEHOLDER' | 'DATE' | 'RISK' | 'UNKNOWN'
+export type RiskType =
+  | 'AMOUNT_OR_PRICE' | 'DATE_OR_DURATION' | 'PERFORMANCE_OR_SLA'
+  | 'CUSTOMER_OR_CASE_FACT' | 'COMPANY_OR_PRODUCT_CAPABILITY' | 'LEGAL_OR_COMPLIANCE_COMMITMENT'
+
+export type SolutionLocator =
+  | { type: 'PAGE', pageNumber: number, box?: { left: number, top: number, right: number, bottom: number } }
+  | { type: 'SLIDE', slideNumber: number }
+  | { type: 'TABLE', tableName: string, startRow: number, endRow: number, startColumn: number, endColumn: number }
+  | { type: 'MARKDOWN', headingPath: string[], nodeId: string | null }
+
+export interface SolutionSource { documentId: string, versionId: string, locator: SolutionLocator }
+export interface RequirementItemInput { category: RequirementCategory, text: string, sources: SolutionSource[] }
+export interface RequirementItem extends RequirementItemInput { itemId: string }
+export interface RequirementVersion {
+  id: string, number: number, items: RequirementItem[], createdBy: string, createdAt: string, changeReason: string
+}
+export interface OutlineNodeInput {
+  title: string, level: number, order: number, required: boolean,
+  objective: string, retrievalHint: string, riskTypes: RiskType[]
+}
+export interface OutlineNode extends OutlineNodeInput { sectionId: string }
+export interface OutlineVersion { id: string, number: number, nodes: OutlineNode[], createdBy: string, createdAt: string }
+export interface Confirmation { versionId: string, confirmedBy: string, confirmedAt: string, valid: boolean }
+export interface SolutionSummary {
+  id: string, spaceId: string, name: string, phase: SolutionPhase, revision: number,
+  createdAt: string, updatedAt: string
+}
+export interface SolutionDetail {
+  id: string, spaceId: string, name: string, phase: SolutionPhase, revision: number,
+  solutionRevision: number, createdAt: string, requirementVersion: RequirementVersion | null,
+  outlineVersion: OutlineVersion | null, requirementConfirmation: Confirmation | null,
+  outlineConfirmation: Confirmation | null, sourceAccessValid: boolean, allowedActions: SolutionAction[]
+}
+export interface SolutionCommandResult {
+  solutionId: string, revision: number, requirementVersionId: string,
+  outlineVersionId: string | null, phase: SolutionPhase
+}
+
+const keyHeader = (key: string) => ({ 'Idempotency-Key': key })
+const path = (solutionId: string) => `/api/v1/solutions/${encodeURIComponent(solutionId)}`
+
+export const solutionsApi = {
+  list: (spaceId: string, page = 1, pageSize = 20) => apiRequest<SolutionSummary[]>(
+    `/api/v1/knowledge-spaces/${encodeURIComponent(spaceId)}/solutions?page=${page}&pageSize=${pageSize}`,
+  ),
+  get: (solutionId: string) => apiRequest<SolutionDetail>(path(solutionId)),
+  create: (spaceId: string, name: string, items: RequirementItemInput[], expectedRevision: number, key: string) =>
+    apiRequest<SolutionCommandResult>(`/api/v1/knowledge-spaces/${encodeURIComponent(spaceId)}/solutions`, {
+      method: 'POST', headers: keyHeader(key), body: JSON.stringify({ name, items, expectedRevision }),
+    }),
+  reviseRequirements: (solutionId: string, items: RequirementItemInput[], changeReason: string,
+    expectedRevision: number, key: string) => apiRequest<SolutionCommandResult>(`${path(solutionId)}/requirements`, {
+    method: 'PUT', headers: keyHeader(key), body: JSON.stringify({ items, changeReason, expectedRevision }),
+  }),
+  confirmRequirements: (solutionId: string, versionId: string, expectedRevision: number, key: string) =>
+    apiRequest<SolutionCommandResult>(`${path(solutionId)}/requirements/${encodeURIComponent(versionId)}/confirm`, {
+      method: 'POST', headers: keyHeader(key), body: JSON.stringify({ expectedRevision }),
+    }),
+  reviseOutline: (solutionId: string, nodes: OutlineNodeInput[], expectedRevision: number, key: string) =>
+    apiRequest<SolutionCommandResult>(`${path(solutionId)}/outline`, {
+      method: 'PUT', headers: keyHeader(key), body: JSON.stringify({ nodes, expectedRevision }),
+    }),
+  confirmOutline: (solutionId: string, versionId: string, expectedRevision: number, key: string) =>
+    apiRequest<SolutionCommandResult>(`${path(solutionId)}/outline/${encodeURIComponent(versionId)}/confirm`, {
+      method: 'POST', headers: keyHeader(key), body: JSON.stringify({ expectedRevision }),
+    }),
+}
