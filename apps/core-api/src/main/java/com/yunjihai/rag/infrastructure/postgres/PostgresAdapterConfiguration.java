@@ -66,6 +66,9 @@ import com.yunjihai.rag.qa.QaActorRateLimiter;
 import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaSourceAccessPort;
 import com.yunjihai.rag.qa.QuestionDigestPort;
+import com.yunjihai.rag.solution.application.SolutionAccessService;
+import com.yunjihai.rag.solution.application.SolutionSourceAccess;
+import com.yunjihai.rag.solution.application.SolutionReviewPolicy;
 import com.yunjihai.rag.qa.evaluation.EvaluationDataset;
 import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
 import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
@@ -97,6 +100,28 @@ import tools.jackson.databind.ObjectMapper;
 @EnableTransactionManagement(proxyTargetClass = true)
 @EnableConfigurationProperties(BootstrapAdminProperties.class)
 public class PostgresAdapterConfiguration {
+
+    @Bean
+    SolutionAccessService solutionAccessService(KnowledgeSpaceReadAuthorization spaces, RoleAssignmentStore roles) {
+        return new SolutionAccessService(spaces, roles);
+    }
+
+    @Bean
+    JdbcSolutionDocumentSourcePort jdbcSolutionDocumentSourcePort(JdbcClient jdbc, AccessDecisionService access) {
+        return new JdbcSolutionDocumentSourcePort(jdbc, access);
+    }
+
+    @Bean
+    SolutionSourceAccess solutionSourceAccess(KnowledgeSpaceReadAuthorization spaces,
+            JdbcSolutionDocumentSourcePort documents) {
+        return new SolutionSourceAccess(spaces, documents);
+    }
+
+    @Bean
+    SolutionReviewPolicy solutionReviewPolicy(
+            @Value("${rag.solution.review.allow-self-confirmation:false}") boolean allowSelfConfirmation) {
+        return new SolutionReviewPolicy(allowSelfConfirmation);
+    }
 
     @Bean
     JdbcSolutionRepository jdbcSolutionRepository(JdbcClient jdbc) {

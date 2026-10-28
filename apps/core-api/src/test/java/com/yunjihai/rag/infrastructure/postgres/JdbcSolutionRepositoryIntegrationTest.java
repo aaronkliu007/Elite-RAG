@@ -4,6 +4,7 @@ import com.yunjihai.rag.solution.domain.*;
 import com.yunjihai.rag.solution.port.*;
 import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.retrieval.domain.*;
+import com.yunjihai.rag.access.*;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -147,6 +148,39 @@ class JdbcSolutionRepositoryIntegrationTest {
             solutions.insert(foreignSolution); requirements.insert(foreignSolution.id(), foreignVersion);
         })).isInstanceOf(RuntimeException.class);
         assertThat(solutions.findById(foreignSolution.id())).isEmpty();
+    }
+
+    @Test void sourceAccessRejectsUnpublishedAndRevokedDocuments() {
+        var actor = id(61);
+        var space = id(62);
+        var document = id(63);
+        var version = id(64);
+        var acl = id(65);
+        seed(actor, space);
+        jdbc.sql("INSERT INTO document (id, space_id, title) VALUES (:id, :space, '材料')")
+                .param("id", document).param("space", space).update();
+        jdbc.sql("""
+                INSERT INTO document_version (id, document_id, version_number, source_blob_id, created_by)
+                VALUES (:id, :document, 1, 'test-blob', :actor)
+                """).param("id", version).param("document", document).param("actor", actor).update();
+        jdbc.sql("""
+                INSERT INTO acl_entry (id, space_id, scope, principal_type, principal_id)
+                VALUES (:id, :space, 'SPACE', 'USER', :actor)
+                """).param("id", acl).param("space", space).param("actor", actor).update();
+        var principals = new EffectivePrincipalSet(user ->
+                new PrincipalMembershipSnapshot(Set.of(), Map.of(), Set.of(), Set.of()));
+        var access = new AccessDecisionService(principals, new JdbcAccessDecisionRepository(jdbc));
+        var sources = new JdbcSolutionDocumentSourcePort(jdbc, access);
+        assertThat(sources.isCurrentPublishedAndReadable(actor, space, document, version, NOW)).isFalse();
+        jdbc.sql("UPDATE document_version SET status = 'PUBLISHED' WHERE id = :id")
+                .param("id", version).update();
+        jdbc.sql("UPDATE document SET current_published_version_id = :version WHERE id = :id")
+                .param("version", version).param("id", document).update();
+        assertThat(sources.isCurrentPublishedAndReadable(actor, space, document, version, NOW)).isTrue();
+        jdbc.sql("UPDATE acl_entry SET revoked_at = :at WHERE id = :id")
+                .param("at", OffsetDateTime.ofInstant(NOW.plusSeconds(1), ZoneOffset.UTC))
+                .param("id", acl).update();
+        assertThat(sources.isCurrentPublishedAndReadable(actor, space, document, version, NOW.plusSeconds(2))).isFalse();
     }
 
     private static RequirementVersion requirement(UUID actor, UUID versionId, long number) {
