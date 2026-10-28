@@ -18,12 +18,14 @@ class QaIdempotencyIntegrationTest {
         var replay=fixture.controller.ask(auth(ACTOR),"same-key",request);
         assertThat(replay).isEqualTo(first);
         assertThat(fixture.modelCalls).hasValue(1);
+        assertThat(fixture.rateLimitAcquisitions).hasValue(1);
 
         assertThatThrownBy(()->fixture.controller.ask(auth(ACTOR),"same-key",
                 new QaDtos.AskQuestionRequest("另一个问题")))
                 .isInstanceOf(IdempotencyConflictException.class)
                 .extracting("reason")
                 .isEqualTo(IdempotencyConflictException.Reason.REQUEST_MISMATCH);
+        assertThat(fixture.rateLimitAcquisitions).hasValue(1);
     }
 
     @Test

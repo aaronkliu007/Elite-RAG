@@ -62,6 +62,7 @@ import com.yunjihai.rag.retrieval.selection.RetrievalAuthorizationPort;
 import com.yunjihai.rag.qa.AuthorizedSpaceScopePort;
 import com.yunjihai.rag.qa.ModelCallAuditPort;
 import com.yunjihai.rag.qa.QaEvidenceAuthorizationPort;
+import com.yunjihai.rag.qa.QaActorRateLimiter;
 import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaSourceAccessPort;
 import com.yunjihai.rag.qa.QuestionDigestPort;
@@ -121,6 +122,14 @@ public class PostgresAdapterConfiguration {
     @Bean
     ModelCallAuditPort modelCallAuditPort(JdbcClient jdbc) {
         return new JdbcModelCallAuditAdapter(jdbc);
+    }
+
+    @Bean
+    QaActorRateLimiter qaActorRateLimiter(
+            JdbcClient jdbc,
+            @Value("${rag.qa.actor-rate-limit.window:PT1M}") Duration window,
+            @Value("${rag.qa.actor-rate-limit.max-requests:20}") int maxRequests) {
+        return new JdbcQaActorRateLimiter(jdbc,window,maxRequests);
     }
 
     @Bean

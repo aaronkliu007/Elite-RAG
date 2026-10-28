@@ -39,6 +39,9 @@ rag:
     business-terms: ${RAG_SANITIZATION_BUSINESS_TERMS:}
   qa:
     hmac-key: ${RAG_QA_QUESTION_HMAC_KEY:}
+    actor-rate-limit:
+      window: ${RAG_QA_ACTOR_RATE_LIMIT_WINDOW:PT1M}
+      max-requests: ${RAG_QA_ACTOR_RATE_LIMIT_MAX_REQUESTS:20}
     evaluation:
       fixture:
         enabled: ${RAG_QA_EVALUATION_FIXTURE_ENABLED:false}

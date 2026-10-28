@@ -3,6 +3,7 @@ package com.yunjihai.rag.api;
 import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.identity.local.UsernameConflictException;
 import com.yunjihai.rag.infrastructure.postgres.PostgresPersistenceExceptionTranslator;
+import com.yunjihai.rag.qa.QaRateLimitExceededException;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.security.access.AccessDeniedException;
@@ -84,6 +85,16 @@ class ApiExceptionHandlerTest {
                 .andExpect(jsonPath("$.traceId").isNotEmpty());
     }
 
+    @Test
+    void mapsQaRateLimitToStable429WithRetryAfter() throws Exception {
+        mvc.perform(get("/failure/qa-rate-limit"))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After","30"))
+                .andExpect(jsonPath("$.code").value("QA_RATE_LIMITED"))
+                .andExpect(jsonPath("$.message").value("问答请求过于频繁，请稍后重试"))
+                .andExpect(jsonPath("$.traceId").isNotEmpty());
+    }
+
     private void assertError(String path, int statusCode, String code, String message) throws Exception {
         mvc.perform(get(path))
                 .andExpect(status().is(statusCode))
@@ -128,5 +139,8 @@ class ApiExceptionHandlerTest {
 
         @GetMapping("/failure/upload-too-large")
         void uploadTooLarge() { throw new MaxUploadSizeExceededException(100L * 1024 * 1024); }
+
+        @GetMapping("/failure/qa-rate-limit")
+        void qaRateLimit() { throw new QaRateLimitExceededException(30); }
     }
 }

@@ -20,6 +20,8 @@ final class QaTestHarness {
     static final UUID ACTOR=id(1);
     final MemoryQaPersistence persistence=new MemoryQaPersistence();
     final AtomicInteger modelCalls=new AtomicInteger();
+    final AtomicInteger rateLimitAcquisitions=new AtomicInteger();
+    final AtomicBoolean rejectRateLimit=new AtomicBoolean();
     final AtomicReference<UUID> lastActor=new AtomicReference<>();
     final CountDownLatch modelEntered=new CountDownLatch(1);
     final CountDownLatch releaseModel=new CountDownLatch(1);
@@ -80,7 +82,11 @@ final class QaTestHarness {
         var json=new ObjectMapper();
         var idempotency=new IdempotencyService(new MemoryIdempotencyStore(),json,
                 Clock.fixed(NOW,ZoneOffset.UTC),Duration.ofHours(24));
-        controller=new QaController(service,idempotency,json,Clock.fixed(NOW,ZoneOffset.UTC));
+        QaActorRateLimiter rateLimiter=actorId->{
+            rateLimitAcquisitions.incrementAndGet();
+            if(rejectRateLimit.get())throw new QaRateLimitExceededException(30);
+        };
+        controller=new QaController(service,idempotency,rateLimiter,json,Clock.fixed(NOW,ZoneOffset.UTC));
     }
 
     enum Mode { ANSWERED,REFUSED,FAILED }
@@ -133,6 +139,7 @@ final class QaTestHarness {
             return value==null||!value.state.actorId().equals(actor)
                     ?Optional.empty():Optional.ofNullable(value.completedAt);
         }
+        synchronized int size(){return values.size();}
         private record Entry(RequestState state,QaOutcome outcome,Instant completedAt){}
     }
 

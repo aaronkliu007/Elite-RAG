@@ -4,6 +4,7 @@ import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.qa.domain.QaOutcome;
 import com.yunjihai.rag.qa.domain.QaStatus;
 import com.yunjihai.rag.qa.domain.RefusalReason;
+import com.yunjihai.rag.qa.QaRateLimitExceededException;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
@@ -69,6 +70,22 @@ class QaControllerTest {
         assertThatThrownBy(()->fixture.controller.ask(auth(ACTOR),"blank",
                 new QaDtos.AskQuestionRequest("   ")))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThat(fixture.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void rateLimitRejectionDoesNotCreateQuestionOrCallModel() {
+        var fixture=new QaTestHarness(Mode.ANSWERED);
+        fixture.rejectRateLimit.set(true);
+
+        assertThatThrownBy(()->fixture.controller.ask(auth(ACTOR),"limited",
+                new QaDtos.AskQuestionRequest("制度何时生效？")))
+                .isInstanceOf(QaRateLimitExceededException.class)
+                .extracting("retryAfterSeconds")
+                .isEqualTo(30L);
+
+        assertThat(fixture.rateLimitAcquisitions).hasValue(1);
+        assertThat(fixture.persistence.size()).isZero();
         assertThat(fixture.modelCalls).hasValue(0);
     }
 }

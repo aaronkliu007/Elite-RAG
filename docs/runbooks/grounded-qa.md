@@ -50,6 +50,8 @@ $env:RAG_SANITIZATION_BUSINESS_TERMS = '内部项目代号,受控业务术语'
 
 `RAG_QA_QUESTION_HMAC_KEY` 必须至少 32 个 UTF-8 字节，用于保存问题的 HMAC-SHA-256 摘要；不得与 API 密钥、登录摘要密钥或其他实例共用。`RAG_SANITIZATION_BUSINESS_TERMS` 是英文逗号分隔的阻断词，任何一项命中都会禁止该证据外发，变更后必须重新跑安全案例和黄金集。模型网关启用时供应商标识、模型配置版本、三个模型名、审批主机和 API 密钥都必须非空，否则应用拒绝启动。供应商和配置版本只能使用受控短标识，不得填写完整 URL、密钥或自由文本；每次端点、模型、超时、Token 上限或脱敏策略变更都必须提升配置版本。
 
+问答提交默认按操作者固定窗口限流：`RAG_QA_ACTOR_RATE_LIMIT_WINDOW=PT1M`、`RAG_QA_ACTOR_RATE_LIMIT_MAX_REQUESTS=20`。超限返回 `429`、错误码 `QA_RATE_LIMITED` 和 `Retry-After`；限制在幂等执行器取得新请求所有权后生效，因此同一 `Idempotency-Key` 的已完成重放不会重复计数。计数使用 PostgreSQL 时钟并在独立短事务中提交，避免多副本 JVM 时钟偏差，也不会让操作者计数行锁跨越检索或模型调用；后续业务失败不退还已放行次数。不得通过扩大模型并发或代理重试绕过该保护；修改限额前应结合模型预算和压测结果审批。
+
 启动后检查：
 
 ```powershell

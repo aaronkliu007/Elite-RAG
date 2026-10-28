@@ -14,6 +14,7 @@ import com.yunjihai.rag.knowledge.DocumentLifecycleException;
 import com.yunjihai.rag.knowledge.KnowledgeNotFoundException;
 import com.yunjihai.rag.retrieval.RetrievalAuthorizationUnavailableException;
 import com.yunjihai.rag.retrieval.search.RetrievalUnavailableException;
+import com.yunjihai.rag.qa.QaRateLimitExceededException;
 import com.yunjihai.rag.solution.generation.GenerationRequestConflictException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
@@ -62,6 +63,19 @@ public class ApiExceptionHandler {
                 "上传文件超过大小限制",
                 request,
                 Map.of());
+    }
+
+    @ExceptionHandler(QaRateLimitExceededException.class)
+    ResponseEntity<ApiError> qaRateLimited(
+            QaRateLimitExceededException failure,
+            HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header("Retry-After",Long.toString(failure.retryAfterSeconds()))
+                .body(error(
+                        "QA_RATE_LIMITED",
+                        "问答请求过于频繁，请稍后重试",
+                        request,
+                        Map.of()));
     }
 
     @ExceptionHandler({MethodArgumentNotValidException.class, BindException.class})

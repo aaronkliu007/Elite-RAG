@@ -21,12 +21,19 @@ import java.util.*;
 public class QaController {
     private final GroundedQaService qa;
     private final IdempotencyService idempotency;
+    private final QaActorRateLimiter rateLimiter;
     private final ObjectMapper json;
     private final Clock clock;
 
-    public QaController(GroundedQaService qa,IdempotencyService idempotency,ObjectMapper json,Clock clock) {
+    public QaController(
+            GroundedQaService qa,
+            IdempotencyService idempotency,
+            QaActorRateLimiter rateLimiter,
+            ObjectMapper json,
+            Clock clock) {
         this.qa=Objects.requireNonNull(qa);
         this.idempotency=Objects.requireNonNull(idempotency);
+        this.rateLimiter=Objects.requireNonNull(rateLimiter);
         this.json=Objects.requireNonNull(json);
         this.clock=Objects.requireNonNull(clock);
     }
@@ -43,7 +50,9 @@ public class QaController {
         return idempotency.execute(
                 new IdempotencyScope(actorId,"qa.question.ask",idempotencyKey),
                 hash,QaDtos.QuestionResponse.class,()->{
-                    UUID requestId=UuidV7.generate(clock.instant());
+                    rateLimiter.acquire(actorId);
+                    Instant now=clock.instant();
+                    UUID requestId=UuidV7.generate(now);
                     var outcome=qa.ask(new AskQuestionCommand(requestId,actorId,request.question()));
                     Instant completedAt=qa.completedAt(requestId,actorId).orElseThrow(
                             ()->new IllegalStateException("QA_TERMINAL_RESULT_NOT_PERSISTED"));
