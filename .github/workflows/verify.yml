@@ -40,6 +40,18 @@ jobs:
           pnpm --dir apps/web test --run
           pnpm --dir apps/web build
           pnpm --dir apps/web lint
+      - name: 安装浏览器及系统依赖
+        run: pnpm --dir apps/web exec playwright install --with-deps chrome
+      - name: 运行浏览器端到端验收
+        run: pnpm --dir apps/web exec playwright test
+      - name: 保存失败时的浏览器验收材料
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: apps/web/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
 
   python:
     name: Python 文档解析 Worker
