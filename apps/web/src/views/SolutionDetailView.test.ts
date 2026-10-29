@@ -25,6 +25,7 @@ it('风险确认后才允许定稿，定稿后展示 Word 下载', async () => {
   let finalized = false
   let revision = 4
   const requests: string[] = []
+  const feedbackKeys: string[] = []
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     if (path.endsWith('/session/csrf')) return json({ headerName: 'X-CSRF-TOKEN', token: 'csrf', parameterName: '_csrf' })
@@ -48,6 +49,8 @@ it('风险确认后才允许定稿，定稿后展示 Word 下载', async () => {
     if (path.endsWith('/feedback') && init?.method === 'POST') {
       const body = JSON.parse(String(init.body))
       requests.push(`feedback:${body.reason}:${body.sectionVersionId}`)
+      feedbackKeys.push(new Headers(init.headers).get('Idempotency-Key') ?? '')
+      if (feedbackKeys.length <= 3) return json({ code: 'SERVICE_UNAVAILABLE', message: '暂时不可用' }, 503)
       return json({ id: 'feedback-1', finalizedVersionId: 'final-1',
         sectionVersionId: body.sectionVersionId, reason: body.reason, createdAt: '2026-10-29T00:00:00Z' }, 201)
     }
@@ -88,6 +91,20 @@ it('风险确认后才允许定稿，定稿后展示 Word 下载', async () => {
   await wrapper.get('[data-action="submit-feedback"]').trigger('click')
   await flushPromises()
   expect(requests).toContain('feedback:MISSING_EVIDENCE:adopted-1')
+  await wrapper.get('[data-action="submit-feedback"]').trigger('click')
+  await flushPromises()
+  expect(feedbackKeys[1]).toBe(feedbackKeys[0])
+  await wrapper.get('[data-action="feedback-reason"]').setValue('FACT_ERROR')
+  await wrapper.get('[data-action="submit-feedback"]').trigger('click')
+  await flushPromises()
+  expect(feedbackKeys[2]).not.toBe(feedbackKeys[0])
+  expect(requests).toContain('feedback:FACT_ERROR:adopted-1')
+  await wrapper.get('[data-action="feedback-section"]').setValue('')
+  await wrapper.get('[data-action="submit-feedback"]').trigger('click')
+  await flushPromises()
+  expect(feedbackKeys[3]).not.toBe(feedbackKeys[2])
+  expect(requests).toContain('feedback:FACT_ERROR:null')
+  expect(wrapper.get('[aria-label="我的反馈记录"]').text()).toContain('事实错误')
   wrapper.unmount()
 })
 

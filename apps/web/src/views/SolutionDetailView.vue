@@ -42,6 +42,7 @@ const feedbackItems = ref<SolutionFeedback[]>([])
 const feedbackError = ref('')
 const feedbackSaving = ref(false)
 const feedbackKey = ref('')
+const feedbackPayload = ref('')
 const feedbackReasons: { value: FeedbackReason, label: string }[] = [
   { value: 'ACCEPTED', label: '已采纳' }, { value: 'FACT_ERROR', label: '事实错误' },
   { value: 'MISSING_EVIDENCE', label: '缺少证据' }, { value: 'IRRELEVANT', label: '内容不相关' },
@@ -318,15 +319,25 @@ async function submitFeedback() {
   if (!current?.finalizedVersionId || !current.sourceAccessValid || feedbackSaving.value) return
   feedbackSaving.value = true
   feedbackError.value = ''
-  feedbackKey.value ||= crypto.randomUUID()
+  const sectionVersionId = feedbackSection.value || null
+  const reason = feedbackReason.value
+  const payload = JSON.stringify([current.id, current.finalizedVersionId, sectionVersionId, reason])
+  if (!feedbackKey.value || feedbackPayload.value !== payload) {
+    feedbackKey.value = crypto.randomUUID()
+    feedbackPayload.value = payload
+  }
   try {
     const saved = await solutionsApi.submitFeedback(current.id, current.finalizedVersionId,
-      feedbackSection.value || null, feedbackReason.value, feedbackKey.value)
+      sectionVersionId, reason, feedbackKey.value)
     feedbackItems.value = [saved, ...feedbackItems.value.filter((item) => item.id !== saved.id)]
     feedbackKey.value = ''
+    feedbackPayload.value = ''
   } catch (failure) {
     feedbackError.value = message(failure, '提交反馈失败，请重试')
-    if (failure instanceof ApiRequestError && failure.status === 409) feedbackKey.value = ''
+    if (failure instanceof ApiRequestError && failure.status === 409) {
+      feedbackKey.value = ''
+      feedbackPayload.value = ''
+    }
   } finally {
     feedbackSaving.value = false
   }
