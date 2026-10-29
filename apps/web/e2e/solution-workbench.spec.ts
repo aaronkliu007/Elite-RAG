@@ -18,7 +18,7 @@ async function session(page: Page) {
     route.fulfill({ json: [space] }))
 }
 
-test('创建、修订来源需求、确认需求、保存并确认大纲', async ({ page }) => {
+test('上传来源后完成方案编制、拒绝无依据草稿、风险确认、定稿与下载', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 900 })
   await session(page)
   let revision = 0
@@ -32,6 +32,11 @@ test('创建、修订来源需求、确认需求、保存并确认大纲', async
   let outline: unknown = null
   let outlineConfirmation: unknown = null
   let savedSourceLocator: unknown = null
+  let adopted = false
+  let riskConfirmed = false
+  let finalized = false
+  let generationCalls = 0
+  const generationKeys: string[] = []
 
   const current = () => ({
     id: 'solution-1', spaceId: space.id,
@@ -42,10 +47,13 @@ test('创建、修订来源需求、确认需求、保存并确认大纲', async
       items: [{ itemId: 'item-1', category, text: requirementText, sources }] },
     outlineVersion: outline, requirementConfirmation, outlineConfirmation,
     sourceAccessValid: true,
+    adoptedSectionVersionIds: adopted ? { 'section-1': 'adopted-1' } : {},
+    finalizedVersionId: finalized ? 'final-1' : null,
     allowedActions: phase === 'REQUIREMENTS_DRAFT' ? ['EDIT_REQUIREMENTS', 'CONFIRM_REQUIREMENTS']
       : phase === 'REQUIREMENTS_CONFIRMED' ? ['EDIT_REQUIREMENTS', 'EDIT_OUTLINE']
         : phase === 'OUTLINE_DRAFT' ? ['EDIT_REQUIREMENTS', 'EDIT_OUTLINE', 'CONFIRM_OUTLINE']
-          : ['EDIT_REQUIREMENTS', 'EDIT_OUTLINE'],
+          : phase === 'OUTLINE_CONFIRMED' ? ['ADOPT_SECTION']
+            : phase === 'IN_REVIEW' ? ['ADOPT_SECTION', 'CONFIRM_RISK', 'FINALIZE'] : [],
   })
   const result = () => ({ solutionId: 'solution-1', revision, requirementVersionId: requirementId,
     outlineVersionId: (outline as { id?: string } | null)?.id ?? null, phase })
@@ -57,9 +65,54 @@ test('创建、修订来源需求、确认需求、保存并确认大纲', async
     requirementText = body.items[0].text
     return route.fulfill({ status: 201, json: result() })
   })
+  await page.route(/\/api\/v1\/knowledge-spaces\/space-1\/documents$/, (route) => {
+    expect(route.request().headers()['idempotency-key']).toBeTruthy()
+    return route.fulfill({ status: 202, json: {
+      documentId: 'document-1', versionId: 'version-1', status: 'ACCEPTED',
+    } })
+  })
+  await page.route(/\/api\/v1\/documents\/document-1$/, (route) => route.fulfill({ json: {
+    id: 'document-1', spaceId: 'space-1', title: '客户需求说明书',
+    metadata: { classification: '内部', tags: ['客户需求'] },
+    versions: [{ id: 'version-1', versionNumber: 1, status: 'PUBLISHED',
+      parseStatus: 'SUCCEEDED', createdAt: now, parseErrorCode: null }],
+    currentPublishedVersionId: 'version-1', archived: false, reviews: [],
+    allowedActions: ['VIEW', 'PREVIEW', 'DOWNLOAD'],
+  } }))
   await page.route(/\/api\/v1\/solutions\/solution-1(?:\/.*)?$/, async (route) => {
     const path = new URL(route.request().url()).pathname
-    if (route.request().method() === 'GET') return route.fulfill({ json: current() })
+    if (route.request().method() === 'GET' && path.endsWith('/solution-1'))
+      return route.fulfill({ json: current() })
+    if (route.request().method() === 'GET' && path.endsWith('/finalization-review'))
+      return route.fulfill({ json: { solutionId: 'solution-1', revision, risks: [{
+        sectionId: 'section-1', sectionTitle: '项目概述', sectionVersionId: 'adopted-1',
+        claimId: 'claim-1', claimText: '客户计划支持100名用户',
+        riskTypes: ['PERFORMANCE_OR_SLA'], confirmed: riskConfirmed,
+        confirmedBy: riskConfirmed ? 'user-1' : null, confirmedAt: riskConfirmed ? now : null,
+      }] } })
+    if (route.request().method() === 'GET' && path.endsWith('/feedback/mine'))
+      return route.fulfill({ json: [] })
+    if (route.request().method() === 'GET' && path.endsWith('/word'))
+      return route.fulfill({ body: 'mock-docx', contentType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      headers: { 'Content-Disposition': 'attachment; filename=solution-final-1.docx' } })
+    if (route.request().method() === 'POST' && path.endsWith('/generation-attempts')) {
+      generationCalls += 1
+      generationKeys.push(route.request().headers()['idempotency-key'] ?? '')
+      expect(route.request().postDataJSON()).toEqual({ expectedRevision: revision,
+        baselineSectionVersionId: null })
+      const rejected = generationCalls === 1
+      return route.fulfill({ json: { id: `attempt-${generationCalls}`, status: 'SUCCEEDED',
+        executionCount: 1, revision, failureCode: null,
+        sectionVersion: { id: rejected ? 'draft-rejected' : 'draft-accepted',
+          content: rejected ? '客户计划支持200名用户。' : '客户计划支持100名用户。',
+          evidenceIds: ['evidence-1'], claims: [{ claimId: 'claim-1',
+            text: rejected ? '客户计划支持200名用户' : '客户计划支持100名用户',
+            factual: true, evidenceIds: ['evidence-1'], riskTypes: ['PERFORMANCE_OR_SLA'] }],
+          verification: { verifications: [{ claimId: 'claim-1',
+            verdict: rejected ? 'UNSUPPORTED' : 'HUMAN_CONFIRMATION_REQUIRED',
+            reason: rejected ? 'QUANTIFIED_VALUE_MISMATCH' : 'NEEDS_REVIEW' }] } } } })
+    }
     const body = route.request().postDataJSON()
     if (path.endsWith('/requirements')) {
       revision += 1
@@ -83,9 +136,28 @@ test('创建、修订来源需求、确认需求、保存并确认大纲', async
       revision += 1
       phase = 'OUTLINE_CONFIRMED'
       outlineConfirmation = { versionId: 'outline-1', confirmedBy: 'user-2', confirmedAt: now, valid: true }
+    } else if (path.endsWith('/versions/draft-accepted/adopt')) {
+      expect(body.expectedRevision).toBe(revision)
+      adopted = true
+      revision += 1
+      phase = 'IN_REVIEW'
+    } else if (path.endsWith('/risk-confirmations')) {
+      expect(body.reason).toBe('已核对客户测试报告')
+      riskConfirmed = true
+      return route.fulfill({ json: { id: 'risk-confirmation-1' } })
+    } else if (path.endsWith('/finalize')) {
+      expect(body.expectedRevision).toBe(revision)
+      finalized = true
+      revision += 1
+      phase = 'FINALIZED'
+      return route.fulfill({ json: { id: 'final-1', solutionRevision: 1,
+        contentHash: 'a'.repeat(64), createdAt: now } })
     } else throw new Error(path)
     return route.fulfill({ json: result() })
   })
+  await page.route(/\/api\/v1\/solutions\/secret$/, (route) => route.fulfill({
+    status: 404, json: error('NOT_FOUND', '资源不存在或无权访问'),
+  }))
   await page.route(/\/api\/v1\/search$/, (route) => route.fulfill({ json: {
     requestId: 'search-1', evidence: [{ evidenceId: 'evidence-1', documentId: 'document-1',
       versionId: 'version-1', nodeId: 'node-1', title: '客户需求说明书', excerpt: '目标为提升日常交付效率。',
@@ -94,6 +166,18 @@ test('创建、修订来源需求、确认需求、保存并确认大纲', async
     stats: { lexicalCount: 1, vectorCount: 1, fusedCount: 1, reauthorizedCount: 1, selectedCount: 1 },
     completedAt: now,
   } }))
+
+  await page.goto('/upload')
+  await page.locator('select[name="spaceId"]').selectOption('space-1')
+  await page.locator('input[name="title"]').fill('客户需求说明书')
+  await page.locator('select[name="classification"]').selectOption('内部')
+  await page.locator('input[name="file"]').setInputFiles({
+    name: 'requirements.md', mimeType: 'text/markdown',
+    buffer: Buffer.from('# 客户需求\n目标为提升日常交付效率。'),
+  })
+  await page.getByTestId('upload-submit').click()
+  await expect(page).toHaveURL(/\/documents\/document-1$/)
+  await expect(page.getByText('客户需求说明书')).toBeVisible()
 
   await page.goto('/spaces/space-1/solutions')
   await page.locator('input[name="solution-name"]').fill('超长制造业智能运维解决方案')
@@ -122,6 +206,30 @@ test('创建、修订来源需求、确认需求、保存并确认大纲', async
   await expect(page.locator('.phase-tag')).toHaveText('大纲已确认')
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1366)
   await page.screenshot({ path: test.info().outputPath('solution-workbench-1366.png'), fullPage: true })
+  await page.locator('[data-action="generate-section"]').click()
+  await expect(page.getByText('不支持，禁止采纳')).toBeVisible()
+  await expect(page.locator('[data-action="adopt-section"]')).toHaveCount(0)
+  await page.locator('[data-action="generate-section"]').click()
+  await expect(page.getByText('需人工确认')).toBeVisible()
+  await expect(page.locator('[data-action="adopt-section"]')).toBeDisabled()
+  expect(generationKeys).toHaveLength(2)
+  expect(generationKeys[0]).toBeTruthy()
+  expect(generationKeys[1]).not.toBe(generationKeys[0])
+  await page.locator('[data-action="review-section"]').check()
+  await page.locator('[data-action="adopt-section"]').click()
+  await expect(page.locator('.phase-tag')).toHaveText('评审中')
+  await expect(page.locator('[data-action="finalize-solution"]')).toBeDisabled()
+  await page.locator('input[name="risk-reason-claim-1"]').fill('已核对客户测试报告')
+  await page.getByRole('button', { name: '确认此项风险' }).click()
+  await expect(page.locator('[data-action="finalize-solution"]')).toBeEnabled()
+  await page.locator('[data-action="finalize-solution"]').click()
+  await expect(page.locator('.phase-tag')).toHaveText('已定稿')
+  const downloaded = page.waitForEvent('download')
+  await page.locator('[data-action="download-word"]').click()
+  expect((await downloaded).suggestedFilename()).toBe('solution-final-1.docx')
+  await page.goto('/solutions/secret')
+  await expect(page.getByRole('alert')).toContainText('资源不存在或无权访问')
+  await expect(page.getByText('超长制造业智能运维解决方案', { exact: false })).toHaveCount(0)
 })
 
 test('无权操作隐藏，409 保留草稿且窄屏主操作可见', async ({ page }) => {
