@@ -32,6 +32,7 @@ import com.yunjihai.rag.solution.port.OutlineVersionRepository;
 import com.yunjihai.rag.solution.port.RequirementVersionRepository;
 import com.yunjihai.rag.solution.port.SolutionRepository;
 import com.yunjihai.rag.solution.verification.CitationVerdict;
+import com.yunjihai.rag.solution.verification.ClaimEvidenceInput;
 import com.yunjihai.rag.solution.verification.ClaimVerification;
 import com.yunjihai.rag.solution.verification.SectionVerificationService;
 import com.yunjihai.rag.solution.verification.SolutionRiskReport;
@@ -78,7 +79,7 @@ class SectionGenerationServiceTest {
                 }).collect(java.util.stream.Collectors.toMap(row -> row.path("id").asText(), row -> row));
 
         for (var id : List.of("GEN-001", "GEN-002", "GEN-003", "GEN-004", "GEN-005",
-                "GEN-006", "GEN-008", "GEN-009", "GEN-010", "GEN-012")) {
+                "GEN-006", "GEN-007", "GEN-008", "GEN-009", "GEN-010", "GEN-011", "GEN-012")) {
             var row = cases.get(id);
             assertThat(row).as(id).isNotNull();
             var candidate = row.path("candidateClaim").asText();
@@ -88,14 +89,25 @@ class SectionGenerationServiceTest {
             }
             var fixture = Fixture.ready(row.path("requirement").asText());
             var evidenceSpace = id.equals("GEN-008") ? id(999) : SPACE_ID;
-            fixture.evidence = List.of(new Evidence(evidenceSpace, EVIDENCE_ID, id(41), id(42),
-                    "node-1", "合成资料", row.path("evidence").get(0).asText(), 0.9,
-                    new MarkdownLocator(List.of("合成资料"), "node-1")));
+            var selected = new ArrayList<Evidence>();
+            for (var index = 0; index < row.path("evidence").size(); index++) {
+                selected.add(new Evidence(evidenceSpace, id(40 + index), id(140 + index), id(240 + index),
+                        "node-" + index, "合成资料", row.path("evidence").get(index).asText(), 0.9,
+                        new MarkdownLocator(List.of("合成资料"), "node-" + index)));
+            }
+            fixture.evidence = List.copyOf(selected);
+            var semanticVerdict = row.path("semanticVerdict").asText("");
+            if (!semanticVerdict.isBlank()) {
+                fixture.semanticVerdict = CitationVerdict.valueOf(semanticVerdict);
+                fixture.semanticReasonCode = row.path("semanticReason").asText();
+            }
             var risks = row.path("riskType").isNull() ? Set.<RiskType>of()
                     : Set.of(RiskType.valueOf(row.path("riskType").asText()));
-            var claim = new Claim(id(80), candidate, true, Set.of(EVIDENCE_ID), risks);
+            var citedIds = fixture.evidence.stream().map(Evidence::evidenceId)
+                    .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            var claim = new Claim(id(80), candidate, true, citedIds, risks);
             fixture.modelDraft = new GeneratedSectionDraft(
-                    "## 总体方案\n" + candidate, List.of(claim), Set.of(EVIDENCE_ID));
+                    "## 总体方案\n" + candidate, List.of(claim), citedIds);
             if (id.equals("GEN-008")) {
                 assertThat(row.path("expectedDecision").asText()).isEqualTo("REFUSE");
                 assertThatThrownBy(() -> fixture.service.generate(command(SECTION_ID)))
@@ -108,7 +120,15 @@ class SectionGenerationServiceTest {
 
             var generated = fixture.service.generate(command(SECTION_ID));
             assertThat(generated.attempt().status()).as(id).isEqualTo(GenerationStatus.SUCCEEDED);
-            assertThat(fixture.modelRequest.evidence()).as(id).hasSize(1);
+            assertThat(fixture.modelRequest.evidence()).as(id).hasSize(row.path("evidence").size());
+            if (id.equals("GEN-007")) {
+                assertThat(fixture.modelRequest.evidence()).extracting(Evidence::excerpt)
+                        .containsExactly("虚构合同草案：服务期限 12 个月。", "虚构补充协议：服务期限 24 个月。");
+                assertThat(fixture.semanticInputs).singleElement().satisfies(input ->
+                        assertThat(input.evidence()).extracting(Evidence::excerpt)
+                                .containsExactlyInAnyOrder("虚构合同草案：服务期限 12 个月。",
+                                        "虚构补充协议：服务期限 24 个月。"));
+            }
             assertThat(fixture.modelRequest.confirmedRequirements()).as(id).singleElement()
                     .extracting(RequirementItem::text).isEqualTo(row.path("requirement").asText());
             var draft = generated.sectionVersion().orElseThrow();
@@ -120,6 +140,10 @@ class SectionGenerationServiceTest {
                 default -> throw new IllegalArgumentException("Unknown decision for " + id);
             };
             assertThat(actual).as(id).isEqualTo(expected);
+            if (!semanticVerdict.isBlank()) {
+                assertThat(draft.verification().verifications().getFirst().reasonCode())
+                        .as(id).isEqualTo(row.path("semanticReason").asText());
+            }
             if (expected == CitationVerdict.UNSUPPORTED) {
                 assertThatThrownBy(() -> fixture.service.adoptSection(
                         ACTOR_ID, SOLUTION_ID, draft.id(), 3, NOW.plusSeconds(1)))
@@ -700,6 +724,9 @@ class SectionGenerationServiceTest {
         private Runnable duringRetrieval = () -> { };
         private boolean evidenceReadable = true;
         private boolean randomEvidenceIdsAfterFirst;
+        private CitationVerdict semanticVerdict = CitationVerdict.SUPPORTED;
+        private String semanticReasonCode = "SEMANTIC_SUPPORTED";
+        private List<ClaimEvidenceInput> semanticInputs = List.of();
         private Runnable beforeCommit = () -> { };
         private final List<AuditCommand> audit = new ArrayList<>();
         private final SectionGenerationService service;
@@ -767,9 +794,10 @@ class SectionGenerationServiceTest {
             };
             var verification = new SectionVerificationService((inputs, deadline) -> {
                 events.add("verify");
+                semanticInputs = List.copyOf(inputs);
                 return inputs.stream()
                         .map(input -> new ClaimVerification(
-                                input.claimId(), CitationVerdict.SUPPORTED, "SEMANTIC_SUPPORTED"))
+                                input.claimId(), semanticVerdict, semanticReasonCode))
                         .toList();
             });
             service = new SectionGenerationService(

@@ -22,9 +22,9 @@ corepack pnpm --dir apps/web lint
 corepack pnpm --dir apps/web exec playwright test
 ```
 
-PostgreSQL 验收覆盖迁移、反馈幂等、外来章节拒绝和撤权；浏览器测试覆盖定稿、Word 下载与反馈提交。完整依赖验证使用 `scripts/verify.ps1`，它还检查 Docker、AIStor 许可证、解析 Worker 和其他服务。现有计划中的 `scripts/run-retrieval-eval.ps1` 尚不存在，应使用现有可信问答评估手册的流程；不能把缺失脚本记为已运行。
+PostgreSQL 验收覆盖迁移、反馈幂等、外来章节拒绝和撤权；浏览器测试覆盖不可采纳草稿的重生成、人工采纳、定稿、Word 下载与反馈提交。完整依赖验证使用 `scripts/verify.ps1`，它还检查 Docker、AIStor 许可证、解析 Worker 和其他服务。现有计划中的 `scripts/run-retrieval-eval.ps1` 尚不存在，应使用现有可信问答评估手册的流程；不能把缺失脚本记为已运行。
 
-`evaluation/generation/golden-v1.jsonl` 是 12 条**虚构合成**开发样例，覆盖六类文件、缺证、冲突、跨权和提示注入。自动化校验全部样例的结构与覆盖范围；其中 10 条带候选声明的样例以假检索和假模型经过 `SectionGenerationService` 的证据授权、引用核验、草稿保存及采纳门禁。另有 5 条通过真实 `SectionVerificationService` 单独检查数值缺证、高风险人工确认和证据白名单边界。语义校验替身固定返回“支持”，因此这些测试只验证编排与确定性门禁，不检验模型生成质量、语义冲突识别或真实 OCR 可靠性；`GEN-007`、`GEN-011` 当前仅校验结构，未运行生成编排。跨权样例的假授权拒绝也不替代实际权限集成测试。这些测试不构成真实客户方案的质量分数，也不计入试点样本。
+`evaluation/generation/golden-v1.jsonl` 是 12 条**虚构合成**开发样例，覆盖六类文件、缺证、冲突、跨权和提示注入。自动化校验全部样例的结构与覆盖范围；其中 11 条以假检索、假模型经过 `SectionGenerationService` 的引用核验、草稿保存及采纳门禁，跨权样例 `GEN-008` 在证据授权处取消，模型调用数为 0。语义校验替身通常返回“支持”；冲突样例 `GEN-007` 指定“需人工确认”，能力缺证样例 `GEN-011` 指定“不支持”，用于验证这两种语义结果在编排链中的处理。另有 5 条通过真实 `SectionVerificationService` 单独检查数值缺证、高风险人工确认和证据白名单边界。这些测试只验证编排与确定性门禁，**不检验模型生成质量、自动识别语义冲突或真实 OCR 可靠性**；跨权样例的假授权拒绝也不替代实际权限集成测试。合成结果不构成真实客户方案的质量分数，也不计入试点样本。
 
 ## 试运行阶段门槛
 

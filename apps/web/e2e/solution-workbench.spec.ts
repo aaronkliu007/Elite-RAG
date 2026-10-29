@@ -160,7 +160,9 @@ test('章节生成、核验、人工采纳及窄屏冲突提示', async ({ page 
   await session(page)
   const evidenceId = '00000000-0000-0000-0000-000000000003'
   let adopted = false
+  let generationCalls = 0
   const requestBodies: Record<string, unknown>[] = []
+  const generationKeys: string[] = []
   const current = () => ({
     id: 'solution-3', spaceId: space.id,
     name: `跨区域方案${'长期交付'.repeat(16)}`,
@@ -191,8 +193,17 @@ test('章节生成、核验、人工采纳及窄屏冲突提示', async ({ page 
     }
     if (path.endsWith('/generation-attempts') && request.method() === 'POST') {
       requestBodies.push(request.postDataJSON() as Record<string, unknown>)
+      generationKeys.push(request.headers()['idempotency-key'] ?? '')
       if (adopted) return route.fulfill({ status: 409,
         json: error('SOLUTION_CONCURRENT_UPDATE', '方案已由他人修改') })
+      generationCalls += 1
+      if (generationCalls === 1) return route.fulfill({ json: { id: 'attempt-rejected',
+        status: 'SUCCEEDED', executionCount: 1, revision: 4, failureCode: null,
+        sectionVersion: { id: 'draft-rejected', content: '## 总体方案\n客户计划支持200名用户。',
+          evidenceIds: [evidenceId], claims: [{ claimId: 'claim-rejected',
+            text: '客户计划支持200名用户', factual: true, evidenceIds: [evidenceId], riskTypes: [] }],
+          verification: { verifications: [{ claimId: 'claim-rejected', verdict: 'UNSUPPORTED',
+            reason: 'QUANTIFIED_VALUE_MISMATCH' }] } } } })
       return route.fulfill({ json: { id: 'attempt-3', status: 'SUCCEEDED', executionCount: 1,
         revision: 4, failureCode: null, sectionVersion: { id: 'draft-3',
           content: '## 总体方案\n客户计划支持100名用户。', evidenceIds: [evidenceId],
@@ -213,8 +224,14 @@ test('章节生成、核验、人工采纳及窄屏冲突提示', async ({ page 
   await page.locator('[data-action="generate-section"]').focus()
   await expect(page.locator('[data-action="generate-section"]')).toHaveCSS('outline-style', 'solid')
   await page.locator('[data-action="generate-section"]').click()
+  await expect(page.getByText('不支持，禁止采纳')).toBeVisible()
+  await expect(page.locator('[data-action="adopt-section"]')).toHaveCount(0)
+  await page.locator('[data-action="generate-section"]').click()
   await expect(page.getByText('需人工确认')).toBeVisible()
   await expect(page.locator('[data-action="adopt-section"]')).toBeDisabled()
+  expect(generationKeys[0]).toBeTruthy()
+  expect(generationKeys[1]).toBeTruthy()
+  expect(generationKeys[1]).not.toBe(generationKeys[0])
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1366)
   await page.screenshot({ path: test.info().outputPath('solution-generation-1366.png'), fullPage: true })
   await page.setViewportSize({ width: 620, height: 900 })
@@ -224,11 +241,12 @@ test('章节生成、核验、人工采纳及窄屏冲突提示', async ({ page 
   await page.locator('[data-action="adopt-section"]').click()
   await expect(page.getByText('当前已采纳版本：adopted-3')).toBeVisible()
   expect(requestBodies[0]).toEqual({ expectedRevision: 3, baselineSectionVersionId: null })
+  expect(requestBodies[1]).toEqual({ expectedRevision: 3, baselineSectionVersionId: null })
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 620)
   await page.locator('[data-action="generate-section"]').click()
   await expect(page.getByRole('alert')).toContainText('方案已由他人修改')
   await expect(page.locator('[data-action="reload-generation-conflict"]')).toBeVisible()
-  expect(requestBodies[1]).toEqual({ expectedRevision: 4, baselineSectionVersionId: 'adopted-3' })
+  expect(requestBodies[2]).toEqual({ expectedRevision: 4, baselineSectionVersionId: 'adopted-3' })
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 620)
   await page.screenshot({ path: test.info().outputPath('solution-generation-620.png'), fullPage: true })
 })
