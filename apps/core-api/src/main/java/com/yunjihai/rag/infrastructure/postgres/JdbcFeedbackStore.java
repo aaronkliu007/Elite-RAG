@@ -4,6 +4,8 @@ import com.yunjihai.rag.solution.feedback.*;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -22,13 +24,7 @@ public final class JdbcFeedbackStore implements FeedbackStore {
                     SELECT * FROM solution_feedback WHERE actor_id = :actor
                       AND solution_id = :solution AND client_key = :key
                     """).param("actor", actorId).param("solution", solutionId).param("key", clientKey)
-                    .query((row, ignored) -> new SolutionFeedback(
-                            row.getObject("id", UUID.class), row.getObject("solution_id", UUID.class),
-                            row.getObject("finalized_version_id", UUID.class),
-                            row.getObject("section_version_id", UUID.class),
-                            row.getObject("actor_id", UUID.class),
-                            FeedbackReason.valueOf(row.getString("reason")), row.getString("client_key"),
-                            row.getObject("created_at", OffsetDateTime.class).toInstant())).optional();
+                    .query(JdbcFeedbackStore::map).optional();
         } catch (DataAccessException failure) { throw PostgresPersistenceExceptionTranslator.translate(failure); }
     }
 
@@ -55,12 +51,21 @@ public final class JdbcFeedbackStore implements FeedbackStore {
     @Override public List<SolutionFeedback> listByActorAndVersion(UUID actorId, UUID versionId) {
         try {
             return jdbc.sql("""
-                    SELECT solution_id, client_key FROM solution_feedback
+                    SELECT * FROM solution_feedback
                     WHERE actor_id = :actor AND finalized_version_id = :version
                     ORDER BY created_at DESC, id DESC LIMIT 100
                     """).param("actor", actorId).param("version", versionId)
-                    .query((row, ignored) -> findByKey(actorId,
-                            row.getObject("solution_id", UUID.class), row.getString("client_key")).orElseThrow()).list();
+                    .query(JdbcFeedbackStore::map).list();
         } catch (DataAccessException failure) { throw PostgresPersistenceExceptionTranslator.translate(failure); }
+    }
+
+    private static SolutionFeedback map(ResultSet row, int ignored) throws SQLException {
+        return new SolutionFeedback(row.getObject("id", UUID.class),
+                row.getObject("solution_id", UUID.class),
+                row.getObject("finalized_version_id", UUID.class),
+                row.getObject("section_version_id", UUID.class),
+                row.getObject("actor_id", UUID.class),
+                FeedbackReason.valueOf(row.getString("reason")), row.getString("client_key"),
+                row.getObject("created_at", OffsetDateTime.class).toInstant());
     }
 }
