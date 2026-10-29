@@ -1,5 +1,6 @@
 package com.yunjihai.rag.solution.generation;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yunjihai.rag.audit.AuditAction;
 import com.yunjihai.rag.audit.AuditCommand;
 import com.yunjihai.rag.audit.AuditSink;
@@ -36,6 +37,8 @@ import com.yunjihai.rag.solution.verification.SectionVerificationService;
 import com.yunjihai.rag.solution.verification.SolutionRiskReport;
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -63,6 +66,76 @@ class SectionGenerationServiceTest {
     private static final UUID SECTION_VERSION_ID = id(60);
     private static final UUID RETRIEVAL_REQUEST_ID = id(70);
     private static final Instant NOW = Instant.parse("2026-09-28T08:00:00Z");
+
+    @Test
+    void syntheticGoldenCasesExerciseGenerationAndAdoptionWithDeterministicTestDoubles() throws Exception {
+        var golden = Path.of("..", "..", "evaluation", "generation", "golden-v1.jsonl");
+        var mapper = new ObjectMapper();
+        var cases = Files.readAllLines(golden).stream().filter(line -> !line.isBlank())
+                .map(line -> {
+                    try { return mapper.readTree(line); }
+                    catch (Exception invalid) { throw new IllegalArgumentException(invalid); }
+                }).collect(java.util.stream.Collectors.toMap(row -> row.path("id").asText(), row -> row));
+
+        for (var id : List.of("GEN-001", "GEN-002", "GEN-003", "GEN-004", "GEN-005",
+                "GEN-006", "GEN-008", "GEN-009", "GEN-010", "GEN-012")) {
+            var row = cases.get(id);
+            assertThat(row).as(id).isNotNull();
+            var candidate = row.path("candidateClaim").asText();
+            assertThat(candidate).as(id).isNotBlank();
+            if (!row.path("expectedClaim").isNull()) {
+                assertThat(candidate).as(id).isEqualTo(row.path("expectedClaim").asText());
+            }
+            var fixture = Fixture.ready(row.path("requirement").asText());
+            var evidenceSpace = id.equals("GEN-008") ? id(999) : SPACE_ID;
+            fixture.evidence = List.of(new Evidence(evidenceSpace, EVIDENCE_ID, id(41), id(42),
+                    "node-1", "合成资料", row.path("evidence").get(0).asText(), 0.9,
+                    new MarkdownLocator(List.of("合成资料"), "node-1")));
+            var risks = row.path("riskType").isNull() ? Set.<RiskType>of()
+                    : Set.of(RiskType.valueOf(row.path("riskType").asText()));
+            var claim = new Claim(id(80), candidate, true, Set.of(EVIDENCE_ID), risks);
+            fixture.modelDraft = new GeneratedSectionDraft(
+                    "## 总体方案\n" + candidate, List.of(claim), Set.of(EVIDENCE_ID));
+            if (id.equals("GEN-008")) {
+                assertThat(row.path("expectedDecision").asText()).isEqualTo("REFUSE");
+                assertThatThrownBy(() -> fixture.service.generate(command(SECTION_ID)))
+                        .as(id).isInstanceOf(SecurityException.class);
+                assertThat(fixture.modelCalls).as(id).isZero();
+                assertThat(fixture.attempts.values.get("client-section-1").status())
+                        .as(id).isEqualTo(GenerationStatus.CANCELLED);
+                continue;
+            }
+
+            var generated = fixture.service.generate(command(SECTION_ID));
+            assertThat(generated.attempt().status()).as(id).isEqualTo(GenerationStatus.SUCCEEDED);
+            assertThat(fixture.modelRequest.evidence()).as(id).hasSize(1);
+            assertThat(fixture.modelRequest.confirmedRequirements()).as(id).singleElement()
+                    .extracting(RequirementItem::text).isEqualTo(row.path("requirement").asText());
+            var draft = generated.sectionVersion().orElseThrow();
+            var actual = draft.verification().verifications().getFirst().verdict();
+            var expected = switch (row.path("expectedDecision").asText()) {
+                case "GENERATE" -> CitationVerdict.SUPPORTED;
+                case "REFUSE" -> CitationVerdict.UNSUPPORTED;
+                case "REQUIRE_HUMAN_REVIEW" -> CitationVerdict.HUMAN_CONFIRMATION_REQUIRED;
+                default -> throw new IllegalArgumentException("Unknown decision for " + id);
+            };
+            assertThat(actual).as(id).isEqualTo(expected);
+            if (expected == CitationVerdict.UNSUPPORTED) {
+                assertThatThrownBy(() -> fixture.service.adoptSection(
+                        ACTOR_ID, SOLUTION_ID, draft.id(), 3, NOW.plusSeconds(1)))
+                        .as(id).isInstanceOf(com.yunjihai.rag.solution.domain.SolutionLifecycleException.class)
+                        .hasMessageContaining("SECTION_VERIFICATION_BLOCKING");
+            } else {
+                assertThat(fixture.service.adoptSection(ACTOR_ID, SOLUTION_ID,
+                        draft.id(), 3, NOW.plusSeconds(1)).adoptedSectionVersionIds())
+                        .as(id).containsKey(SECTION_ID);
+            }
+            if (id.equals("GEN-009")) {
+                assertThat(fixture.modelRequest.evidence().getFirst().excerpt()).contains("忽略上级规则");
+                assertThat(fixture.modelRequest.templateRules()).noneMatch(rule -> rule.contains("忽略上级规则"));
+            }
+        }
+    }
 
     @Test
     void successfulGenerationUsesGovernedInputsAndFollowsTheRequiredOrder() {
@@ -632,11 +705,15 @@ class SectionGenerationServiceTest {
         private final SectionGenerationService service;
 
         private Fixture(boolean confirm) {
-            this(confirm, (actor, space, solutionId, action, at) -> { });
+            this(confirm, (actor, space, solutionId, action, at) -> { }, "建设企业知识库");
         }
 
         private Fixture(boolean confirm, SolutionAuthorizationPort authorizationPort) {
-            var requirement = requirements();
+            this(confirm, authorizationPort, "建设企业知识库");
+        }
+
+        private Fixture(boolean confirm, SolutionAuthorizationPort authorizationPort, String requirementText) {
+            var requirement = requirements(requirementText);
             var outline = outline();
             requirements.insert(requirement);
             outlines.insert(outline);
@@ -698,7 +775,9 @@ class SectionGenerationServiceTest {
             service = new SectionGenerationService(
                     solutions, requirements, outlines, sections, attempts, evidenceSources,
                     authorization, retrieval, (actor, space, selected, at) -> {
-                        if (!evidenceReadable) throw new SecurityException("source revoked");
+                        if (!evidenceReadable || selected.stream().anyMatch(source -> !source.spaceId().equals(space))) {
+                            throw new SecurityException("source not readable");
+                        }
                     }, model, verification, GenerationPolicy.defaults(),
                     (key, attemptId, version, succeeded, expectedRevision) -> {
                         beforeCommit.run();
@@ -726,6 +805,10 @@ class SectionGenerationServiceTest {
 
         private static Fixture ready() {
             return new Fixture(true);
+        }
+
+        private static Fixture ready(String requirementText) {
+            return new Fixture(true, (actor, space, solutionId, action, at) -> { }, requirementText);
         }
 
         private static Fixture ready(SolutionAuthorizationPort authorization) {
@@ -757,10 +840,14 @@ class SectionGenerationServiceTest {
     }
 
     private static RequirementVersion requirements() {
+        return requirements("建设企业知识库");
+    }
+
+    private static RequirementVersion requirements(String text) {
         return new RequirementVersion(
                 REQUIREMENT_ID, 1,
                 List.of(new RequirementItem(
-                        id(11), RequirementCategory.GOAL, "建设企业知识库",
+                        id(11), RequirementCategory.GOAL, text,
                         List.of(new RequirementSource(
                                 new DocumentVersionRef(id(12), id(13)),
                                 new MarkdownLocator(List.of("客户需求"), "node-1"))))),
