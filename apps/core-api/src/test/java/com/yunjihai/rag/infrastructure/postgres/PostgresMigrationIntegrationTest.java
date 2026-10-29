@@ -25,7 +25,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PostgresMigrationIntegrationTest {
-    private static final int CURRENT_MIGRATION_COUNT = 14;
+    private static final int CURRENT_MIGRATION_COUNT = 15;
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
             .withDatabaseName("rag_test").withUsername("migration_owner").withPassword("migration_test_only");
     private static final String RUNTIME_USER = "rag_runtime_test";
@@ -69,7 +69,8 @@ class PostgresMigrationIntegrationTest {
                 "solution_section_claim", "solution_section_claim_evidence", "solution_section_claim_risk",
                 "solution_generation_evidence_source", "solution_risk_confirmation",
                 "solution_risk_confirmation_evidence", "solution_finalized_version",
-                "solution_finalized_section", "solution_finalized_risk_confirmation"),
+                "solution_finalized_section", "solution_finalized_risk_confirmation",
+                "solution_feedback"),
                 values("SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename <> 'flyway_schema_history'"));
         assertColumnType("app_user", "id", "uuid");
         assertColumnType("app_user", "created_at", "timestamp with time zone");
@@ -225,7 +226,8 @@ class PostgresMigrationIntegrationTest {
         assertEquals("f", scalar("SELECT has_table_privilege('rag_runtime_test', 'document_review', 'DELETE')"));
         for (String table : java.util.List.of("solution_risk_confirmation",
                 "solution_risk_confirmation_evidence", "solution_finalized_version",
-                "solution_finalized_section", "solution_finalized_risk_confirmation")) {
+                "solution_finalized_section", "solution_finalized_risk_confirmation",
+                "solution_feedback")) {
             assertEquals("t", scalar("SELECT has_table_privilege('rag_runtime_test', '" + table
                     + "', 'SELECT,INSERT')"), table);
             assertEquals("f", scalar("SELECT has_table_privilege('rag_runtime_test', '" + table

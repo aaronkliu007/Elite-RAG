@@ -8,7 +8,8 @@ import SolutionSectionEditor from '../components/SolutionSectionEditor.vue'
 import { searchApi, type SearchEvidence, type SourceLocator } from '../api/search'
 import { solutionsApi, type OutlineNodeInput, type RequirementCategory, type RequirementItemInput,
   type RiskType, type SolutionDetail, type SolutionLocator, type SolutionSource,
-  type FinalizationReview, type FinalizationRisk } from '../api/solutions'
+  type FinalizationReview, type FinalizationRisk, type FeedbackReason,
+  type SolutionFeedback } from '../api/solutions'
 
 interface RequirementDraft extends RequirementItemInput {
   searchQuery: string
@@ -35,6 +36,19 @@ const finalizationReview = ref<FinalizationReview | null>(null)
 const reviewError = ref('')
 const riskReasons = ref<Record<string, string>>({})
 const downloading = ref(false)
+const feedbackReason = ref<FeedbackReason>('ACCEPTED')
+const feedbackSection = ref('')
+const feedbackItems = ref<SolutionFeedback[]>([])
+const feedbackError = ref('')
+const feedbackSaving = ref(false)
+const feedbackKey = ref('')
+const feedbackReasons: { value: FeedbackReason, label: string }[] = [
+  { value: 'ACCEPTED', label: '已采纳' }, { value: 'FACT_ERROR', label: '事实错误' },
+  { value: 'MISSING_EVIDENCE', label: '缺少证据' }, { value: 'IRRELEVANT', label: '内容不相关' },
+  { value: 'OUTDATED', label: '内容过期' }, { value: 'STYLE', label: '表达方式' },
+  { value: 'DUPLICATE', label: '内容重复' }, { value: 'SCOPE_MISMATCH', label: '范围不符' },
+  { value: 'OTHER', label: '其他' },
+]
 
 const canEditRequirements = computed(() => solution.value?.allowedActions.includes('EDIT_REQUIREMENTS') ?? false)
 const canEditOutline = computed(() => solution.value?.allowedActions.includes('EDIT_OUTLINE') ?? false)
@@ -85,6 +99,8 @@ function blankOutline(order: number): OutlineNodeInput {
 
 function adoptLoaded(value: SolutionDetail) {
   solution.value = value
+  feedbackItems.value = []
+  feedbackError.value = ''
   finalizationReview.value = null
   reviewError.value = ''
   riskReasons.value = {}
@@ -111,6 +127,13 @@ async function load(force = false) {
   mutationError.value = ''
   try {
     adoptLoaded(await solutionsApi.get(solutionId.value))
+    if (solution.value?.finalizedVersionId && solution.value.sourceAccessValid) {
+      try {
+        feedbackItems.value = await solutionsApi.feedbackMine(solutionId.value, solution.value.finalizedVersionId)
+      } catch (failure) {
+        feedbackError.value = message(failure, '加载反馈记录失败，请重试')
+      }
+    }
     if (solution.value?.sourceAccessValid && solution.value.outlineConfirmation?.valid
         && Object.keys(solution.value.adoptedSectionVersionIds ?? {}).length > 0) {
       try {
@@ -287,6 +310,25 @@ async function downloadWord() {
     mutationError.value = message(failure, 'Word 导出失败，请检查来源权限后重试')
   } finally {
     downloading.value = false
+  }
+}
+
+async function submitFeedback() {
+  const current = solution.value
+  if (!current?.finalizedVersionId || !current.sourceAccessValid || feedbackSaving.value) return
+  feedbackSaving.value = true
+  feedbackError.value = ''
+  feedbackKey.value ||= crypto.randomUUID()
+  try {
+    const saved = await solutionsApi.submitFeedback(current.id, current.finalizedVersionId,
+      feedbackSection.value || null, feedbackReason.value, feedbackKey.value)
+    feedbackItems.value = [saved, ...feedbackItems.value.filter((item) => item.id !== saved.id)]
+    feedbackKey.value = ''
+  } catch (failure) {
+    feedbackError.value = message(failure, '提交反馈失败，请重试')
+    if (failure instanceof ApiRequestError && failure.status === 409) feedbackKey.value = ''
+  } finally {
+    feedbackSaving.value = false
   }
 }
 
@@ -530,7 +572,6 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           </button>
         </div>
       </section>
-
       <section
         class="step-card"
         :inert="saving ? true : undefined"
@@ -861,6 +902,87 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           </button>
         </div>
       </section>
+      <section
+        v-if="solution.finalizedVersionId"
+        class="step-card"
+        aria-labelledby="feedback-heading"
+      >
+        <div class="step-heading">
+          <div>
+            <p class="eyebrow">
+              步骤 5
+            </p><h3 id="feedback-heading">
+              使用反馈
+            </h3>
+          </div>
+        </div>
+        <p class="step-note">
+          反馈绑定当前定稿版本。请选择原因和可选章节，不填写客户资料或正文。
+        </p>
+        <div
+          v-if="feedbackError"
+          class="state state-error"
+          role="alert"
+        >
+          {{ feedbackError }}
+        </div>
+        <div class="field-grid">
+          <label>反馈原因<select
+            v-model="feedbackReason"
+            data-action="feedback-reason"
+            :disabled="feedbackSaving || !solution.sourceAccessValid"
+          >
+            <option
+              v-for="reason in feedbackReasons"
+              :key="reason.value"
+              :value="reason.value"
+            >{{ reason.label }}</option>
+          </select></label>
+          <label>关联章节<select
+            v-model="feedbackSection"
+            data-action="feedback-section"
+            :disabled="feedbackSaving || !solution.sourceAccessValid"
+          >
+            <option value="">整份方案</option>
+            <option
+              v-for="node in solution.outlineVersion?.nodes ?? []"
+              :key="node.sectionId"
+              :value="solution.adoptedSectionVersionIds[node.sectionId]"
+              :disabled="!solution.adoptedSectionVersionIds[node.sectionId]"
+            >
+              {{ node.title }}
+            </option>
+          </select></label>
+        </div>
+        <div class="confirm-block">
+          <span>只记录类别、版本和提交时间，供后续评估与知识治理使用。</span>
+          <button
+            type="button"
+            class="button button-primary"
+            data-action="submit-feedback"
+            :disabled="feedbackSaving || !solution.sourceAccessValid"
+            @click="submitFeedback"
+          >
+            {{ feedbackSaving ? '正在提交…' : '提交反馈' }}
+          </button>
+        </div>
+        <div
+          v-if="feedbackItems.length"
+          class="item-card feedback-history"
+          aria-label="我的反馈记录"
+        >
+          <strong>我的反馈记录</strong>
+          <p
+            v-for="item in feedbackItems"
+            :key="item.id"
+            class="step-note"
+          >
+            {{ feedbackReasons.find((reason) => reason.value === item.reason)?.label ?? item.reason }} ·
+            {{ item.sectionVersionId ? '章节版本 ' + item.sectionVersionId : '整份方案' }} ·
+            {{ new Date(item.createdAt).toLocaleString('zh-CN') }}
+          </p>
+        </div>
+      </section>
     </template>
   </section>
 </template>
@@ -883,6 +1005,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
 .section-panels { display: grid; gap: 14px; min-width: 0; }
 .section-stack { display: grid; gap: 10px; min-width: 0; }
 .risk-review strong, .risk-claim { min-width: 0; overflow-wrap: anywhere; }.risk-claim { margin: 0; white-space: pre-wrap; line-height: 1.65; }.risk-review .step-note { margin: 0; }
+.feedback-history p { overflow-wrap: anywhere; }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
 @media (max-width: 850px) { .outline-grid { grid-template-columns: minmax(0, 1fr) 100px; }.outline-grid label:nth-child(3) { grid-column: 1 / -1; }.outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: 1 / -1; } }
 @media (max-width: 620px) { .detail-header { flex-direction: column; }.header-meta { justify-items: start; }.field-grid, .outline-grid { grid-template-columns: 1fr; }.outline-grid label:nth-child(3), .outline-grid label:nth-child(4), .outline-grid label:nth-child(5) { grid-column: auto; }.item-card, .detail-header, .step-card { padding: 16px; }.editor-actions, .confirm-block { align-items: stretch; flex-direction: column; }.confirm-block span { flex: 0 1 auto; width: 100%; }.reason-field { flex: 0 1 auto; width: 100%; }.editor-actions .button, .confirm-block .button { width: 100%; } }

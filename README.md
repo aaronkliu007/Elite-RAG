@@ -16,7 +16,7 @@
 - Vue 已提供中文登录、用户/空间/成员管理、六类文件上传、解析状态、审核发布、全文检索和来源入口；
 - Spring Boot 已提供默认覆盖全部有权空间的单轮可信问答、严格拒答、逐项引用、结果恢复和来源实时再次鉴权；
 - 方案工作台首条人工纵向闭环已接入 PostgreSQL、Spring Boot API 和 Vue：空间授权、需求及大纲版本、异人确认、来源再次鉴权、事务幂等与审计均可在受控环境验收；
-- 方案工作台已接通分章生成、人工采纳、纯文本章节修订、并排版本对比、风险签认、不可变定稿及授权中文 Word 下载；人工改写重新进入确认门禁；
+- 方案工作台已接通分章生成、人工采纳、纯文本章节修订、并排版本对比、风险签认、不可变定稿、授权中文 Word 下载及定稿版本反馈；人工改写重新进入确认门禁；
 - OpenAI 兼容模型网关、Embedding、Reranker、Chat 适配器、最小证据脱敏、Token/并发/日额度护栏和安全审计已经落地，但默认关闭；
 - 50 条虚构脱敏黄金集及泄漏、引用有效率、Recall@10、声明支持率、正确拒答率五项硬门禁已经落地；
 - 完整验收覆盖管理员引导、角色分配、上传、解析、驳回再提交、发布、投影、检索、来源下载和撤权即时拒绝；
@@ -122,7 +122,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1
 corepack pnpm --dir apps/web exec playwright test
 ```
 
-统一脚本会先明确检查 Docker CLI、Docker daemon 和仓库外许可证，校验 Compose，再运行 Java `clean verify`（含真实 PostgreSQL、AIStor、OpenSearch 和受控模型网关验收）、Vue、前端构建与 lint、Python pytest、ruff 和 mypy。核心闭环启动、管理员引导、账号恢复、任务重试、降级、重建和撤权验证见[核心知识管理运行手册](docs/runbooks/core-knowledge-management.md)；问答启用、黄金评测、费用护栏和配置回滚见[可信知识问答运行手册](docs/runbooks/grounded-qa.md)；方案工作台首条人工闭环见[方案工作台运行手册](docs/runbooks/solution-workbench-first-slice.md)，章节修订见[章节人工修订运行说明](docs/runbooks/solution-section-editing.md)；底层迁移与检索细节分别见[知识底座运行与恢复手册](docs/runbooks/knowledge-foundation.md)和[检索生产适配器运行手册](docs/runbooks/retrieval-production-adapters.md)。
+统一脚本会先明确检查 Docker CLI、Docker daemon 和仓库外许可证，校验 Compose，再运行 Java `clean verify`（含真实 PostgreSQL、AIStor、OpenSearch 和受控模型网关验收）、Vue、前端构建与 lint、Python pytest、ruff 和 mypy。核心闭环启动、管理员引导、账号恢复、任务重试、降级、重建和撤权验证见[核心知识管理运行手册](docs/runbooks/core-knowledge-management.md)；问答启用、黄金评测、费用护栏和配置回滚见[可信知识问答运行手册](docs/runbooks/grounded-qa.md)；方案工作台首条人工闭环见[方案工作台运行手册](docs/runbooks/solution-workbench-first-slice.md)，章节修订见[章节人工修订运行说明](docs/runbooks/solution-section-editing.md)，反馈与试运行门槛见[方案反馈运行说明](docs/runbooks/solution-feedback-pilot-gates.md)；底层迁移与检索细节分别见[知识底座运行与恢复手册](docs/runbooks/knowledge-foundation.md)和[检索生产适配器运行手册](docs/runbooks/retrieval-production-adapters.md)。
 
 ## 架构边界
 

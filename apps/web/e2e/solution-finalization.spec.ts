@@ -6,6 +6,8 @@ test('风险签认、定稿及 Word 下载在桌面和窄屏均可操作', async
   let confirmed = false
   let finalized = false
   let revision = 4
+  let feedback: { id: string, finalizedVersionId: string, sectionVersionId: string,
+    reason: string, createdAt: string } | null = null
   await page.route(/\/api\/v1\/session\/me$/, (route) => route.fulfill({ json: {
     userId: 'reviewer-1', username: 'reviewer', displayName: '评审员',
   } }))
@@ -39,6 +41,15 @@ test('风险签认、定稿及 Word 下载在桌面和窄屏均可操作', async
     route.fulfill({ body: 'mock-docx', contentType:
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     headers: { 'Content-Disposition': 'attachment; filename=solution-final-1.docx' } }))
+  await page.route(/\/api\/v1\/solutions\/solution-1\/finalized-versions\/final-1\/feedback(?:\/mine)?$/, (route) => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: feedback ? [feedback] : [] })
+    const request = route.request().postDataJSON()
+    expect(request).toEqual({ sectionVersionId: 'adopted-1', reason: 'MISSING_EVIDENCE' })
+    expect(route.request().headers()['idempotency-key']).toBeTruthy()
+    feedback = { id: 'feedback-1', finalizedVersionId: 'final-1', sectionVersionId: 'adopted-1',
+      reason: 'MISSING_EVIDENCE', createdAt: at }
+    return route.fulfill({ status: 201, json: feedback })
+  })
   await page.route(/\/api\/v1\/solutions\/solution-1$/, (route) => route.fulfill({ json: {
     id: 'solution-1', spaceId: 'space-1',
     name: `长标题方案${'跨区域智能知识资产建设'.repeat(12)}`,
@@ -66,11 +77,17 @@ test('风险签认、定稿及 Word 下载在桌面和窄屏均可操作', async
   await expect(page.locator('[data-action="finalize-solution"]')).toBeEnabled()
   await page.locator('[data-action="finalize-solution"]').click()
   await expect(page.locator('[data-action="download-word"]')).toBeVisible()
+  await page.locator('[data-action="feedback-reason"]').selectOption('MISSING_EVIDENCE')
+  await page.locator('[data-action="feedback-section"]').selectOption('adopted-1')
+  await page.locator('[data-action="submit-feedback"]').click()
+  await expect(page.getByLabel('我的反馈记录')).toContainText('缺少证据')
+  await page.screenshot({ path: test.info().outputPath('solution-feedback-1366.png'), fullPage: true })
   const downloaded = page.waitForEvent('download')
   await page.locator('[data-action="download-word"]').click()
   expect((await downloaded).suggestedFilename()).toBe('solution-final-1.docx')
   await page.setViewportSize({ width: 620, height: 900 })
   await expect(page.locator('[data-action="download-word"]')).toBeVisible()
+  await expect(page.locator('[data-action="submit-feedback"]')).toBeVisible()
   expect(await page.locator('body').evaluate((body) => body.scrollWidth)).toBeLessThanOrEqual(620)
   await page.screenshot({ path: test.info().outputPath('solution-finalization-620.png'), fullPage: true })
 })

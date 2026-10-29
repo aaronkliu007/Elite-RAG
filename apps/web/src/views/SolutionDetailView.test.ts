@@ -44,6 +44,13 @@ it('风险确认后才允许定稿，定稿后展示 Word 下载', async () => {
       return json({ id: 'final-1', solutionRevision: 1, contentHash: 'a'.repeat(64),
         createdAt: '2026-10-29T00:00:00Z' })
     }
+    if (path.endsWith('/feedback/mine')) return json([])
+    if (path.endsWith('/feedback') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body))
+      requests.push(`feedback:${body.reason}:${body.sectionVersionId}`)
+      return json({ id: 'feedback-1', finalizedVersionId: 'final-1',
+        sectionVersionId: body.sectionVersionId, reason: body.reason, createdAt: '2026-10-29T00:00:00Z' }, 201)
+    }
     if (path.endsWith('/solutions/solution-1')) return json({ ...detail,
       phase: finalized ? 'FINALIZED' : 'IN_REVIEW', revision,
       outlineVersion: { id: 'outline-1', number: 1, nodes: [{ sectionId: 'section-1', title: '总体设计',
@@ -76,6 +83,11 @@ it('风险确认后才允许定稿，定稿后展示 Word 下载', async () => {
   await flushPromises()
   expect(requests).toEqual(['risk:已核实测试报告', 'finalize:4'])
   expect(wrapper.get('[data-action="download-word"]').text()).toContain('下载 Word')
+  await wrapper.get('[data-action="feedback-reason"]').setValue('MISSING_EVIDENCE')
+  await wrapper.get('[data-action="feedback-section"]').setValue('adopted-1')
+  await wrapper.get('[data-action="submit-feedback"]').trigger('click')
+  await flushPromises()
+  expect(requests).toContain('feedback:MISSING_EVIDENCE:adopted-1')
   wrapper.unmount()
 })
 

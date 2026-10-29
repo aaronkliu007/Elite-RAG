@@ -85,6 +85,7 @@ import com.yunjihai.rag.solution.generation.SectionGenerationService;
 import com.yunjihai.rag.solution.finalization.SolutionFinalizationService;
 import com.yunjihai.rag.solution.finalization.SolutionWordExportService;
 import com.yunjihai.rag.solution.finalization.SolutionWordRenderer;
+import com.yunjihai.rag.solution.feedback.FeedbackService;
 import com.yunjihai.rag.solution.verification.SectionVerificationService;
 import com.yunjihai.rag.retrieval.TrustedRetrievalService;
 import com.yunjihai.rag.qa.evaluation.EvaluationDataset;
@@ -269,6 +270,21 @@ public class PostgresAdapterConfiguration {
         return new SolutionWordExportService(solutions, finals, requirements, outlines, sections,
                 evidenceSources,
                 access, sources, evidence, renderer, audit, clock);
+    }
+
+    @Bean
+    JdbcFeedbackStore jdbcFeedbackStore(JdbcClient jdbc) {
+        return new JdbcFeedbackStore(jdbc);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    FeedbackService feedbackService(JdbcSolutionRepository solutions, JdbcSolutionFinalizationStore finals,
+            JdbcRequirementVersionRepository requirements, JdbcSectionVersionRepository sections,
+            SolutionSourceAccess sources, JdbcSolutionEvidenceAccess evidence,
+            JdbcFeedbackStore store, PlatformTransactionManager manager, AuditService audit, Clock clock) {
+        return new FeedbackService(solutions, finals, requirements, sections, sources, evidence,
+                store, new TransactionTemplate(manager), audit, clock);
     }
 
     @Bean

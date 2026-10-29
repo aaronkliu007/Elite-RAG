@@ -13,6 +13,7 @@ import com.yunjihai.rag.solution.SolutionWorkbenchService;
 import com.yunjihai.rag.solution.application.*;
 import com.yunjihai.rag.solution.domain.*;
 import com.yunjihai.rag.solution.finalization.*;
+import com.yunjihai.rag.solution.feedback.*;
 import com.yunjihai.rag.solution.generation.*;
 import com.yunjihai.rag.solution.model.*;
 import com.yunjihai.rag.solution.verification.*;
@@ -273,6 +274,33 @@ class PostgresSolutionFinalizationAcceptanceTest {
         var finalized = finalization.finalizeSolution(REVIEWER,
                 created.solutionId(), current.revision(), NOW);
         assertThat(finalStore.findById(finalized.id())).contains(finalized);
+        var feedback = new FeedbackService(solutions, finalStore, requirements, sections,
+                sourceAccess, evidenceAccess, new JdbcFeedbackStore(jdbc), tx, audit,
+                Clock.fixed(NOW, ZoneOffset.UTC));
+        var submitted = feedback.submit(EDITOR, created.solutionId(), finalized.id(), editedAdoptedId,
+                FeedbackReason.MISSING_EVIDENCE, "pilot-feedback-1");
+        assertThat(feedback.submit(EDITOR, created.solutionId(), finalized.id(), editedAdoptedId,
+                FeedbackReason.MISSING_EVIDENCE, "pilot-feedback-1")).isEqualTo(submitted);
+        assertThat(feedback.listMine(EDITOR, created.solutionId(), finalized.id())).contains(submitted);
+        var reviewerFeedback = feedback.submit(REVIEWER, created.solutionId(), finalized.id(), null,
+                FeedbackReason.ACCEPTED, "pilot-feedback-reviewer");
+        assertThat(feedback.listMine(EDITOR, created.solutionId(), finalized.id()))
+                .containsExactly(submitted).doesNotContain(reviewerFeedback);
+        var failingFeedback = new FeedbackService(solutions, finalStore, requirements, sections,
+                sourceAccess, evidenceAccess, new JdbcFeedbackStore(jdbc), tx,
+                command -> { throw new IllegalStateException("audit unavailable"); },
+                Clock.fixed(NOW, ZoneOffset.UTC));
+        assertThatThrownBy(() -> failingFeedback.submit(EDITOR, created.solutionId(), finalized.id(), null,
+                FeedbackReason.OTHER, "pilot-feedback-audit-failure"))
+                .isInstanceOf(IllegalStateException.class);
+        assertThat(jdbc.sql("SELECT count(*) FROM solution_feedback WHERE client_key = 'pilot-feedback-audit-failure'")
+                .query(Long.class).single()).isZero();
+        assertThatThrownBy(() -> feedback.submit(EDITOR, created.solutionId(), finalized.id(), editedAdoptedId,
+                FeedbackReason.FACT_ERROR, "pilot-feedback-1")).isInstanceOf(RuntimeException.class);
+        assertThat(jdbc.sql("SELECT count(*) FROM audit_event WHERE action = 'REVIEW' AND result = 'FAILED'")
+                .query(Long.class).single()).isEqualTo(1);
+        assertThatThrownBy(() -> feedback.submit(EDITOR, created.solutionId(), finalized.id(), UUID.randomUUID(),
+                FeedbackReason.FACT_ERROR, "pilot-feedback-2")).isInstanceOf(AccessDeniedAsNotFoundException.class);
         assertThat(solutions.findById(created.solutionId()).orElseThrow().finalizedVersionId())
                 .contains(finalized.id());
         assertThatThrownBy(() -> editing.save(EDITOR, created.solutionId(), SECTION, editedAdoptedId,
@@ -290,11 +318,20 @@ class PostgresSolutionFinalizationAcceptanceTest {
             assertThat(docx.getParagraphs().stream().map(p -> p.getText()).toList())
                     .anyMatch(line -> line.contains("页码 1"));
         }
+        long deniedBeforeRevocation = jdbc.sql("SELECT count(*) FROM audit_event WHERE action = 'REVIEW' AND result = 'DENIED'")
+                .query(Long.class).single();
         jdbc.sql("UPDATE acl_entry SET revoked_at = :at WHERE document_id = :document AND principal_id = :reviewer")
                 .param("at", OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC))
                 .param("document", DOCUMENT).param("reviewer", REVIEWER).update();
         assertThatThrownBy(() -> export.export(REVIEWER, created.solutionId(), finalized.id()))
                 .isInstanceOf(AccessDeniedAsNotFoundException.class);
+        assertThatThrownBy(() -> feedback.listMine(REVIEWER, created.solutionId(), finalized.id()))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
+        assertThatThrownBy(() -> feedback.submit(REVIEWER, created.solutionId(), finalized.id(), null,
+                FeedbackReason.OTHER, "pilot-feedback-revoked"))
+                .isInstanceOf(AccessDeniedAsNotFoundException.class);
+        assertThat(jdbc.sql("SELECT count(*) FROM audit_event WHERE action = 'REVIEW' AND result = 'DENIED'")
+                .query(Long.class).single()).isEqualTo(deniedBeforeRevocation + 2);
     }
 
     private static KnowledgeSpaceReadAuthorization spaceRead() {

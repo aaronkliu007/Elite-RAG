@@ -1,0 +1,37 @@
+# 方案反馈与试运行门槛
+
+## 反馈操作
+
+定稿后，在方案工作台的“使用反馈”中选择固定原因，可选定稿章节。反馈绑定不可变的定稿版本和章节版本，默认只展示提交者自己的记录。原因限定为 `ACCEPTED`（已采纳）、`FACT_ERROR`（事实错误）、`MISSING_EVIDENCE`（缺少证据）、`IRRELEVANT`（不相关）、`OUTDATED`（过期）、`STYLE`（表达）、`DUPLICATE`（重复）、`SCOPE_MISMATCH`（范围不符）、`OTHER`（其他）。首版不收集自由文本，不自动把反馈内容写入知识库或训练集。
+
+接口：`POST /api/v1/solutions/{solutionId}/finalized-versions/{versionId}/feedback`，请求头 `Idempotency-Key`，请求体 `{"reason":"MISSING_EVIDENCE","sectionVersionId":"..."}`，整份方案反馈时章节 ID 为 `null`；`GET .../feedback/mine` 查看自己的最近 100 条。相同键和相同内容返回原记录，同键改写返回 `409`。读写均重新验证空间、需求来源和定稿章节证据权限；撤权后拒绝访问并记录失败审计。数据库迁移 `V015` 固定原因、版本外键和客户端键唯一约束。审计保存方案/版本标识、状态和错误码，不记录原始需求或正文。
+
+反馈是治理线索，不能自动改变已定稿的内容。知识管理员应按原因汇总、复核来源，必要时重新发布知识资产或新建方案版本；不能直接修改旧定稿。
+
+## 自动化验证
+
+在 `E:\git_repo\Elite-RAG` 执行：
+
+```powershell
+.\mvnw.cmd -o -pl apps/core-api -am test
+corepack pnpm --dir apps/web test --run
+corepack pnpm --dir apps/web build
+corepack pnpm --dir apps/web lint
+corepack pnpm --dir apps/web exec playwright test
+```
+
+PostgreSQL 验收覆盖迁移、反馈幂等、外来章节拒绝和撤权；浏览器测试覆盖定稿、Word 下载与反馈提交。完整依赖验证使用 `scripts/verify.ps1`，它还检查 Docker、AIStor 许可证、解析 Worker 和其他服务。现有计划中的 `scripts/run-retrieval-eval.ps1` 尚不存在，应使用现有可信问答评估手册的流程；不能把缺失脚本记为已运行。
+
+`evaluation/generation/golden-v1.jsonl` 是 12 条**虚构合成**开发样例，覆盖六类文件、缺证、冲突、跨权和提示注入；当前仅校验文件结构和场景覆盖，尚未接入生成行为评测器。它不构成真实客户方案的质量分数，也不计入试点样本。
+
+## 试运行阶段门槛
+
+| 门槛 | 验收方式 | 当前状态 |
+| --- | --- | --- |
+| 权限回归 100%，无跨项目越权 | 自动化负样本、真实角色复核 | 自动化已覆盖部分场景；真实复核待做 |
+| 关键事实引用覆盖率 ≥90%，人工抽检支持准确率 ≥95% | 20–30 份脱敏真实需求，10–20 份认可方案/章节，人工标注 | 真实样本未提供，未测量 |
+| 初稿平均耗时降低 ≥50%、周活跃率 ≥60%、系统生成/复用内容使用率 ≥70% | 10–20 名试点用户，与人工基线对比 | 待试点 |
+| 高风险事实签认、Word 导出、反馈闭环 | 真实用户端到端演练 | 自动化完成；真实演练待做 |
+| 恢复、负载、可用性 | 备份恢复、20 人并发、业务时段观测 | 待做 |
+
+在真实样本、权限回归、恢复和负载验收完成前，阶段状态保持“内部开发验证”，不能据合成样例宣布生产准入。钉钉同步按既定优先级在核心功能之后实施。

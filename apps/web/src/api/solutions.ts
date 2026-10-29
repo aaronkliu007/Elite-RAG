@@ -50,6 +50,10 @@ export interface FinalizationRisk {
 }
 export interface FinalizationReview { solutionId: string, revision: number, risks: FinalizationRisk[] }
 export interface FinalizedVersion { id: string, solutionRevision: number, contentHash: string, createdAt: string }
+export type FeedbackReason = 'ACCEPTED' | 'FACT_ERROR' | 'MISSING_EVIDENCE' | 'IRRELEVANT'
+  | 'OUTDATED' | 'STYLE' | 'DUPLICATE' | 'SCOPE_MISMATCH' | 'OTHER'
+export interface SolutionFeedback { id: string, finalizedVersionId: string,
+  sectionVersionId: string | null, reason: FeedbackReason, createdAt: string }
 export type SectionGenerationStatus = 'PENDING' | 'RETRIEVING' | 'GENERATING' | 'VERIFYING'
   | 'SUCCEEDED' | 'INSUFFICIENT_EVIDENCE' | 'FAILED_RETRYABLE' | 'FAILED_MANUAL' | 'CANCELLED'
 export type CitationVerdict = 'SUPPORTED' | 'HUMAN_CONFIRMATION_REQUIRED' | 'PARTIAL' | 'UNSUPPORTED'
@@ -138,4 +142,11 @@ export const solutionsApi = {
     }),
   downloadWord: (solutionId: string, versionId: string) =>
     apiRequestBlob(`${path(solutionId)}/finalized-versions/${encodeURIComponent(versionId)}/word`),
+  feedbackMine: (solutionId: string, versionId: string) =>
+    apiRequest<SolutionFeedback[]>(`${path(solutionId)}/finalized-versions/${encodeURIComponent(versionId)}/feedback/mine`),
+  submitFeedback: (solutionId: string, versionId: string, sectionVersionId: string | null,
+    reason: FeedbackReason, key: string) =>
+    apiRequest<SolutionFeedback>(`${path(solutionId)}/finalized-versions/${encodeURIComponent(versionId)}/feedback`, {
+      method: 'POST', headers: keyHeader(key), body: JSON.stringify({ sectionVersionId, reason }),
+    }),
 }
