@@ -16,6 +16,7 @@ import com.yunjihai.rag.qa.model.ModelGeneration;
 import com.yunjihai.rag.qa.model.ModelUsage;
 import com.yunjihai.rag.qa.sanitization.SanitizationResult;
 import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
+import com.yunjihai.rag.qa.sanitization.SanitizedText;
 import com.yunjihai.rag.retrieval.RetrievalService;
 import com.yunjihai.rag.retrieval.RetrievalOutboundPolicyException;
 import com.yunjihai.rag.qa.evaluation.EvaluationCase;
@@ -171,6 +172,29 @@ public final class GroundedQaService {
                     command.requestId(), "AUTHORIZED_SCOPE_TOO_LARGE"));
         }
 
+        SanitizedText sanitizedQuestion;
+        try {
+            sanitizedQuestion = Objects.requireNonNull(sanitizer.sanitizeText(question.value()));
+        } catch (RuntimeException sanitizationFailure) {
+            return complete(state, command.actorId(), new QaOutcome.Refused(
+                    command.requestId(), RefusalReason.UNSAFE_TO_SEND, false));
+        }
+        if (sanitizedQuestion.blocked()) {
+            return complete(state, command.actorId(), new QaOutcome.Refused(
+                    command.requestId(), RefusalReason.UNSAFE_TO_SEND, false));
+        }
+        QaQuestion safeQuestion;
+        try {
+            safeQuestion = QaQuestion.normalize(sanitizedQuestion.value());
+        } catch (RuntimeException invalidSanitizedQuestion) {
+            return complete(state, command.actorId(), new QaOutcome.Refused(
+                    command.requestId(), RefusalReason.UNSAFE_TO_SEND, false));
+        }
+        if (safeQuestion.codePointLength() > policy.maxQuestionCodePoints()) {
+            return complete(state, command.actorId(), new QaOutcome.Refused(
+                    command.requestId(), RefusalReason.UNSAFE_TO_SEND, false));
+        }
+
         Optional<QaPersistencePort.RequestState> retrieving = persistence.transition(
                 command.requestId(), state.revision(), QaStatus.RETRIEVING, clock.instant());
         if (retrieving.isEmpty()) return stale(command);
@@ -180,7 +204,7 @@ public final class GroundedQaService {
         EvidencePack pack;
         try {
             pack = retrieval.retrieve(new RetrievalQuery(
-                    command.requestId(), command.actorId(), spaces, question.value(), Map.of(),
+                    command.requestId(), command.actorId(), spaces, safeQuestion.value(), Map.of(),
                     policy.requestedEvidenceCount()));
         } catch (RetrievalOutboundPolicyException unsafeOutbound) {
             return complete(state, command.actorId(), new QaOutcome.Refused(
@@ -234,7 +258,8 @@ public final class GroundedQaService {
             safeMetric(command.requestId(), () -> metrics.recordStage(
                     QaMetrics.Stage.SANITIZATION, elapsed(sanitizationStarted)));
         }
-        safeMetric(command.requestId(), () -> metrics.recordSanitizationHits(sanitizationHits(sanitized)));
+        int totalSanitizationHits = sanitizationHits(sanitizedQuestion) + sanitizationHits(sanitized);
+        safeMetric(command.requestId(), () -> metrics.recordSanitizationHits(totalSanitizationHits));
         if (sanitized.blocked()) {
             return complete(state, command.actorId(), new QaOutcome.Refused(
                     command.requestId(), RefusalReason.UNSAFE_TO_SEND, pack.degraded()));
@@ -249,7 +274,7 @@ public final class GroundedQaService {
         if (generating.isEmpty()) return stale(command);
         state = generating.orElseThrow();
         GroundedAnswerPrompt prompt = new GroundedAnswerPrompt(
-                question, sanitized.evidence(), "zh-CN", POLICY_VERSION, PROMPT_VERSION,
+                safeQuestion, sanitized.evidence(), "zh-CN", POLICY_VERSION, PROMPT_VERSION,
                 policy.maxModelOutputCodePoints());
         ModelCallDescriptor descriptor = chat.descriptor();
         long generationStarted = System.nanoTime();
@@ -267,7 +292,7 @@ public final class GroundedQaService {
                     command.requestId(), descriptor.provider(), descriptor.endpointIdentifier(),
                     descriptor.model(), descriptor.configVersion(), questionDigest,
                     responseDigest(attempt), attempt.usage(),
-                    sanitizationHits(sanitized), attempt.retryCount(), attempt.resultCode(), clock.instant()));
+                    totalSanitizationHits, attempt.retryCount(), attempt.resultCode(), clock.instant()));
         } catch (RuntimeException auditFailure) {
             return complete(state, command.actorId(), new QaOutcome.Failed(
                     command.requestId(), "MODEL_AUDIT_FAILED", pack.degraded()));
@@ -373,6 +398,10 @@ public final class GroundedQaService {
     }
 
     private static int sanitizationHits(SanitizationResult result) {
+        return result.hitCounts().values().stream().mapToInt(Integer::intValue).sum();
+    }
+
+    private static int sanitizationHits(SanitizedText result) {
         return result.hitCounts().values().stream().mapToInt(Integer::intValue).sum();
     }
 

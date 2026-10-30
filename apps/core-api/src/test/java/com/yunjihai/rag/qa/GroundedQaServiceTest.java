@@ -14,6 +14,7 @@ import com.yunjihai.rag.qa.model.ModelCallDescriptor;
 import com.yunjihai.rag.qa.model.ModelGeneration;
 import com.yunjihai.rag.qa.model.ModelUsage;
 import com.yunjihai.rag.qa.sanitization.SanitizationResult;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
 import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import com.yunjihai.rag.qa.sanitization.SanitizedText;
 import com.yunjihai.rag.retrieval.RetrievalService;
@@ -174,6 +175,51 @@ class GroundedQaServiceTest {
     }
 
     @Test
+    void redactsQuestionBeforeRetrievalAndChatModel() {
+        var harness = new Harness();
+        var metrics = new RecordingQaMetrics();
+        harness.metrics = metrics;
+
+        QaOutcome outcome = harness.service().ask(command("请联系 alice@example.com 查询制度"));
+
+        assertThat(outcome).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(harness.queries).singleElement().satisfies(query ->
+                assertThat(query.queryText()).isEqualTo("请联系 [EMAIL] 查询制度"));
+        assertThat(harness.prompt.get().question().value())
+                .isEqualTo("请联系 [EMAIL] 查询制度");
+        assertThat(harness.modelCalls).hasValue(1);
+        assertThat(metrics.sanitizationHits).containsExactly(1);
+        assertThat(harness.audits).singleElement()
+                .extracting(ModelCallAuditPort.ModelCallAudit::sanitizationHitCount).isEqualTo(1);
+    }
+
+    @Test
+    void blocksUnsafeQuestionBeforeRetrievalOrModelCall() {
+        var harness = new Harness();
+
+        QaOutcome outcome = harness.service().ask(command(
+                "请处理 -----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----"));
+
+        assertThat(outcome).isEqualTo(new QaOutcome.Refused(
+                id(1), RefusalReason.UNSAFE_TO_SEND, false));
+        assertThat(harness.queries).isEmpty();
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void refusesWhenQuestionSanitizerReturnsNoResult() {
+        var harness = new Harness();
+        harness.nullQuestionSanitization = true;
+
+        QaOutcome outcome = harness.service().ask(command("问题"));
+
+        assertThat(outcome).isEqualTo(new QaOutcome.Refused(
+                id(1), RefusalReason.UNSAFE_TO_SEND, false));
+        assertThat(harness.queries).isEmpty();
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
     void delegatesTheSingleRetryBudgetToTheHttpGateway() {
         var harness = new Harness();
         harness.transientFailures = 1;
@@ -315,6 +361,7 @@ class GroundedQaServiceTest {
         private int transientFailures;
         private RuntimeException modelFailure;
         private boolean blockSanitization;
+        private boolean nullQuestionSanitization;
         private boolean auditFailure;
         private boolean rejectAnsweredCompletion;
         private boolean finalAuthorization = true;
@@ -335,6 +382,8 @@ class GroundedQaServiceTest {
                 return pack;
             };
             SensitiveContentSanitizer sanitizer = new SensitiveContentSanitizer() {
+                private final RegexSensitiveContentSanitizer real =
+                        new RegexSensitiveContentSanitizer(Set.of());
                 @Override
                 public SanitizationResult sanitize(com.yunjihai.rag.qa.domain.EvidenceBundle evidence) {
                     return new SanitizationResult(evidence, Map.of("PHONE", blockSanitization ? 1 : 0),
@@ -343,7 +392,8 @@ class GroundedQaServiceTest {
 
                 @Override
                 public SanitizedText sanitizeText(String text) {
-                    return new SanitizedText(text, Map.of(), false);
+                    if (nullQuestionSanitization) return null;
+                    return real.sanitizeText(text);
                 }
             };
             ChatCompletionPort chat = new ChatCompletionPort() {
