@@ -82,6 +82,125 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
 
     @Test
     @EnabledIfEnvironmentVariable(named = "RAG_GOLDEN_DIAGNOSTIC", matches = "true")
+    void strictLexicalAndCanMissBothSidesOfARealConflict() throws Exception {
+        try (OpenSearchConnection connection = new OpenSearchClientFactory().create(
+                new OpenSearchProperties(endpoint, null, null))) {
+            new OpenSearchIndexManager(connection.client()).createGeneration("diagnostic-conflict", OptionalInt.empty());
+        }
+        var http = java.net.http.HttpClient.newHttpClient();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper();
+        for (String[] item : new String[][] {
+                {"1", "项目预算为100万元。"}, {"2", "项目预算为120万元。"}}) {
+            String body = json.createObjectNode().put("title", "项目资料").put("bodyText", item[1]).toString();
+            var request = java.net.http.HttpRequest.newBuilder(endpoint.resolve(
+                            "/diagnostic-conflict/_doc/" + item[0] + "?refresh=true"))
+                    .header("Content-Type", "application/json")
+                    .PUT(java.net.http.HttpRequest.BodyPublishers.ofString(body)).build();
+            assertThat(http.send(request, java.net.http.HttpResponse.BodyHandlers.discarding()).statusCode())
+                    .isBetween(200, 299);
+        }
+        var query = json.createObjectNode();
+        var match = query.putObject("query").putObject("multi_match");
+        match.put("query", "项目预算是多少？");
+        match.putArray("fields").add("title^2.0").add("headingPath^1.5").add("bodyText");
+        var search = java.net.http.HttpRequest.newBuilder(endpoint.resolve("/diagnostic-conflict/_search"))
+                .header("Content-Type", "application/json")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(query.toString())).build();
+        var broad = http.send(search, java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertThat(broad.statusCode()).isEqualTo(200);
+        assertThat(json.readTree(broad.body()).path("hits").path("hits")).hasSize(2);
+        match.put("operator", "and");
+        var strictSearch = java.net.http.HttpRequest.newBuilder(endpoint.resolve("/diagnostic-conflict/_search"))
+                .header("Content-Type", "application/json")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(query.toString())).build();
+        var strict = http.send(strictSearch, java.net.http.HttpResponse.BodyHandlers.ofString());
+        assertThat(strict.statusCode()).isEqualTo(200);
+        assertThat(json.readTree(strict.body()).path("hits").path("hits")).isEmpty();
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_GOLDEN_DIAGNOSTIC", matches = "true")
+    void diagnosesGoldenRetrievalWithoutCallingModel() throws Exception {
+        try (var context = startContext(Map.ofEntries(
+                Map.entry("rag.test.counting-embedding", "false"),
+                Map.entry("rag.qa.evaluation.fixture.enabled", "true"),
+                Map.entry("rag.qa.hmac-key", "synthetic-test-only-hmac-key-32-bytes")))) {
+            ensureGoldenIndex(context);
+            var dataset = context.getBean(com.yunjihai.rag.qa.evaluation.EvaluationDataset.class);
+            var scope = context.getBean(com.yunjihai.rag.qa.AuthorizedSpaceScopePort.class);
+            var retrieval = context.getBean(TrustedRetrievalService.class);
+            var detector = new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector();
+            int answerCases = 0, answerCasesWithConflict = 0, answerCasesWithBothConflictDocuments = 0;
+            int insufficient = 0, annotatedBelowMinimum = 0, expected = 0, retrieved = 0;
+            int refusalCases = 0, refusalCasesWithConflict = 0;
+            int strictAnswerCasesBelowMinimum = 0, strictConflictCasesWithBothSides = 0;
+            int minimum = com.yunjihai.rag.qa.QaPolicy.defaults().minEvidenceCount();
+            var strictQueries = new com.yunjihai.rag.infrastructure.opensearch.OpenSearchRecallQueryFactory();
+            var principals = context.getBean(com.yunjihai.rag.retrieval.PrincipalResolverPort.class);
+            var http = java.net.http.HttpClient.newHttpClient();
+            var json = new com.fasterxml.jackson.databind.ObjectMapper();
+            for (var item : dataset.cases()) {
+                var spaces = scope.resolve(item.evaluationActorId(), Instant.now());
+                assertThat(spaces).isNotEmpty();
+                var pack = retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(),
+                        item.evaluationActorId(), spaces, item.question(), Map.of(), 10));
+                Instant at = Instant.now();
+                var filter = new com.yunjihai.rag.retrieval.domain.RetrievalFilter(
+                        spaces, principals.resolve(item.evaluationActorId(), at), true, at, Map.of());
+                var strictQuery = strictQueries.lexical(item.question(), filter, 50);
+                ((com.fasterxml.jackson.databind.node.ObjectNode) strictQuery
+                        .at("/query/bool/must/0/multi_match")).put("operator", "and");
+                var strictRequest = java.net.http.HttpRequest.newBuilder(
+                        endpoint.resolve("/" + OpenSearchIndexManager.READ_ALIAS + "/_search"))
+                        .header("Content-Type", "application/json")
+                        .POST(java.net.http.HttpRequest.BodyPublishers.ofString(strictQuery.toString())).build();
+                var strictResponse = http.send(strictRequest, java.net.http.HttpResponse.BodyHandlers.ofString());
+                assertThat(strictResponse.statusCode()).isEqualTo(200);
+                var strictHits = json.readTree(strictResponse.body()).path("hits").path("hits");
+                boolean strictA = false, strictB = false;
+                for (var hit : strictHits) {
+                    String title = hit.path("_source").path("title").asText();
+                    strictA |= title.contains("冲突证据 A");
+                    strictB |= title.contains("冲突证据 B");
+                }
+                if (!item.shouldRefuse() && strictHits.size() < minimum) strictAnswerCasesBelowMinimum++;
+                if (item.coverageTags().contains("CONFLICT") && strictA && strictB)
+                    strictConflictCasesWithBothSides++;
+                boolean conflict = detector.hasConflict(pack.evidence());
+                boolean conflictA = pack.evidence().stream().anyMatch(e -> e.title().contains("冲突证据 A"));
+                boolean conflictB = pack.evidence().stream().anyMatch(e -> e.title().contains("冲突证据 B"));
+                var actual = pack.evidence().stream().map(e ->
+                        new com.yunjihai.rag.qa.evaluation.EvaluationCase.EvidenceRef(e.documentId(), e.nodeId()))
+                        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+                expected += item.expectedEvidence().size();
+                retrieved += (int) item.expectedEvidence().stream().filter(actual::contains).count();
+                if (item.shouldRefuse()) {
+                    refusalCases++;
+                    if (conflict) refusalCasesWithConflict++;
+                } else {
+                    answerCases++;
+                    if (conflict) answerCasesWithConflict++;
+                    if (conflictA && conflictB) answerCasesWithBothConflictDocuments++;
+                    if (pack.evidence().size() < minimum) insufficient++;
+                    if (item.expectedEvidence().size() < minimum) annotatedBelowMinimum++;
+                }
+            }
+            assertThat(dataset.cases()).hasSize(50);
+            assertThat(answerCases + refusalCases).isEqualTo(50);
+            System.out.println("SYNTHETIC_RETRIEVAL_DIAGNOSTIC answerCases=" + answerCases
+                    + " answerCasesWithConflict=" + answerCasesWithConflict
+                    + " answerCasesWithBothConflictDocuments=" + answerCasesWithBothConflictDocuments
+                    + " insufficientEvidence=" + insufficient
+                    + " answerCasesAnnotatedBelowMinimum=" + annotatedBelowMinimum
+                    + " expectedEvidence=" + expected + " retrievedExpectedEvidence=" + retrieved
+                    + " refusalCases=" + refusalCases + " refusalCasesWithConflict=" + refusalCasesWithConflict
+                    + " experimentalAndRawAnswerCasesBelowMinimum=" + strictAnswerCasesBelowMinimum
+                    + " experimentalAndRawConflictCasesWithBothSides=" + strictConflictCasesWithBothSides);
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_GOLDEN_DIAGNOSTIC", matches = "true")
     void goldenConflictCaseRetrievesBothSidesAndRefusesConflictingEvidence() throws Exception {
         try (var context = startContext(Map.ofEntries(
                 Map.entry("rag.qa.evaluation.fixture.enabled", "true"),
