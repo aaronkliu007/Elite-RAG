@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
 import com.yunjihai.rag.qa.model.ModelCallDescriptor;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import com.yunjihai.rag.retrieval.embedding.EmbeddingPort;
 import com.yunjihai.rag.retrieval.embedding.EmbeddingUnavailableException;
 import com.yunjihai.rag.retrieval.selection.RerankerPort;
@@ -68,8 +69,9 @@ public class ModelGatewayConfiguration {
     @Bean
     @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "true")
     SolutionModelPort approvedSolutionModelPort(
-            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client, Clock clock) {
-        return new OpenAiSolutionModelAdapter(properties, client, new ObjectMapper(), clock);
+            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client, Clock clock,
+            SensitiveContentSanitizer sanitizer) {
+        return new OpenAiSolutionModelAdapter(properties, client, new ObjectMapper(), clock, sanitizer);
     }
 
     @Bean

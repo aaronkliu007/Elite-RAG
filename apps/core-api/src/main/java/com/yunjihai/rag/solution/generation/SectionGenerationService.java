@@ -9,6 +9,7 @@ import com.yunjihai.rag.common.UuidV7;
 import com.yunjihai.rag.retrieval.RetrievalService;
 import com.yunjihai.rag.retrieval.domain.Evidence;
 import com.yunjihai.rag.retrieval.domain.RetrievalQuery;
+import com.yunjihai.rag.qa.model.ModelGatewayException;
 import com.yunjihai.rag.solution.SolutionAction;
 import com.yunjihai.rag.solution.SolutionAuthorizationPort;
 import com.yunjihai.rag.solution.domain.ConcurrentSolutionUpdateException;
@@ -253,6 +254,13 @@ public final class SectionGenerationService implements SectionGenerationPort {
                     List.of("事实声明必须引用给定证据", "不得使用证据白名单以外的标识"),
                     selectedEvidence, command.at().plus(policy.modelTimeout())),
                     GeneratedSectionDraft.class);
+        } catch (ModelGatewayException denied) {
+            if (denied.kind() == ModelGatewayException.Kind.POLICY_VIOLATION) {
+                var failed = attempt.failManual("MODEL_POLICY_VIOLATION", command.at());
+                saveAttempt(failed, attempt);
+                return new SectionGenerationResult(failed, Optional.empty());
+            }
+            return failRetryable(attempt, "MODEL_UNAVAILABLE", command);
         } catch (RuntimeException unavailable) {
             return failRetryable(attempt, "MODEL_UNAVAILABLE", command);
         }

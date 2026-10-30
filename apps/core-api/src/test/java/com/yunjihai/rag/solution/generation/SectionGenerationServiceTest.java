@@ -5,6 +5,7 @@ import com.yunjihai.rag.audit.AuditAction;
 import com.yunjihai.rag.audit.AuditCommand;
 import com.yunjihai.rag.audit.AuditSink;
 import com.yunjihai.rag.knowledge.DocumentVersionRef;
+import com.yunjihai.rag.qa.model.ModelGatewayException;
 import com.yunjihai.rag.retrieval.RetrievalService;
 import com.yunjihai.rag.retrieval.domain.Evidence;
 import com.yunjihai.rag.retrieval.domain.EvidencePack;
@@ -377,6 +378,21 @@ class SectionGenerationServiceTest {
     }
 
     @Test
+    void blockedModelInputFailsManualWithoutRepeatedProviderAttempt() {
+        var fixture = Fixture.ready();
+        fixture.modelPolicyViolation = true;
+
+        var first = fixture.service.generate(command(SECTION_ID));
+        var retry = fixture.service.generate(command(SECTION_ID));
+
+        assertThat(first.attempt().status()).isEqualTo(GenerationStatus.FAILED_MANUAL);
+        assertThat(first.attempt().failureCode()).contains("MODEL_POLICY_VIOLATION");
+        assertThat(retry.attempt().id()).isEqualTo(first.attempt().id());
+        assertThat(retry.attempt().status()).isEqualTo(GenerationStatus.FAILED_MANUAL);
+        assertThat(fixture.modelCalls).isEqualTo(1);
+    }
+
+    @Test
     void retryRejectsAChangedEvidenceSnapshotBeforeCallingTheModelAgain() {
         var fixture = Fixture.ready();
         fixture.modelFailuresRemaining = 1;
@@ -720,6 +736,7 @@ class SectionGenerationServiceTest {
         private boolean returnNullModelResponse;
         private int retrievalFailuresRemaining;
         private int modelFailuresRemaining;
+        private boolean modelPolicyViolation;
         private Runnable duringModel = () -> { };
         private Runnable duringRetrieval = () -> { };
         private boolean evidenceReadable = true;
@@ -780,6 +797,9 @@ class SectionGenerationServiceTest {
                     events.add("model");
                     modelCalls++;
                     modelRequest = request;
+                    if (modelPolicyViolation) {
+                        throw new ModelGatewayException(ModelGatewayException.Kind.POLICY_VIOLATION);
+                    }
                     if (modelFailuresRemaining-- > 0) {
                         throw new IllegalStateException("model temporarily unavailable");
                     }

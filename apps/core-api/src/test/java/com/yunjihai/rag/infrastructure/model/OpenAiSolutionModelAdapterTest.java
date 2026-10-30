@@ -3,6 +3,7 @@ package com.yunjihai.rag.infrastructure.model;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
 import com.yunjihai.rag.retrieval.domain.Evidence;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
 import com.yunjihai.rag.solution.domain.OutlineNode;
@@ -114,6 +115,46 @@ class OpenAiSolutionModelAdapterTest {
         server.verify(0, postRequestedFor(urlEqualTo("/v1/chat/completions")));
     }
 
+    @Test void redactsSensitiveTextFromEverySolutionPromptFieldBeforeProviderCall() throws Exception {
+        respondWithClaims("""
+                {"claims":[{"claimId":"%s","text":"平台方案", "evidenceIds":["%s"]}]}
+                """.formatted(CLAIM_ID, EVIDENCE_ID));
+        var section = new OutlineNode(id(2), "联系 alice@example.com", 1, 1, true,
+                "咨询 bob@example.com", "检索 carol@example.com", Set.of());
+        var evidence = new Evidence(id(3), EVIDENCE_ID, id(4), id(5), "node-1",
+                "客户 dave@example.com", "反馈 erin@example.com", 0.9,
+                new MarkdownLocator(List.of("客户需求"), "node-1"));
+        var sensitive = new SolutionModelRequest(id(6), "client-key", ModelScenario.SECTION_GENERATION,
+                new PromptRef("solution-section", "v1"),
+                List.of(new RequirementItem(id(7), RequirementCategory.UNKNOWN,
+                        "通知 frank@example.com", List.of())), Optional.of(section),
+                List.of("规则 grace@example.com"), List.of(evidence), NOW.plusSeconds(60));
+
+        adapter().execute(sensitive, GeneratedSectionDraft.class);
+
+        var requests = server.findAll(postRequestedFor(urlEqualTo("/v1/chat/completions")));
+        assertThat(requests).hasSize(1);
+        String payload = requests.getFirst().getBodyAsString();
+        assertThat(payload).contains("[EMAIL]");
+        assertThat(payload).doesNotContain("alice@example.com", "bob@example.com", "carol@example.com",
+                "dave@example.com", "erin@example.com", "frank@example.com", "grace@example.com");
+    }
+
+    @Test void blocksPrivateKeyInSolutionEvidenceBeforeProviderCall() {
+        var evidence = new Evidence(id(3), EVIDENCE_ID, id(4), id(5), "node-1",
+                "客户需求", "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----", 0.9,
+                new MarkdownLocator(List.of("客户需求"), "node-1"));
+        var unsafe = new SolutionModelRequest(id(6), "client-key", ModelScenario.SECTION_GENERATION,
+                new PromptRef("solution-section", "v1"), request().confirmedRequirements(),
+                request().section(), List.of("事实声明必须引用给定证据"),
+                List.of(evidence), NOW.plusSeconds(60));
+
+        assertThatThrownBy(() -> adapter().execute(unsafe, GeneratedSectionDraft.class))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        server.verify(0, postRequestedFor(urlEqualTo("/v1/chat/completions")));
+    }
+
     private void respondWithClaims(String content) throws Exception {
         var response = JSON.createObjectNode();
         response.putArray("choices").addObject().putObject("message").put("content", content);
@@ -124,7 +165,8 @@ class OpenAiSolutionModelAdapterTest {
     }
 
     private SolutionModelPort adapter() {
-        return new OpenAiSolutionModelAdapter(properties, client, JSON, Clock.fixed(NOW, ZoneOffset.UTC));
+        return new OpenAiSolutionModelAdapter(properties, client, JSON, Clock.fixed(NOW, ZoneOffset.UTC),
+                new RegexSensitiveContentSanitizer(Set.of()));
     }
 
     private static SolutionModelRequest request() {

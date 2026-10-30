@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import com.yunjihai.rag.solution.domain.Claim;
 import com.yunjihai.rag.solution.generation.ModelUsage;
 import com.yunjihai.rag.solution.model.*;
@@ -27,13 +28,16 @@ public final class OpenAiSolutionModelAdapter implements SolutionModelPort {
     private final OpenAiCompatibleClient client;
     private final ObjectMapper json;
     private final Clock clock;
+    private final SensitiveContentSanitizer sanitizer;
 
     public OpenAiSolutionModelAdapter(ApprovedModelGatewayProperties properties,
-            OpenAiCompatibleClient client, ObjectMapper json, Clock clock) {
+            OpenAiCompatibleClient client, ObjectMapper json, Clock clock,
+            SensitiveContentSanitizer sanitizer) {
         this.properties = Objects.requireNonNull(properties);
         this.client = Objects.requireNonNull(client);
         this.json = Objects.requireNonNull(json);
         this.clock = Objects.requireNonNull(clock);
+        this.sanitizer = Objects.requireNonNull(sanitizer);
     }
 
     @Override
@@ -89,18 +93,18 @@ public final class OpenAiSolutionModelAdapter implements SolutionModelPort {
         context.put("promptVersion", request.prompt().version());
         var section = request.section().orElseThrow();
         var sectionNode = context.putObject("section");
-        sectionNode.put("title", section.title());
-        sectionNode.put("objective", section.objective());
-        sectionNode.put("retrievalHint", section.retrievalHint());
+        sectionNode.put("title", safeText(section.title()));
+        sectionNode.put("objective", safeText(section.objective()));
+        sectionNode.put("retrievalHint", safeText(section.retrievalHint()));
         var requirements = context.putArray("confirmedRequirements");
         request.confirmedRequirements().forEach(item -> requirements.addObject()
-                .put("category", item.category().name()).put("text", item.text()));
+                .put("category", item.category().name()).put("text", safeText(item.text())));
         var rules = context.putArray("templateRules");
-        request.templateRules().forEach(rules::add);
+        request.templateRules().forEach(rule -> rules.add(safeText(rule)));
         var evidence = context.putArray("evidence");
         request.evidence().forEach(item -> evidence.addObject()
                 .put("evidenceId", item.evidenceId().toString())
-                .put("title", item.title()).put("excerpt", item.excerpt()));
+                .put("title", safeText(item.title())).put("excerpt", safeText(item.excerpt())));
         messages.addObject().put("role", "user").put("content", compactJson(context));
         var responseFormat = root.putObject("response_format");
         responseFormat.put("type", "json_schema");
@@ -109,6 +113,18 @@ public final class OpenAiSolutionModelAdapter implements SolutionModelPort {
         schema.put("strict", true);
         schema.set("schema", responseSchema());
         return root;
+    }
+
+    private String safeText(String text) {
+        try {
+            var result = sanitizer.sanitizeText(text);
+            if (result.blocked()) throw new ModelGatewayException(ModelGatewayException.Kind.POLICY_VIOLATION);
+            return result.value();
+        } catch (ModelGatewayException failure) {
+            throw failure;
+        } catch (RuntimeException failure) {
+            throw new ModelGatewayException(ModelGatewayException.Kind.POLICY_VIOLATION);
+        }
     }
 
     private GeneratedSectionDraft parseClaims(String content, SolutionModelRequest request,
