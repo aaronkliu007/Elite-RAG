@@ -16,15 +16,16 @@ export type SolutionLocator =
   | { type: 'TABLE', tableName: string, startRow: number, endRow: number, startColumn: number, endColumn: number }
   | { type: 'MARKDOWN', headingPath: string[], nodeId: string | null }
 
-export interface SolutionSource { documentId: string, versionId: string, locator: SolutionLocator }
+export interface SolutionSource { documentId: string, versionId: string, locator: SolutionLocator, evidenceIds?: string[] }
 export interface RequirementItemInput { category: RequirementCategory, text: string, sources: SolutionSource[] }
 export interface RequirementItem extends RequirementItemInput { itemId: string }
 export type ProposalKind = 'requirements' | 'outline'
 export interface SolutionProposal {
-  id: string, kind: 'REQUIREMENTS' | 'OUTLINE',
+  id: string, kind: 'REQUIREMENTS' | 'OUTLINE' | 'DOCUMENT_REQ',
   status: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'INDETERMINATE',
   requirementVersionId: string, expectedRevision: number, failureCode: string | null,
-  result: { kind: 'REQUIREMENTS', items: RequirementItemInput[] }
+  result: { kind: 'REQUIREMENTS', items: RequirementItemInput[],
+    documentsWithoutEvidence?: { documentId: string, versionId: string }[], retrievalDegraded?: boolean }
     | { kind: 'OUTLINE', nodes: OutlineNodeInput[] } | null
 }
 export interface RequirementVersion {
@@ -89,6 +90,29 @@ const keyHeader = (key: string) => ({ 'Idempotency-Key': key })
 const path = (solutionId: string) => `/api/v1/solutions/${encodeURIComponent(solutionId)}`
 
 export const solutionsApi = {
+  generateDocumentProposal: (solutionId: string, query: string,
+    documents: { documentId: string, versionId: string }[], expectedRevision: number, key: string) =>
+    apiRequest<SolutionProposal>(`${path(solutionId)}/document-requirement-proposals`, {
+      method: 'POST', headers: keyHeader(key), body: JSON.stringify({ query, documents, expectedRevision }),
+    }),
+  getDocumentProposal: (solutionId: string, query: string,
+    documents: { documentId: string, versionId: string }[], expectedRevision: number, key: string) =>
+    apiRequest<SolutionProposal>(`${path(solutionId)}/document-requirement-proposals/lookup`, {
+      method: 'POST', headers: keyHeader(key), body: JSON.stringify({ query, documents, expectedRevision }),
+    }),
+  adoptDocumentProposal: (solutionId: string, query: string,
+    documents: { documentId: string, versionId: string }[], expectedRevision: number,
+    proposalKey: string, adoptionKey: string) =>
+    apiRequest<SolutionCommandResult>(`${path(solutionId)}/document-requirement-proposals/adopt`, {
+      method: 'POST', headers: { ...keyHeader(adoptionKey), 'Proposal-Key': proposalKey },
+      body: JSON.stringify({ query, documents, expectedRevision }),
+    }),
+  getDocumentProposalEvidence: (solutionId: string, evidenceId: string, query: string,
+    documents: { documentId: string, versionId: string }[], expectedRevision: number, proposalKey: string) =>
+    apiRequest<{ text: string }>(`${path(solutionId)}/document-requirement-proposals/evidence/${encodeURIComponent(evidenceId)}`, {
+      method: 'POST', headers: { 'Proposal-Key': proposalKey },
+      body: JSON.stringify({ query, documents, expectedRevision }),
+    }),
   generateProposal: (solutionId: string, kind: ProposalKind, expectedRevision: number, key: string) =>
     apiRequest<SolutionProposal>(`${path(solutionId)}/proposals/${kind}`, {
       method: 'POST', headers: keyHeader(key), body: JSON.stringify({ expectedRevision }),

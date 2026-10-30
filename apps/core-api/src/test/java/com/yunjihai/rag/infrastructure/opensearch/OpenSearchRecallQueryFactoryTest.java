@@ -22,6 +22,18 @@ class OpenSearchRecallQueryFactoryTest {
     private static final UUID USER = UUID.fromString("00000000-0000-0000-0000-000000000001");
 
     @Test
+    void restrictsBothRecallPathsToExactDocumentVersion() {
+        var factory = new OpenSearchRecallQueryFactory();
+        var selected = new RetrievalFilter(Set.of(FIRST_SPACE), Set.of(new PrincipalRef(PrincipalType.USER, USER)),
+                true, Instant.parse("2026-10-10T00:00:00Z"),
+                Map.of("documentId", USER.toString(), "versionId", SECOND_SPACE.toString()));
+        assertThat(factory.lexical("需求", selected, 10).toString())
+                .contains("\"documentId\":\"" + USER + "\"", "\"versionId\":\"" + SECOND_SPACE + "\"");
+        assertThat(factory.vector(List.of(0.1, 0.2), selected, 10).toString())
+                .contains("\"documentId\":\"" + USER + "\"", "\"versionId\":\"" + SECOND_SPACE + "\"");
+    }
+
+    @Test
     void buildsTermsSpaceFilterForLexicalAndVectorRecall() {
         var factory = new OpenSearchRecallQueryFactory();
         var filter = filter();

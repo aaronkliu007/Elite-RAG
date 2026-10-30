@@ -52,6 +52,14 @@ final class SolutionRequestDigest {
                 .add(expectedRevision).add(version.id()).items(version.items()).digest();
     }
 
+    static String documentProposal(UUID solutionId, long revision, UUID requirementVersionId, String query,
+            List<com.yunjihai.rag.knowledge.DocumentVersionRef> documents) {
+        var value = new SolutionRequestDigest().add("DOCUMENT_REQUIREMENTS_V1").add(solutionId)
+                .add(revision).add(requirementVersionId).add(query).add(documents.size());
+        documents.forEach(document -> value.add(document.documentId()).add(document.versionId()));
+        return value.digest();
+    }
+
     private SolutionRequestDigest items(List<RequirementItem> items) {
         add(items.size());
         for (var item : items) {

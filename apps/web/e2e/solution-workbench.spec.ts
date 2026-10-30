@@ -16,6 +16,8 @@ async function session(page: Page) {
   }))
   await page.route(/\/api\/v1\/knowledge-spaces\?page=1&pageSize=100$/, (route) =>
     route.fulfill({ json: [space] }))
+  await page.route(/\/api\/v1\/knowledge-spaces\/space-1\/documents\?page=1&pageSize=50$/, (route) =>
+    route.fulfill({ json: [] }))
 }
 
 test('上传来源后完成方案编制、拒绝无依据草稿、风险确认、定稿与下载', async ({ page }) => {

@@ -19,6 +19,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /** Produces read-only model candidates; adoption uses the existing revision commands. */
 public final class SolutionProposalService implements SolutionProposalPort {
@@ -64,6 +65,8 @@ public final class SolutionProposalService implements SolutionProposalPort {
     }
 
     private ProposalAttempt generate(Command command, ProposalKind kind) {
+        if (TransactionSynchronizationManager.isActualTransactionActive())
+            throw new SolutionLifecycleException("MODEL_PROPOSAL_TRANSACTION_FORBIDDEN");
         if (!modelEnabled) throw new SolutionLifecycleException("MODEL_PROPOSAL_UNAVAILABLE");
         var context = context(command, kind);
         var key = new ProposalKey(command.actorId(), command.solutionId(), kind, command.clientKey());
@@ -149,6 +152,11 @@ public final class SolutionProposalService implements SolutionProposalPort {
             long expectedRevision) {
         var allowed = source.items().stream().flatMap(item -> item.sources().stream())
                 .collect(Collectors.toUnmodifiableSet());
+        return requirementsJson(proposal, source, expectedRevision, allowed);
+    }
+
+    static String requirementsJson(GeneratedRequirementProposal proposal, RequirementVersion source,
+            long expectedRevision, Set<RequirementSource> allowed) {
         var items = Objects.requireNonNull(proposal).items().stream().map(item -> {
             var parsed = new RequirementItem(item.itemId(), RequirementCategory.valueOf(item.category()),
                     item.text(), item.sources());

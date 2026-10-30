@@ -2,6 +2,8 @@ package com.yunjihai.rag.infrastructure.postgres;
 
 import com.yunjihai.rag.solution.domain.*;
 import com.yunjihai.rag.solution.proposal.*;
+import com.yunjihai.rag.knowledge.DocumentVersionRef;
+import com.yunjihai.rag.retrieval.domain.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.*;
@@ -150,6 +152,81 @@ class JdbcSolutionProposalAttemptStoreIntegrationTest {
         assertThat(store.findByKey(successKey).orElseThrow().status()).isEqualTo(ProposalStatus.SUCCEEDED);
     }
 
+    @Test void evidenceSnapshotIsImmutableAndRetainsNoExcerptTextAcrossStoreRestart() throws Exception {
+        var key = seed(1100, ProposalKind.DOCUMENT_REQ, "snapshot-key");
+        var request = new ProposalRegistrationRequest(key, id(1103), 0, "a".repeat(64));
+        var attempt = store.register(request, Duration.ofMinutes(3)).attempt();
+        var document = new DocumentVersionRef(id(1110), id(1111));
+        jdbc.sql("INSERT INTO document(id,space_id,title) VALUES (:id,:space,'需求文档')")
+                .param("id", document.documentId()).param("space", id(1101)).update();
+        jdbc.sql("INSERT INTO document_version(id,document_id,version_number,source_blob_id,created_by) "
+                + "VALUES (:version,:document,1,'test-object',:actor)")
+                .param("version", document.versionId()).param("document", document.documentId())
+                .param("actor", key.actorId()).update();
+        var evidence = new Evidence(id(1101), id(1112), document.documentId(), document.versionId(),
+                "node-1", "需求", "客户秘密正文", 0.8, new MarkdownLocator(List.of("需求"), "node-1"));
+        var snapshot = ProposalEvidenceSnapshot.from(id(1101), List.of(document), List.of(evidence));
+        var snapshots = new JdbcSolutionProposalEvidenceStore(jdbc, manager);
+        snapshots.save(attempt.id(), snapshot);
+        snapshots.save(attempt.id(), snapshot);
+        assertThat(new JdbcSolutionProposalEvidenceStore(jdbc, manager).find(attempt.id())).contains(snapshot);
+        assertThat(snapshot.toString()).doesNotContain("客户秘密正文");
+        assertThat(jdbc.sql("SELECT count(*) FROM solution_proposal_evidence_snapshot WHERE excerpt_hash LIKE '%客户秘密%'")
+                .query(Integer.class).single()).isZero();
+        var changed = ProposalEvidenceSnapshot.from(id(1101), List.of(document), List.of(new Evidence(id(1101),
+                id(1112), document.documentId(), document.versionId(), "node-1", "需求", "变化正文", 0.8,
+                new MarkdownLocator(List.of("需求"), "node-1"))));
+        assertThatThrownBy(() -> snapshots.save(attempt.id(), changed)).isInstanceOf(ProposalRequestConflictException.class);
+        assertThat(snapshots.find(attempt.id())).contains(snapshot);
+        jdbc.sql("UPDATE solution_model_proposal_attempt SET lease_until = clock_timestamp() + INTERVAL '3 seconds' WHERE id = :id")
+                .param("id", attempt.id()).update();
+        try (var connection = DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
+            connection.setAutoCommit(false);
+            try (var statement = connection.createStatement()) {
+                statement.execute("LOCK TABLE solution_proposal_document_snapshot IN ACCESS EXCLUSIVE MODE");
+            }
+            try (var pool = Executors.newSingleThreadExecutor()) {
+                var waiting = pool.submit(() -> snapshots.save(attempt.id(), snapshot));
+                try {
+                    assertThat(awaitCondition(() -> jdbc.sql("""
+                            SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid <> pg_backend_pid()
+                              AND datname = current_database() AND wait_event_type = 'Lock'
+                              AND query LIKE '%SELECT document_id, version_id FROM solution_proposal_document_snapshot%')
+                            """).query(Boolean.class).single(), Duration.ofSeconds(2))).isTrue();
+                    assertThat(awaitCondition(() -> jdbc.sql("SELECT lease_until <= clock_timestamp() FROM solution_model_proposal_attempt WHERE id = :id")
+                            .param("id", attempt.id()).query(Boolean.class).single(), Duration.ofSeconds(5))).isTrue();
+                } finally { connection.commit(); }
+                assertThatThrownBy(() -> waiting.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(ProposalRequestConflictException.class);
+            }
+        }
+        jdbc.sql("UPDATE solution_model_proposal_attempt SET lease_until = clock_timestamp() + INTERVAL '3 seconds' WHERE id = :id")
+                .param("id", attempt.id()).update();
+        try (var connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try (var statement = connection.prepareStatement("SELECT id FROM solution_model_proposal_attempt WHERE id = ? FOR UPDATE")) {
+                statement.setObject(1, attempt.id());
+                statement.executeQuery().close();
+            }
+            try (var pool = Executors.newSingleThreadExecutor()) {
+                var waiting = pool.submit(() -> snapshots.save(attempt.id(), snapshot));
+                try {
+                    assertThat(awaitCondition(() -> jdbc.sql("""
+                            SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid <> pg_backend_pid()
+                              AND datname = current_database() AND wait_event_type = 'Lock'
+                              AND query LIKE '%SELECT a.id FROM solution_model_proposal_attempt%')
+                            """).query(Boolean.class).single(), Duration.ofSeconds(2))).isTrue();
+                    assertThat(awaitCondition(() -> jdbc.sql("SELECT lease_until <= clock_timestamp() FROM solution_model_proposal_attempt WHERE id = :id")
+                            .param("id", attempt.id()).query(Boolean.class).single(), Duration.ofSeconds(5))).isTrue();
+                } finally { connection.commit(); }
+                assertThatThrownBy(() -> waiting.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(ProposalRequestConflictException.class);
+            }
+        }
+        assertThatThrownBy(() -> snapshots.save(attempt.id(), snapshot)).isInstanceOf(ProposalRequestConflictException.class);
+        assertThat(snapshots.find(attempt.id())).contains(snapshot);
+    }
+
     @Test void concurrentRegistrationsCreateExactlyOneModelCallOwner() throws Exception {
         var key = seed(300, ProposalKind.OUTLINE, "concurrent-key");
         var request = new ProposalRegistrationRequest(key, id(303), 0, "d".repeat(64));
@@ -164,6 +241,31 @@ class JdbcSolutionProposalAttemptStoreIntegrationTest {
             assertThat(values.stream().filter(ProposalRegistration::created)).hasSize(1);
             assertThat(values.get(0).attempt().id()).isEqualTo(values.get(1).attempt().id());
         }
+    }
+
+    @Test void adoptionMembershipLockPreventsConcurrentOrganizationSnapshotUntilTransactionEnds() throws Exception {
+        var key = seed(1200, ProposalKind.DOCUMENT_REQ, "membership-lock");
+        var lock = new JdbcIdentityAuthorizationLock(jdbc);
+        var acquired = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var pool = Executors.newSingleThreadExecutor()) {
+            var worker = pool.submit(() -> new TransactionTemplate(manager).execute(status -> {
+                lock.lock(key.actorId());
+                acquired.countDown();
+                try { if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("timeout"); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new IllegalStateException(); }
+                return true;
+            }));
+            try {
+                assertThat(acquired.await(5, TimeUnit.SECONDS)).isTrue();
+                try (var connection = dataSource.getConnection(); var statement = connection.createStatement();
+                     var result = statement.executeQuery("SELECT pg_try_advisory_xact_lock(20260929, 3)")) {
+                    result.next(); assertThat(result.getBoolean(1)).isFalse();
+                }
+            } finally { release.countDown(); }
+            assertThat(worker.get(5, TimeUnit.SECONDS)).isTrue();
+        }
+        assertThat(jdbc.sql("SELECT pg_try_advisory_xact_lock(20260929, 3)").query(Boolean.class).single()).isTrue();
     }
 
     @Test void changedInputCannotMutateAnExpiredOriginalAttempt() {

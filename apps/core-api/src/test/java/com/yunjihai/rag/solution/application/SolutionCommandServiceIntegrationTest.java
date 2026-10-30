@@ -5,6 +5,8 @@ import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.audit.*;
 import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
+import com.yunjihai.rag.retrieval.domain.Evidence;
+import com.yunjihai.rag.solution.proposal.*;
 import com.yunjihai.rag.infrastructure.postgres.*;
 import com.yunjihai.rag.solution.SolutionWorkbenchService;
 import com.yunjihai.rag.solution.domain.*;
@@ -53,6 +55,49 @@ class SolutionCommandServiceIntegrationTest {
     }
 
     @AfterAll static void stop() { POSTGRES.stop(); }
+
+    @Test void documentCandidateAdoptionRechecksUncitedSelectedDocumentsAndReplaysAfterRevisionChange() throws Exception {
+        var actor = id(2001); var space = id(2002); seed(actor, space);
+        var commands = service(AuditSink.noop());
+        var created = commands.create(actor, "document-create", create(space, "文档需求方案"));
+        var doc = new DocumentVersionRef(id(2003), id(2004));
+        jdbc.sql("INSERT INTO document(id,space_id,title) VALUES (:id,:space,'需求文件')")
+                .param("id", doc.documentId()).param("space", space).update();
+        jdbc.sql("INSERT INTO document_version(id,document_id,version_number,source_blob_id,created_by) "
+                + "VALUES (:version,:document,1,'test-object',:actor)")
+                .param("version", doc.versionId()).param("document", doc.documentId()).param("actor", actor).update();
+        var proposalKey = new ProposalKey(actor, created.solutionId(), ProposalKind.DOCUMENT_REQ, "document-proposal");
+        var fingerprint = SolutionRequestDigest.documentProposal(created.solutionId(), created.revision(),
+                created.requirementVersionId(), "客户需求", List.of(doc));
+        var request = new ProposalRegistrationRequest(proposalKey, created.requirementVersionId(), created.revision(), fingerprint);
+        var attempts = new JdbcSolutionProposalAttemptStore(jdbc, tx.getTransactionManager());
+        var attempt = attempts.register(request, Duration.ofMinutes(3)).attempt();
+        var evidence = new Evidence(space, id(2005), doc.documentId(), doc.versionId(), "node-1", "文件",
+                "客户秘密", 0.8, new PageLocator(1, null));
+        var snapshots = new JdbcSolutionProposalEvidenceStore(jdbc, tx.getTransactionManager());
+        snapshots.save(attempt.id(), ProposalEvidenceSnapshot.from(space, List.of(doc), List.of(evidence)));
+        var resultJson = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(Map.of(
+                "kind", "REQUIREMENTS", "requirementVersionId", created.requirementVersionId(),
+                "expectedRevision", created.revision(), "items", List.of(Map.of("itemId", id(2006),
+                        "category", "UNKNOWN", "text", "待核对的客户需求", "sources", List.of()))));
+        assertThat(attempts.succeed(request, resultJson)).isTrue();
+        var allowed = new AtomicBoolean(false);
+        SolutionDocumentSourcePort sources = (user, selectedSpace, document, version, at) -> allowed.get();
+        var adoption = new DocumentRequirementProposalAdoptionService(solutions,
+                com.yunjihai.rag.solution.SolutionAuthorizationPort.allowAll(), sources, attempts, snapshots,
+                commands, tx, Clock.fixed(NOW, ZoneOffset.UTC), com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher.noop(),
+                new JdbcIdentityAuthorizationLock(jdbc));
+        var input = new DocumentRequirementProposalService.Command(actor, created.solutionId(), created.revision(),
+                "document-proposal", "客户需求", List.of(doc));
+        assertThatThrownBy(() -> adoption.adopt(input, "adopt-key")).isInstanceOf(AccessDeniedAsNotFoundException.class);
+        assertThat(solutions.findById(created.solutionId()).orElseThrow().revision()).isEqualTo(created.revision());
+        allowed.set(true);
+        var first = adoption.adopt(input, "adopt-key");
+        assertThat(first.revision()).isEqualTo(created.revision() + 1);
+        assertThat(adoption.adopt(input, "adopt-key")).isEqualTo(first);
+        allowed.set(false);
+        assertThatThrownBy(() -> adoption.adopt(input, "adopt-key")).isInstanceOf(AccessDeniedAsNotFoundException.class);
+    }
 
     @Test void sameKeyReplaysCommittedReferenceAndDifferentPayloadConflicts() {
         var actor = id(1); var space = id(2);

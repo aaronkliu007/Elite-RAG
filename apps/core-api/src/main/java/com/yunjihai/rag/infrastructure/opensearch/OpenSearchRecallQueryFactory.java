@@ -11,7 +11,7 @@ import java.util.Set;
 
 public final class OpenSearchRecallQueryFactory {
     private static final Set<String> METADATA_KEYS = Set.of(
-            "industry", "product", "solutionType", "year");
+            "industry", "product", "solutionType", "year", "documentId", "versionId");
     private static final List<String> SOURCE_FIELDS = List.of(
             "spaceId", "candidateId", "documentId", "versionId", "nodeId", "title", "bodyText",
             "headingPath", "locatorType", "pageNumber", "boundingBox", "slideNumber",

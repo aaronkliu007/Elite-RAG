@@ -6,6 +6,7 @@ import { ApiRequestError } from '../api/http'
 import SolutionSectionGenerationPanel from '../components/SolutionSectionGenerationPanel.vue'
 import SolutionSectionEditor from '../components/SolutionSectionEditor.vue'
 import SolutionProposalPanel from '../components/SolutionProposalPanel.vue'
+import DocumentRequirementProposalPanel from '../components/DocumentRequirementProposalPanel.vue'
 import { useSessionStore } from '../stores/session'
 import { searchApi, type SearchEvidence, type SourceLocator } from '../api/search'
 import { solutionsApi, type OutlineNodeInput, type RequirementCategory, type RequirementItemInput,
@@ -454,6 +455,19 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           kind="requirements"
           :revision="solution.revision"
           :current-texts="solution.requirementVersion?.items.map(item => item.text) ?? []"
+          :disabled="dirty || saving"
+          @busy-change="saving = $event"
+          @adopted="load(true)"
+        />
+        <DocumentRequirementProposalPanel
+          v-if="canEditRequirements && session.user?.userId"
+          :key="`${session.user.userId}:${solution.id}:document-requirements:${solution.revision}`"
+          :actor-id="session.user.userId"
+          :solution-id="solution.id"
+          :space-id="solution.spaceId"
+          :revision="solution.revision"
+          :current-texts="solution.requirementVersion?.items.map(item => item.text) ?? []"
+          :source-access-valid="solution.sourceAccessValid"
           :disabled="dirty || saving"
           @busy-change="saving = $event"
           @adopted="load(true)"

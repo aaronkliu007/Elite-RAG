@@ -167,9 +167,16 @@ public final class TrustedRetrievalService implements RetrievalService {
         progress.fusedCount = recalled.candidates().size();
         progress.reasons.addAll(recalled.degradationReasons());
         Instant checkedAt = clock.instant();
-        var requestedVersionsBySpace = documentVersionsBySpace(query, recalled.candidates());
+        var scopedCandidates = recalled.candidates().stream().filter(scored -> {
+            var candidate = scored.candidate();
+            var document = query.metadataFilter().get("documentId");
+            var version = query.metadataFilter().get("versionId");
+            return (document == null || document.equals(candidate.documentId().toString()))
+                    && (version == null || version.equals(candidate.versionId().toString()));
+        }).toList();
+        var requestedVersionsBySpace = documentVersionsBySpace(query, scopedCandidates);
         var allowedVersions = authorize(query, requestedVersionsBySpace, checkedAt);
-        var authorizedCandidates = recalled.candidates().stream()
+        var authorizedCandidates = scopedCandidates.stream()
                 .filter(candidate -> allowedVersions.contains(new DocumentVersionRef(
                         candidate.candidate().documentId(), candidate.candidate().versionId())))
                 .toList();

@@ -14,6 +14,7 @@ test('需求候选展示来源、人工审阅及冲突保留，宽屏与窄屏�
     if (url.pathname.endsWith('/session/me')) return route.fulfill({ json: {
       userId: 'user-1', username: 'alice', displayName: '爱丽丝' } })
     if (url.pathname.endsWith('/knowledge-spaces')) return route.fulfill({ json: [] })
+    if (url.pathname.endsWith('/knowledge-spaces/space-1/documents')) return route.fulfill({ json: [] })
     if (url.pathname.endsWith('/proposals/requirements')) {
       if (route.request().method() === 'POST') {
         generated++

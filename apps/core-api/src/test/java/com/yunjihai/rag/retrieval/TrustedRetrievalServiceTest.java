@@ -360,6 +360,21 @@ class TrustedRetrievalServiceTest {
     }
 
     @Test
+    void filtersUnselectedDocumentAndVersionBeforeExternalReranking() {
+        var selected = candidate(41, 141, RecallSource.LEXICAL, 1, "选中的内容");
+        var other = candidate(42, 142, RecallSource.LEXICAL, 2, "不应外发的内容");
+        try (var harness = new AuthorizationHarness(List.of(selected, other), requested -> requested,
+                Clock.fixed(Instant.parse("2026-09-28T05:00:00Z"), ZoneOffset.UTC))) {
+            var request = new RetrievalQuery(REQUEST_ID, USER_ID, Set.of(SPACE_ID), "业务需求",
+                    Map.of("documentId", selected.documentId().toString(),
+                            "versionId", selected.versionId().toString()), 8);
+            var result = harness.service.retrieve(request);
+            assertThat(harness.rerankedDocumentIds.get()).containsExactly(selected.documentId());
+            assertThat(result.evidence()).extracting(item -> item.documentId()).containsExactly(selected.documentId());
+        }
+    }
+
+    @Test
     void reauthorizesAgainstMutableAuthorityAfterRecallStateChanges() {
         var healthy = candidate(71, 171, RecallSource.LEXICAL, 1, "健康证据");
         var revoked = candidate(72, 172, RecallSource.LEXICAL, 2, "撤权证据");

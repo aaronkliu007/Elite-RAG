@@ -42,6 +42,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PostgresOpenSearchRetrievalAcceptanceTest {
     private static final GenericContainer<?> OPENSEARCH = new GenericContainer<>(
@@ -106,6 +107,62 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             assertThat(first.evidence()).hasSize(1);
             assertThat(first.evidence().getFirst().documentId()).isEqualTo(document);
             assertThat(first.evidence().getFirst().locator()).isInstanceOf(MarkdownLocator.class);
+            var selected = new com.yunjihai.rag.knowledge.DocumentVersionRef(document, version);
+            var documentEvidence = context.getBean(com.yunjihai.rag.solution.application.DocumentRequirementEvidenceService.class);
+            var scoped = documentEvidence.select(UUID.randomUUID(), user, space, "Kubernetes 灰度部署方案", java.util.List.of(selected));
+            assertThat(scoped.evidence()).hasSize(1).allSatisfy(item -> {
+                assertThat(item.documentId()).isEqualTo(document);
+                assertThat(item.versionId()).isEqualTo(version);
+            });
+            assertThat(scoped.documentsWithoutEvidence()).isEmpty();
+            context.getBean(com.yunjihai.rag.access.role.RoleAssignmentStore.class).grantSpaceRole(space, user,
+                    com.yunjihai.rag.access.role.SpaceRole.SPACE_ADMIN, user, Instant.now());
+            var commands = context.getBean(com.yunjihai.rag.solution.application.SolutionCommandService.class);
+            var created = commands.create(user, "acceptance-create", new com.yunjihai.rag.solution.application.SolutionCommandService.CreateInput(
+                    space, "真实检索文档需求", java.util.List.of(new com.yunjihai.rag.solution.domain.RequirementItem(
+                            UUID.randomUUID(), com.yunjihai.rag.solution.domain.RequirementCategory.UNKNOWN, "待明确", java.util.List.of())), 0));
+            var modelCalls = new AtomicInteger();
+            com.yunjihai.rag.solution.model.SolutionModelPort fakeModel = new com.yunjihai.rag.solution.model.SolutionModelPort() {
+                public <T> com.yunjihai.rag.solution.model.SolutionModelResponse<T> execute(
+                        com.yunjihai.rag.solution.model.SolutionModelRequest request, Class<T> type) {
+                    modelCalls.incrementAndGet();
+                    assertThat(request.prompt().version()).isEqualTo("v2");
+                    var item = request.evidence().getFirst();
+                    var generated = new com.yunjihai.rag.solution.model.GeneratedRequirementProposal(java.util.List.of(
+                            new com.yunjihai.rag.solution.model.GeneratedRequirementProposal.Item(UUID.randomUUID(), "GOAL", "支持灰度部署",
+                                    java.util.List.of(new com.yunjihai.rag.solution.domain.RequirementSource(
+                                            new com.yunjihai.rag.knowledge.DocumentVersionRef(item.documentId(), item.versionId()), item.locator())))));
+                    return new com.yunjihai.rag.solution.model.SolutionModelResponse<>(type, type.cast(generated),
+                            "test-model", new com.yunjihai.rag.solution.generation.ModelUsage(1, 1, 0, 1));
+                }
+            };
+            var proposals = new com.yunjihai.rag.solution.application.DocumentRequirementProposalService(
+                    context.getBean(com.yunjihai.rag.infrastructure.postgres.JdbcSolutionRepository.class),
+                    context.getBean(com.yunjihai.rag.infrastructure.postgres.JdbcRequirementVersionRepository.class),
+                    context.getBean(com.yunjihai.rag.solution.application.SolutionAccessService.class),
+                    context.getBean(com.yunjihai.rag.solution.application.SolutionSourceAccess.class),
+                    context.getBean(com.yunjihai.rag.infrastructure.postgres.JdbcSolutionDocumentSourcePort.class), documentEvidence,
+                    context.getBean(com.yunjihai.rag.infrastructure.postgres.JdbcSolutionProposalAttemptStore.class),
+                    context.getBean(com.yunjihai.rag.infrastructure.postgres.JdbcSolutionProposalEvidenceStore.class),
+                    fakeModel, java.time.Clock.systemUTC(), true);
+            var documentCommand = new com.yunjihai.rag.solution.application.DocumentRequirementProposalService.Command(user,
+                    created.solutionId(), created.revision(), "acceptance-document-proposal", "Kubernetes 灰度部署方案", java.util.List.of(selected));
+            var candidate = proposals.generate(documentCommand);
+            assertThat(candidate.status()).isEqualTo(com.yunjihai.rag.solution.proposal.ProposalStatus.SUCCEEDED);
+            assertThat(proposals.generate(documentCommand).id()).isEqualTo(candidate.id());
+            assertThat(modelCalls).hasValue(1);
+            var snapshot = context.getBean(com.yunjihai.rag.infrastructure.postgres.JdbcSolutionProposalEvidenceStore.class)
+                    .find(candidate.id()).orElseThrow();
+            var preview = new com.yunjihai.rag.solution.application.DocumentRequirementEvidencePreviewService(proposals,
+                    context.getBean(com.yunjihai.rag.infrastructure.postgres.JdbcSolutionProposalEvidenceStore.class),
+                    context.getBean(com.yunjihai.rag.infrastructure.postgres.JdbcDocumentEvidenceContent.class));
+            assertThat(preview.preview(documentCommand, snapshot.sources().getFirst().evidenceId()).text())
+                    .isEqualTo(("Kubernetes 灰度部署方案与回滚步骤" + "甲".repeat(1160)
+                            + "[EMAIL]" + "乙".repeat(80)).substring(0, 1200));
+            var adoption = context.getBean(com.yunjihai.rag.solution.application.DocumentRequirementProposalAdoptionService.class);
+            var adopted = adoption.adopt(documentCommand, "acceptance-adopt");
+            assertThat(adopted.revision()).isEqualTo(created.revision() + 1);
+            assertThat(adoption.adopt(documentCommand, "acceptance-adopt")).isEqualTo(adopted);
             assertThat(first.degradationReasons()).contains(
                     DegradationReason.VECTOR_UNAVAILABLE,
                     DegradationReason.RERANKER_UNAVAILABLE);
@@ -126,6 +183,11 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             assertThat(afterRevocation.stats().fusedCount()).isEqualTo(1);
             assertThat(afterRevocation.stats().reauthorizedCount()).isZero();
             assertThat(afterRevocation.evidence()).isEmpty();
+            assertThatThrownBy(() -> documentEvidence.select(UUID.randomUUID(), user, space,
+                    "Kubernetes 灰度部署方案", java.util.List.of(selected)))
+                    .isInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
+            assertThatThrownBy(() -> adoption.adopt(documentCommand, "acceptance-adopt"))
+                    .isInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
             assertThat(EMBEDDING_CALLS).hasValue(0);
         }
     }
@@ -160,9 +222,11 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                 INSERT INTO canonical_node
                     (version_id, node_id, kind, body_text, parent_node_id, page,
                      bounding_box, table_cells, confidence, stable_order)
-                VALUES (:version, 'node-1', 'PARAGRAPH', 'Kubernetes 灰度部署方案与回滚步骤',
+                VALUES (:version, 'node-1', 'PARAGRAPH', :body,
                         :parent, 1, CAST('null' AS jsonb), CAST('null' AS jsonb), 0.99, 1)
-                """).param("version", version).param("parent", null, Types.VARCHAR).update();
+                """).param("version", version).param("body", "Kubernetes 灰度部署方案与回滚步骤"
+                        + "甲".repeat(1160) + "test@example.com" + "乙".repeat(80))
+                .param("parent", null, Types.VARCHAR).update();
         jdbc.sql("""
                 INSERT INTO acl_entry
                     (id, space_id, document_id, scope, principal_type, principal_id)

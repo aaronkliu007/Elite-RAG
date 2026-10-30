@@ -77,6 +77,11 @@ import com.yunjihai.rag.solution.application.SolutionSourceAccess;
 import com.yunjihai.rag.solution.application.SolutionReviewPolicy;
 import com.yunjihai.rag.solution.application.SolutionCommandService;
 import com.yunjihai.rag.solution.application.SolutionProposalService;
+import com.yunjihai.rag.solution.application.DocumentRequirementEvidenceService;
+import com.yunjihai.rag.solution.application.DocumentRequirementProposalService;
+import com.yunjihai.rag.solution.application.DocumentRequirementProposalAdoptionService;
+import com.yunjihai.rag.solution.application.DocumentRequirementEvidencePreviewService;
+import com.yunjihai.rag.solution.application.ScopedDocumentEvidenceRetrieval;
 import com.yunjihai.rag.solution.SolutionWorkbenchService;
 import com.yunjihai.rag.solution.model.SolutionModelPort;
 import com.yunjihai.rag.solution.model.SolutionModelRequest;
@@ -130,6 +135,23 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
+    JdbcSolutionProposalEvidenceStore jdbcSolutionProposalEvidenceStore(JdbcClient jdbc,
+            PlatformTransactionManager transactions) {
+        return new JdbcSolutionProposalEvidenceStore(jdbc, transactions);
+    }
+
+    @Bean
+    JdbcIdentityAuthorizationLock jdbcIdentityAuthorizationLock(JdbcClient jdbc) {
+        return new JdbcIdentityAuthorizationLock(jdbc);
+    }
+
+    @Bean
+    JdbcDocumentEvidenceContent jdbcDocumentEvidenceContent(JdbcClient jdbc,
+            com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer sanitizer) {
+        return new JdbcDocumentEvidenceContent(jdbc, sanitizer);
+    }
+
+    @Bean
     SolutionProposalService solutionProposalService(JdbcSolutionRepository solutions,
             JdbcRequirementVersionRepository requirements, SolutionAccessService access,
             SolutionSourceAccess sources, JdbcSolutionProposalAttemptStore attempts,
@@ -179,6 +201,43 @@ public class PostgresAdapterConfiguration {
     SolutionSourceAccess solutionSourceAccess(KnowledgeSpaceReadAuthorization spaces,
             JdbcSolutionDocumentSourcePort documents) {
         return new SolutionSourceAccess(spaces, documents);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    DocumentRequirementEvidenceService documentRequirementEvidenceService(TrustedRetrievalService retrieval,
+            JdbcSolutionDocumentSourcePort documents, Clock clock) {
+        return new DocumentRequirementEvidenceService(new ScopedDocumentEvidenceRetrieval(retrieval), documents, clock);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    DocumentRequirementProposalService documentRequirementProposalService(JdbcSolutionRepository solutions,
+            JdbcRequirementVersionRepository requirements, SolutionAccessService access, SolutionSourceAccess sources,
+            JdbcSolutionDocumentSourcePort documents, DocumentRequirementEvidenceService evidence,
+            JdbcSolutionProposalAttemptStore attempts, JdbcSolutionProposalEvidenceStore snapshots,
+            SolutionModelPort model, Clock clock, ApprovedModelGatewayProperties properties) {
+        return new DocumentRequirementProposalService(solutions, requirements, access, sources, documents,
+                evidence, attempts, snapshots, model, clock, properties.enabled());
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    DocumentRequirementProposalAdoptionService documentRequirementProposalAdoptionService(
+            JdbcSolutionRepository solutions, SolutionAccessService access, JdbcSolutionDocumentSourcePort documents,
+            JdbcSolutionProposalAttemptStore attempts, JdbcSolutionProposalEvidenceStore snapshots,
+            SolutionCommandService commands, PlatformTransactionManager transactions, Clock clock,
+            ProjectionChangePublisher locks, JdbcIdentityAuthorizationLock identityLock) {
+        return new DocumentRequirementProposalAdoptionService(solutions, access, documents, attempts, snapshots,
+                commands, new TransactionTemplate(transactions), clock, locks, identityLock);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = "rag.opensearch.enabled", havingValue = "true")
+    DocumentRequirementEvidencePreviewService documentRequirementEvidencePreviewService(
+            DocumentRequirementProposalService proposals, JdbcSolutionProposalEvidenceStore snapshots,
+            JdbcDocumentEvidenceContent content) {
+        return new DocumentRequirementEvidencePreviewService(proposals, snapshots, content);
     }
 
     @Bean

@@ -27,6 +27,7 @@ public final class SolutionProposalController {
         return response(switch (kind(kind)) {
             case REQUIREMENTS -> proposals.generateRequirements(command);
             case OUTLINE -> proposals.generateOutline(command);
+            case DOCUMENT_REQ -> throw new IllegalArgumentException("invalid proposal kind");
         });
     }
 
@@ -55,7 +56,7 @@ public final class SolutionProposalController {
         };
     }
 
-    private static Response response(ProposalAttempt attempt) {
+    static Response response(ProposalAttempt attempt) {
         Map<String, Object> result = null;
         if (attempt.resultJson().isPresent()) {
             try { result = JSON.readValue(attempt.resultJson().orElseThrow(), new TypeReference<>() {}); }

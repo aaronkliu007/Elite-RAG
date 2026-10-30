@@ -37,6 +37,8 @@ class DependencyHealthIntegrationTest {
     @Test
     void healthyPostgresAndAistorMakeReadinessAndLivenessUp() throws Exception {
         try (var context = startContext(Map.of())) {
+            assertThat(context.getBeansOfType(com.yunjihai.rag.solution.application.DocumentRequirementEvidenceService.class))
+                    .isEmpty();
             assertContributorUp(context, "db");
             assertContributorUp(context, "minio");
             assertContributorUp(context, "readinessState");

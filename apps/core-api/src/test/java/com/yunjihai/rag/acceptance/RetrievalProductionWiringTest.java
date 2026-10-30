@@ -126,6 +126,11 @@ class RetrievalProductionWiringTest {
             assertThat(context.getBean(ProjectionWorker.class)).isNotNull();
             assertThat(context.getBean(OpenSearchRebuildService.class)).isNotNull();
             assertThat(context.getBean(TrustedRetrievalService.class)).isNotNull();
+            assertThat(context.getBean(com.yunjihai.rag.solution.application.DocumentRequirementProposalService.class)).isNotNull();
+            assertThat(context.getBean(com.yunjihai.rag.solution.web.DocumentRequirementProposalController.class)).isNotNull();
+            var mappings = context.getBean("requestMappingHandlerMapping", org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping.class)
+                    .getHandlerMethods().keySet().stream().map(Object::toString).toList();
+            assertThat(mappings).anyMatch(value -> value.contains("/document-requirement-proposals"));
             assertThat(context.getBean(IngestionWorkerScheduler.class)).isNotNull();
             assertThat(context.getBean(ProjectionWorkerScheduler.class)).isNotNull();
             assertThat(context.getBean(DocumentController.class)).isNotNull();
