@@ -6,9 +6,11 @@ import com.yunjihai.rag.qa.model.ModelGatewayException;
 import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
 import com.yunjihai.rag.retrieval.domain.Evidence;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
+import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.solution.domain.OutlineNode;
 import com.yunjihai.rag.solution.domain.RequirementCategory;
 import com.yunjihai.rag.solution.domain.RequirementItem;
+import com.yunjihai.rag.solution.domain.RequirementSource;
 import com.yunjihai.rag.solution.model.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -150,6 +152,96 @@ class OpenAiSolutionModelAdapterTest {
                 List.of(evidence), NOW.plusSeconds(60));
 
         assertThatThrownBy(() -> adapter().execute(unsafe, GeneratedSectionDraft.class))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        server.verify(0, postRequestedFor(urlEqualTo("/v1/chat/completions")));
+    }
+
+    @Test void generatesOutlineCandidateFromConfirmedRequirements() throws Exception {
+        respondWithClaims("""
+                {"nodes":[{"title":"总体架构","level":1,"order":1,"required":true,
+                  "objective":"描述部署架构","retrievalHint":"检索架构约束","riskTypes":["PERFORMANCE_OR_SLA"]}]}
+                """);
+        var outlineRequest = new SolutionModelRequest(id(21), "outline-key", ModelScenario.OUTLINE_GENERATION,
+                new PromptRef("outline", "v1"), List.of(new RequirementItem(id(22),
+                RequirementCategory.UNKNOWN, "联系 alice@example.com", List.of())),
+                Optional.empty(), List.of("至少一个必填章节"), List.of(), NOW.plusSeconds(60));
+
+        var response = adapter().execute(outlineRequest, GeneratedOutlineProposal.class);
+
+        assertThat(response.body().nodes()).singleElement().satisfies(node -> {
+            assertThat(node.title()).isEqualTo("总体架构");
+            assertThat(node.order()).isEqualTo(1);
+            assertThat(node.required()).isTrue();
+            assertThat(node.riskTypes()).containsExactly("PERFORMANCE_OR_SLA");
+        });
+        var body = server.findAll(postRequestedFor(urlEqualTo("/v1/chat/completions")))
+                .getFirst().getBodyAsString();
+        assertThat(body).contains("[EMAIL]", "outline_proposal").doesNotContain("alice@example.com");
+    }
+
+    @Test void rejectsMalformedOutlineCandidate() throws Exception {
+        respondWithClaims("""
+                {"nodes":[{"title":"总体架构","level":1,"order":2,"required":true,
+                  "objective":"部署","retrievalHint":"架构","riskTypes":[]}]}
+                """);
+        var outlineRequest = new SolutionModelRequest(id(21), "outline-key", ModelScenario.OUTLINE_GENERATION,
+                new PromptRef("outline", "v1"), request().confirmedRequirements(), Optional.empty(),
+                List.of("至少一个必填章节"), List.of(), NOW.plusSeconds(60));
+
+        assertThatThrownBy(() -> adapter().execute(outlineRequest, GeneratedOutlineProposal.class))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
+    }
+
+    @Test void requirementCandidateMapsOnlyServerSuppliedSourceIndexes() throws Exception {
+        respondWithClaims("""
+                {"items":[{"category":"GOAL","text":"建设知识库","sourceIndexes":[0]}]}
+                """);
+        var source = new RequirementSource(new DocumentVersionRef(id(30), id(31)),
+                new MarkdownLocator(List.of("客户需求"), "node-1"));
+        var requirementRequest = new SolutionModelRequest(id(21), "requirements-key",
+                ModelScenario.REQUIREMENTS_EXTRACTION, new PromptRef("requirements", "v1"),
+                List.of(new RequirementItem(id(22), RequirementCategory.GOAL,
+                        "联系 alice@example.com 建设知识库", List.of(source))),
+                Optional.empty(), List.of("已知事实必须包含来源"), List.of(), NOW.plusSeconds(60));
+
+        var response = adapter().execute(requirementRequest, GeneratedRequirementProposal.class);
+
+        assertThat(response.body().items()).singleElement().satisfies(item -> {
+            assertThat(item.category()).isEqualTo("GOAL");
+            assertThat(item.sources()).containsExactly(source);
+        });
+        var body = server.findAll(postRequestedFor(urlEqualTo("/v1/chat/completions")))
+                .getFirst().getBodyAsString();
+        assertThat(body).contains("[EMAIL]", "requirements_proposal", "sourceIndexes")
+                .doesNotContain("alice@example.com", id(30).toString(), "node-1");
+    }
+
+    @Test void rejectsInventedSourceIndexInRequirementCandidate() throws Exception {
+        respondWithClaims("""
+                {"items":[{"category":"GOAL","text":"建设知识库","sourceIndexes":[1]}]}
+                """);
+        var source = new RequirementSource(new DocumentVersionRef(id(30), id(31)),
+                new MarkdownLocator(List.of("客户需求"), "node-1"));
+        var requirementRequest = new SolutionModelRequest(id(21), "requirements-key",
+                ModelScenario.REQUIREMENTS_EXTRACTION, new PromptRef("requirements", "v1"),
+                List.of(new RequirementItem(id(22), RequirementCategory.GOAL, "建设知识库", List.of(source))),
+                Optional.empty(), List.of(), List.of(), NOW.plusSeconds(60));
+
+        assertThatThrownBy(() -> adapter().execute(requirementRequest, GeneratedRequirementProposal.class))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
+    }
+
+    @Test void blocksSensitiveRequirementBeforeAnyProposalProviderCall() {
+        var unsafe = new SolutionModelRequest(id(21), "requirements-key",
+                ModelScenario.REQUIREMENTS_EXTRACTION, new PromptRef("requirements", "v1"),
+                List.of(new RequirementItem(id(22), RequirementCategory.UNKNOWN,
+                        "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----", List.of())),
+                Optional.empty(), List.of(), List.of(), NOW.plusSeconds(60));
+
+        assertThatThrownBy(() -> adapter().execute(unsafe, GeneratedRequirementProposal.class))
                 .isInstanceOf(ModelGatewayException.class)
                 .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
         server.verify(0, postRequestedFor(urlEqualTo("/v1/chat/completions")));
