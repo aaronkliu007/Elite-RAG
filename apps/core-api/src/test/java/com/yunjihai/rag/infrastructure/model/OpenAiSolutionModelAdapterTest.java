@@ -54,6 +54,18 @@ class OpenAiSolutionModelAdapterTest {
         if (server != null) server.stop();
     }
 
+    @Test void proposalTransportFailureDoesNotResendBillablePost() {
+        server.stubFor(post(urlEqualTo("/v1/chat/completions")).willReturn(aResponse().withStatus(503)));
+        var candidateRequest = new SolutionModelRequest(id(21), "candidate-key",
+                ModelScenario.REQUIREMENTS_EXTRACTION, new PromptRef("requirements", "v1"),
+                List.of(new RequirementItem(id(22), RequirementCategory.UNKNOWN, "待明确需求", List.of())),
+                Optional.empty(), List.of("保持来源"), List.of(), NOW.plusSeconds(60));
+
+        assertThatThrownBy(() -> adapter().execute(candidateRequest, GeneratedRequirementProposal.class))
+                .isInstanceOf(ModelGatewayException.class);
+        server.verify(1, postRequestedFor(urlEqualTo("/v1/chat/completions")));
+    }
+
     @Test void generatesOnlyEvidenceLinkedClaimsAndServerBuildsMarkdown() throws Exception {
         respondWithClaims("""
                 {"claims":[{"claimId":"%s","text":"平台支持100名用户", "evidenceIds":["%s"]}]}

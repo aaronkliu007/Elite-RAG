@@ -76,6 +76,7 @@ import com.yunjihai.rag.solution.application.CurrentGenerationEvidenceAuthorizat
 import com.yunjihai.rag.solution.application.SolutionSourceAccess;
 import com.yunjihai.rag.solution.application.SolutionReviewPolicy;
 import com.yunjihai.rag.solution.application.SolutionCommandService;
+import com.yunjihai.rag.solution.application.SolutionProposalService;
 import com.yunjihai.rag.solution.SolutionWorkbenchService;
 import com.yunjihai.rag.solution.model.SolutionModelPort;
 import com.yunjihai.rag.solution.model.SolutionModelRequest;
@@ -126,6 +127,15 @@ public class PostgresAdapterConfiguration {
     JdbcSolutionProposalAttemptStore jdbcSolutionProposalAttemptStore(JdbcClient jdbc,
             PlatformTransactionManager transactions) {
         return new JdbcSolutionProposalAttemptStore(jdbc, transactions);
+    }
+
+    @Bean
+    SolutionProposalService solutionProposalService(JdbcSolutionRepository solutions,
+            JdbcRequirementVersionRepository requirements, SolutionAccessService access,
+            SolutionSourceAccess sources, JdbcSolutionProposalAttemptStore attempts,
+            SolutionModelPort model, Clock clock, ApprovedModelGatewayProperties properties) {
+        return new SolutionProposalService(solutions, requirements, access, sources, attempts,
+                model, clock, properties.enabled());
     }
 
     @Bean

@@ -76,7 +76,11 @@ public final class OpenAiSolutionModelAdapter implements SolutionModelPort {
                 }
             });
         }
-        var response = client.post(ModelEndpoint.CHAT_COMPLETIONS, payload(request));
+        var payload = payload(request);
+        var response = request.scenario() == ModelScenario.REQUIREMENTS_EXTRACTION
+                || request.scenario() == ModelScenario.OUTLINE_GENERATION
+                ? client.postWithoutRetry(ModelEndpoint.CHAT_COMPLETIONS, payload)
+                : client.post(ModelEndpoint.CHAT_COMPLETIONS, payload);
         try {
             var usage = response.body().path("usage");
             int inputTokens = exactNonNegativeInt(usage.get("prompt_tokens"));

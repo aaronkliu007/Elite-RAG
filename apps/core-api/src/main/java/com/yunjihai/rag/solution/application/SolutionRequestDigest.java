@@ -2,6 +2,7 @@ package com.yunjihai.rag.solution.application;
 
 import com.yunjihai.rag.retrieval.domain.*;
 import com.yunjihai.rag.solution.domain.*;
+import com.yunjihai.rag.solution.proposal.ProposalKind;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -43,6 +44,12 @@ final class SolutionRequestDigest {
             risks.forEach(value::add);
         }
         return value.digest();
+    }
+
+    static String proposal(ProposalKind kind, UUID solutionId, long expectedRevision,
+            RequirementVersion version) {
+        return new SolutionRequestDigest().add("PROPOSAL").add(kind.name()).add(solutionId)
+                .add(expectedRevision).add(version.id()).items(version.items()).digest();
     }
 
     private SolutionRequestDigest items(List<RequirementItem> items) {

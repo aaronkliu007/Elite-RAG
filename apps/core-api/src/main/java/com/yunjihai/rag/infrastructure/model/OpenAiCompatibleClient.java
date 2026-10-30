@@ -50,6 +50,14 @@ public final class OpenAiCompatibleClient implements AutoCloseable {
     }
 
     public GatewayResponse post(ModelEndpoint endpoint, JsonNode payload) {
+        return post(endpoint, payload, true);
+    }
+
+    public GatewayResponse postWithoutRetry(ModelEndpoint endpoint, JsonNode payload) {
+        return post(endpoint, payload, false);
+    }
+
+    private GatewayResponse post(ModelEndpoint endpoint, JsonNode payload, boolean allowRetry) {
         Objects.requireNonNull(endpoint, "endpoint must not be null");
         Objects.requireNonNull(payload, "payload must not be null");
         String body;
@@ -72,7 +80,7 @@ public final class OpenAiCompatibleClient implements AutoCloseable {
             throw new ModelGatewayException(ModelGatewayException.Kind.POLICY_VIOLATION);
         }
         try (var permit = usagePolicy.acquire(reservedTokens)) {
-            var response = executeWithSingleRetry(endpoint, body);
+            var response = executeWithRetryPolicy(endpoint, body, allowRetry);
             if (response.reportedTokens() >= 0) {
                 long maximumReported = (long) properties.maxInputTokens() + outputReservation;
                 if (response.reportedTokens() > maximumReported) throw new ModelGatewayException(
@@ -83,7 +91,7 @@ public final class OpenAiCompatibleClient implements AutoCloseable {
         }
     }
 
-    private GatewayResponse executeWithSingleRetry(ModelEndpoint endpoint, String body) {
+    private GatewayResponse executeWithRetryPolicy(ModelEndpoint endpoint, String body, boolean allowRetry) {
         String requestId = UUID.randomUUID().toString();
         long deadlineNanos;
         try {
@@ -92,12 +100,13 @@ public final class OpenAiCompatibleClient implements AutoCloseable {
             throw new ModelGatewayException(ModelGatewayException.Kind.POLICY_VIOLATION);
         }
         ModelGatewayException last = null;
-        for (int attempt = 0; attempt < 2; attempt++) {
+        int maxAttempts = allowRetry ? 2 : 1;
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
             try {
                 return execute(endpoint, body, requestId, deadlineNanos).withRetryCount(attempt);
             } catch (ModelGatewayException exception) {
                 last = exception;
-                if (!isTransient(exception.kind()) || attempt == 1) {
+                if (!isTransient(exception.kind()) || attempt == maxAttempts - 1) {
                     throw exception.withRetryCount(attempt);
                 }
             }
