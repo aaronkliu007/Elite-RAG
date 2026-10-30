@@ -5,6 +5,8 @@ import { RouterLink, onBeforeRouteLeave, useRoute } from 'vue-router'
 import { ApiRequestError } from '../api/http'
 import SolutionSectionGenerationPanel from '../components/SolutionSectionGenerationPanel.vue'
 import SolutionSectionEditor from '../components/SolutionSectionEditor.vue'
+import SolutionProposalPanel from '../components/SolutionProposalPanel.vue'
+import { useSessionStore } from '../stores/session'
 import { searchApi, type SearchEvidence, type SourceLocator } from '../api/search'
 import { solutionsApi, type OutlineNodeInput, type RequirementCategory, type RequirementItemInput,
   type RiskType, type SolutionDetail, type SolutionLocator, type SolutionSource,
@@ -18,6 +20,7 @@ interface RequirementDraft extends RequirementItemInput {
 }
 
 const route = useRoute()
+const session = useSessionStore()
 const solutionId = computed(() => String(route.params.solutionId ?? ''))
 const solution = ref<SolutionDetail | null>(null)
 const loading = ref(true)
@@ -443,6 +446,18 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
         <p class="step-note">
           已知事实必须绑定当前有权且已发布的文档版本。待明确事项请选择“待确认”。
         </p>
+        <SolutionProposalPanel
+          v-if="canEditRequirements && solution.sourceAccessValid"
+          :key="`${session.user?.userId}:${solution.id}:requirements:${solution.revision}`"
+          :actor-id="session.user?.userId ?? ''"
+          :solution-id="solution.id"
+          kind="requirements"
+          :revision="solution.revision"
+          :current-texts="solution.requirementVersion?.items.map(item => item.text) ?? []"
+          :disabled="dirty || saving"
+          @busy-change="saving = $event"
+          @adopted="load(true)"
+        />
         <div
           v-if="solution.requirementConfirmation"
           class="confirmation"
@@ -609,6 +624,18 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           确认需求后可编辑大纲。
         </p>
         <template v-else>
+          <SolutionProposalPanel
+            v-if="canEditOutline && solution.sourceAccessValid"
+            :key="`${session.user?.userId}:${solution.id}:outline:${solution.revision}`"
+            :actor-id="session.user?.userId ?? ''"
+            :solution-id="solution.id"
+            kind="outline"
+            :revision="solution.revision"
+            :current-texts="solution.outlineVersion?.nodes.map(node => `${node.order}. ${node.title}：${node.objective}`) ?? []"
+            :disabled="dirty || saving"
+            @busy-change="saving = $event"
+            @adopted="load(true)"
+          />
           <div
             v-if="solution.outlineConfirmation"
             class="confirmation"

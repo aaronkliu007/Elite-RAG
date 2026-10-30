@@ -19,6 +19,14 @@ export type SolutionLocator =
 export interface SolutionSource { documentId: string, versionId: string, locator: SolutionLocator }
 export interface RequirementItemInput { category: RequirementCategory, text: string, sources: SolutionSource[] }
 export interface RequirementItem extends RequirementItemInput { itemId: string }
+export type ProposalKind = 'requirements' | 'outline'
+export interface SolutionProposal {
+  id: string, kind: 'REQUIREMENTS' | 'OUTLINE',
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'INDETERMINATE',
+  requirementVersionId: string, expectedRevision: number, failureCode: string | null,
+  result: { kind: 'REQUIREMENTS', items: RequirementItemInput[] }
+    | { kind: 'OUTLINE', nodes: OutlineNodeInput[] } | null
+}
 export interface RequirementVersion {
   id: string, number: number, items: RequirementItem[], createdBy: string, createdAt: string, changeReason: string
 }
@@ -81,6 +89,14 @@ const keyHeader = (key: string) => ({ 'Idempotency-Key': key })
 const path = (solutionId: string) => `/api/v1/solutions/${encodeURIComponent(solutionId)}`
 
 export const solutionsApi = {
+  generateProposal: (solutionId: string, kind: ProposalKind, expectedRevision: number, key: string) =>
+    apiRequest<SolutionProposal>(`${path(solutionId)}/proposals/${kind}`, {
+      method: 'POST', headers: keyHeader(key), body: JSON.stringify({ expectedRevision }),
+    }),
+  getProposal: (solutionId: string, kind: ProposalKind, expectedRevision: number, key: string) =>
+    apiRequest<SolutionProposal>(`${path(solutionId)}/proposals/${kind}?expectedRevision=${expectedRevision}`, {
+      headers: keyHeader(key),
+    }),
   list: (spaceId: string, page = 1, pageSize = 20) => apiRequest<SolutionSummary[]>(
     `/api/v1/knowledge-spaces/${encodeURIComponent(spaceId)}/solutions?page=${page}&pageSize=${pageSize}`,
   ),

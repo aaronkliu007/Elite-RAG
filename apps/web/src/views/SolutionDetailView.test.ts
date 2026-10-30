@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
+import { createPinia } from 'pinia'
 
 import SolutionDetailView from './SolutionDetailView.vue'
 
@@ -74,7 +75,7 @@ it('风险确认后才允许定稿，定稿后展示 Word 下载', async () => {
   ] })
   await router.push('/solutions/solution-1')
   await router.isReady()
-  const wrapper = mount(SolutionDetailView, { global: { plugins: [router] } })
+  const wrapper = mount(SolutionDetailView, { global: { plugins: [createPinia(), router] } })
   await flushPromises()
   expect(wrapper.get('[data-action="finalize-solution"]').element).toHaveProperty('disabled', true)
   await wrapper.get('input[name="risk-reason-claim-1"]').setValue('已核实测试报告')
@@ -124,7 +125,7 @@ it('无确认权限时隐藏确认按钮，保存失败保留输入', async () =
   ] })
   await router.push('/solutions/solution-1')
   await router.isReady()
-  const wrapper = mount(SolutionDetailView, { global: { plugins: [router] } })
+  const wrapper = mount(SolutionDetailView, { global: { plugins: [createPinia(), router] } })
   await flushPromises()
   expect(wrapper.find('[data-action="confirm-requirements"]').exists()).toBe(false)
   await wrapper.get('textarea[name="requirement-text-0"]').setValue('修改后的正文')
@@ -158,7 +159,7 @@ it('保存请求未返回时锁定编辑器，避免刷新覆盖新输入', asyn
   ] })
   await router.push('/solutions/solution-1')
   await router.isReady()
-  const wrapper = mount(SolutionDetailView, { global: { plugins: [router] } })
+  const wrapper = mount(SolutionDetailView, { global: { plugins: [createPinia(), router] } })
   await flushPromises()
   await wrapper.get('textarea[name="requirement-text-0"]').setValue('发送时的正文')
   await wrapper.get('input[name="change-reason"]').setValue('修订目标')

@@ -21,7 +21,7 @@ import java.util.*;
 import java.util.stream.Collectors;
 
 /** Produces read-only model candidates; adoption uses the existing revision commands. */
-public final class SolutionProposalService {
+public final class SolutionProposalService implements SolutionProposalPort {
     private static final Duration LEASE = Duration.ofSeconds(90);
     private static final ObjectMapper JSON = new ObjectMapper();
     private final SolutionRepository solutions;

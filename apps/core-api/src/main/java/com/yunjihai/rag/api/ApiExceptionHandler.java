@@ -117,6 +117,7 @@ public class ApiExceptionHandler {
             UploadConflictException.class,
             IdempotencyConflictException.class,
             SolutionCommandConflictException.class,
+            com.yunjihai.rag.solution.proposal.ProposalRequestConflictException.class,
             ConcurrentSolutionUpdateException.class
     })
     ResponseEntity<ApiError> conflict(Exception failure, HttpServletRequest request) {
@@ -124,6 +125,8 @@ public class ApiExceptionHandler {
                 ? conflict.code()
                 : failure instanceof SolutionCommandConflictException conflict
                 ? conflict.code()
+                : failure instanceof com.yunjihai.rag.solution.proposal.ProposalRequestConflictException
+                ? "SOLUTION_PROPOSAL_KEY_REUSED"
                 : failure instanceof ConcurrentSolutionUpdateException
                 ? "SOLUTION_CONCURRENT_UPDATE"
                 : "CONFLICT";
@@ -135,6 +138,9 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(SolutionLifecycleException.class)
     ResponseEntity<ApiError> solutionGate(SolutionLifecycleException failure, HttpServletRequest request) {
+        if (java.util.Set.of("MODEL_PROPOSAL_UNAVAILABLE", "MODEL_PROPOSAL_UNCERTAIN").contains(failure.errorCode()))
+            return response(HttpStatus.SERVICE_UNAVAILABLE, failure.errorCode(),
+                    "模型候选暂不可用；如请求已发出，请使用原请求查询结果", request, Map.of());
         return response(HttpStatus.UNPROCESSABLE_ENTITY, failure.errorCode(),
                 "方案当前状态不允许此操作", request, Map.of());
     }
