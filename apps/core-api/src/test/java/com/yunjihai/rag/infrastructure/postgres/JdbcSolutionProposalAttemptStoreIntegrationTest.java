@@ -115,6 +115,41 @@ class JdbcSolutionProposalAttemptStoreIntegrationTest {
         assertThat(store.succeed(request, "{\"items\":[]}")).isFalse();
     }
 
+    @Test void backgroundScanSkipsLockedRowsAndLeavesLiveAndSuccessfulAttemptsUntouched() throws Exception {
+        var lockedKey = seed(700, ProposalKind.REQUIREMENTS, "locked-scan");
+        var expiredKey = seed(800, ProposalKind.REQUIREMENTS, "expired-scan");
+        var liveKey = seed(900, ProposalKind.REQUIREMENTS, "live-scan");
+        var successKey = seed(1000, ProposalKind.REQUIREMENTS, "success-scan");
+        var lockedRequest = new ProposalRegistrationRequest(lockedKey, id(703), 0, "c".repeat(64));
+        var expiredRequest = new ProposalRegistrationRequest(expiredKey, id(803), 0, "d".repeat(64));
+        var liveRequest = new ProposalRegistrationRequest(liveKey, id(903), 0, "e".repeat(64));
+        var successRequest = new ProposalRegistrationRequest(successKey, id(1003), 0, "f".repeat(64));
+        var locked = store.register(lockedRequest, Duration.ofMinutes(3));
+        var expired = store.register(expiredRequest, Duration.ofMinutes(3));
+        store.register(liveRequest, Duration.ofMinutes(3));
+        store.register(successRequest, Duration.ofMinutes(3));
+        assertThat(store.succeed(successRequest, "{\"items\":[]}")).isTrue();
+        jdbc.sql("UPDATE solution_model_proposal_attempt SET lease_until = statement_timestamp() - INTERVAL '1 second' WHERE id IN (:locked, :expired)")
+                .param("locked", locked.attempt().id()).param("expired", expired.attempt().id()).update();
+        try (var connection = dataSource.getConnection()) {
+            connection.setAutoCommit(false);
+            try (var statement = connection.prepareStatement("SELECT id FROM solution_model_proposal_attempt WHERE id = ? FOR UPDATE")) {
+                statement.setObject(1, locked.attempt().id());
+                statement.executeQuery().close();
+            }
+            try (var pool = Executors.newSingleThreadExecutor()) {
+                assertThat(pool.submit(() -> store.expireStale(500)).get(5, TimeUnit.SECONDS)).isPositive();
+            }
+            assertThat(store.findByKey(lockedKey).orElseThrow().status()).isEqualTo(ProposalStatus.RUNNING);
+            assertThat(store.findByKey(expiredKey).orElseThrow().status()).isEqualTo(ProposalStatus.INDETERMINATE);
+            connection.rollback();
+        }
+        store.expireStale(500);
+        assertThat(store.findByKey(lockedKey).orElseThrow().status()).isEqualTo(ProposalStatus.INDETERMINATE);
+        assertThat(store.findByKey(liveKey).orElseThrow().status()).isEqualTo(ProposalStatus.RUNNING);
+        assertThat(store.findByKey(successKey).orElseThrow().status()).isEqualTo(ProposalStatus.SUCCEEDED);
+    }
+
     @Test void concurrentRegistrationsCreateExactlyOneModelCallOwner() throws Exception {
         var key = seed(300, ProposalKind.OUTLINE, "concurrent-key");
         var request = new ProposalRegistrationRequest(key, id(303), 0, "d".repeat(64));

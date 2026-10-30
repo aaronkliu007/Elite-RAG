@@ -51,6 +51,11 @@ rag:
   workers:
     enabled: ${RAG_WORKERS_ENABLED:true}
   solution:
+    proposals:
+      recovery:
+        enabled: ${RAG_SOLUTION_PROPOSAL_RECOVERY_ENABLED:true}
+        poll-delay: ${RAG_SOLUTION_PROPOSAL_RECOVERY_POLL_DELAY:PT30S}
+        batch-size: ${RAG_SOLUTION_PROPOSAL_RECOVERY_BATCH_SIZE:100}
     generation:
       recovery:
         enabled: ${RAG_SOLUTION_GENERATION_RECOVERY_ENABLED:true}
