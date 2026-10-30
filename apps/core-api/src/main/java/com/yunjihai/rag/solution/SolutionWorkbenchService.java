@@ -119,9 +119,16 @@ public final class SolutionWorkbenchService {
         final List<RequirementItem> items;
         final RequirementVersion version;
         try {
+            var allowedSources = previous.items().stream()
+                    .flatMap(item -> item.sources().stream())
+                    .collect(Collectors.toUnmodifiableSet());
             items = Objects.requireNonNull(response, "response").body().items().stream()
                     .map(SolutionWorkbenchService::toRequirementItem)
                     .toList();
+            if (items.stream().flatMap(item -> item.sources().stream())
+                    .anyMatch(source -> !allowedSources.contains(source))) {
+                throw new IllegalArgumentException("proposal source is not in the input");
+            }
             version = new RequirementVersion(
                     command.requirementVersionId(),
                     previous.number() + 1,

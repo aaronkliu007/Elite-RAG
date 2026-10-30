@@ -287,6 +287,31 @@ class SolutionWorkbenchServiceTest {
     }
 
     @Test
+    void requirementProposalCannotIntroduceSourcesAbsentFromTheInput() {
+        var forgedSources = List.of(
+                new RequirementSource(new DocumentVersionRef(id(202), id(203)),
+                        new MarkdownLocator(List.of("客户需求"), "node-1")),
+                new RequirementSource(new DocumentVersionRef(id(200), id(201)),
+                        new MarkdownLocator(List.of("客户需求"), "node-2")));
+        for (var forged : forgedSources) {
+            var fixture = solutionWithInitialRequirements();
+            fixture.model.respond(new GeneratedRequirementProposal(List.of(
+                    generatedRequirement(id(101), "GOAL", List.of(forged)))));
+
+            assertThatThrownBy(() -> fixture.service.proposeRequirements(
+                    new SolutionWorkbenchService.ProposeRequirementsCommand(
+                            ACTOR_ID, SPACE_ID, SOLUTION_ID, id(11), "client-requirements-1",
+                            "模型提取", 0, id(90), NOW.plusSeconds(1))))
+                    .isInstanceOf(SolutionLifecycleException.class)
+                    .hasMessage("MODEL_PROPOSAL_INVALID");
+            assertThat(fixture.solutions.findById(SOLUTION_ID).orElseThrow().currentRequirementVersionId())
+                    .isEqualTo(id(10));
+            assertThat(fixture.requirements.findById(id(11))).isEmpty();
+            assertThat(fixture.solutions.replaceCalls).isZero();
+        }
+    }
+
+    @Test
     void outlineProposalIsFullyValidatedBeforeReplacingTheCurrentVersion() {
         for (var proposal : List.of(
                 new GeneratedOutlineProposal(List.of(
