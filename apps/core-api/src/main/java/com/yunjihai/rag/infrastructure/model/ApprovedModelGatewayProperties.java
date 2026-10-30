@@ -108,8 +108,8 @@ public record ApprovedModelGatewayProperties(
                     && isLiteralLoopback(host);
             if (!secure && !allowedTestEndpoint) throw configurationFailure();
             requireText(apiKey, 4_096);
-            requireText(embeddingModel, 200);
-            requireText(rerankerModel, 200);
+            if (embeddingModel != null && !embeddingModel.isBlank()) requireText(embeddingModel, 200);
+            if (rerankerModel != null && !rerankerModel.isBlank()) requireText(rerankerModel, 200);
             requireText(chatModel, 200);
             requirePositive(connectTimeout);
             requirePositive(responseTimeout);

@@ -66,6 +66,9 @@ public final class OpenAiChatCompletionAdapter implements ChatCompletionPort {
             }
             JsonNode choices = body.path("choices");
             if (!choices.isArray() || choices.size() != 1) throw invalidResponse();
+            JsonNode finishReason = choices.get(0).get("finish_reason");
+            if (finishReason != null && (!finishReason.isTextual() || !"stop".equals(finishReason.asText())))
+                throw invalidResponse();
             JsonNode content = choices.get(0).path("message").get("content");
             if (content == null || !content.isTextual()) throw invalidResponse();
             CandidateAnswer answer = parseAnswer(content.textValue(), prompt);
@@ -88,7 +91,10 @@ public final class OpenAiChatCompletionAdapter implements ChatCompletionPort {
         root.put("stream", false);
         root.put("max_tokens", Math.min(properties.maxOutputTokens(), prompt.maxOutputCodePoints()));
         var messages = root.putArray("messages");
-        messages.addObject().put("role", "system").put("content", SYSTEM_INSTRUCTION);
+        boolean deepseek = "deepseek".equals(properties.provider());
+        String instruction = deepseek ? SYSTEM_INSTRUCTION + "\n仅输出符合下列结构的 JSON 对象：\n"
+                + compactJson(responseSchema()) : SYSTEM_INSTRUCTION;
+        messages.addObject().put("role", "system").put("content", instruction);
         var userPayload = JsonNodeFactory.instance.objectNode();
         userPayload.put("language", ModelOutboundTextPolicy.requireAlreadySanitized(sanitizer, prompt.language()));
         userPayload.put("policyVersion", ModelOutboundTextPolicy.requireAlreadySanitized(
@@ -104,30 +110,37 @@ public final class OpenAiChatCompletionAdapter implements ChatCompletionPort {
                 .put("excerpt", ModelOutboundTextPolicy.requireAlreadySanitized(sanitizer, item.excerpt())));
         messages.addObject().put("role", "user").put("content", compactJson(userPayload));
         var responseFormat = root.putObject("response_format");
-        responseFormat.put("type", "json_schema");
-        var schema = responseFormat.putObject("json_schema");
-        schema.put("name", "grounded_answer");
-        schema.put("strict", true);
-        schema.set("schema", responseSchema());
+        if (deepseek) {
+            responseFormat.put("type", "json_object");
+            root.putObject("thinking").put("type", "disabled");
+        } else {
+            responseFormat.put("type", "json_schema");
+            var schema = responseFormat.putObject("json_schema");
+            schema.put("name", "grounded_answer");
+            schema.put("strict", true);
+            schema.set("schema", responseSchema());
+        }
         return root;
     }
 
     private CandidateAnswer parseAnswer(String content, GroundedAnswerPrompt prompt) {
         try {
             JsonNode root = json.readTree(content);
-            if (root == null || !root.isObject()) throw invalidResponse();
+            if (root == null || !root.isObject() || root.size() != 3) throw invalidResponse();
             CandidateAnswer.Decision decision = CandidateAnswer.Decision.valueOf(requiredText(root, "decision"));
             String answerText = requiredTextAllowEmpty(root, "answer");
             JsonNode claimsNode = root.get("claims");
             if (claimsNode == null || !claimsNode.isArray()) throw invalidResponse();
             List<GroundedClaim> claims = new ArrayList<>();
             for (JsonNode claimNode : claimsNode) {
+                if (!claimNode.isObject() || claimNode.size() != 3) throw invalidResponse();
                 UUID claimId = UUID.fromString(requiredText(claimNode, "claimId"));
                 String claimText = requiredText(claimNode, "text");
                 JsonNode supportsNode = claimNode.get("supports");
                 if (supportsNode == null || !supportsNode.isArray()) throw invalidResponse();
                 List<EvidenceSupport> supports = new ArrayList<>();
                 for (JsonNode supportNode : supportsNode) {
+                    if (!supportNode.isObject() || supportNode.size() != 2) throw invalidResponse();
                     supports.add(new EvidenceSupport(
                             UUID.fromString(requiredText(supportNode, "evidenceId")),
                             requiredText(supportNode, "quote")));

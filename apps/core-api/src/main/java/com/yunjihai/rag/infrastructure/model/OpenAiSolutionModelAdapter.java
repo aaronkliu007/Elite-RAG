@@ -99,6 +99,9 @@ public final class OpenAiSolutionModelAdapter implements SolutionModelPort {
             }
             var choices = response.body().path("choices");
             if (!choices.isArray() || choices.size() != 1) throw invalidResponse();
+            var finishReason = choices.get(0).get("finish_reason");
+            if (finishReason != null && (!finishReason.isTextual() || !"stop".equals(finishReason.asText())))
+                throw invalidResponse();
             var content = choices.get(0).path("message").get("content");
             if (content == null || !content.isTextual()) throw invalidResponse();
             Object body = switch (request.scenario()) {
@@ -151,6 +154,8 @@ public final class OpenAiSolutionModelAdapter implements SolutionModelPort {
             case OUTLINE_GENERATION -> OUTLINE_INSTRUCTION;
             default -> SYSTEM_INSTRUCTION;
         };
+        boolean deepseek = "deepseek".equals(properties.provider());
+        if (deepseek) instruction += "\n仅输出符合下列结构的 JSON 对象：\n" + compactJson(responseSchema(request.scenario()));
         messages.addObject().put("role", "system").put("content", instruction);
         var context = JsonNodeFactory.instance.objectNode();
         context.put("promptVersion", request.prompt().version());
@@ -181,15 +186,20 @@ public final class OpenAiSolutionModelAdapter implements SolutionModelPort {
         });
         messages.addObject().put("role", "user").put("content", compactJson(context));
         var responseFormat = root.putObject("response_format");
-        responseFormat.put("type", "json_schema");
-        var schema = responseFormat.putObject("json_schema");
-        schema.put("name", switch (request.scenario()) {
-            case REQUIREMENTS_EXTRACTION -> "requirements_proposal";
-            case OUTLINE_GENERATION -> "outline_proposal";
-            default -> "solution_section_claims";
-        });
-        schema.put("strict", true);
-        schema.set("schema", responseSchema(request.scenario()));
+        if (deepseek) {
+            responseFormat.put("type", "json_object");
+            root.putObject("thinking").put("type", "disabled");
+        } else {
+            responseFormat.put("type", "json_schema");
+            var schema = responseFormat.putObject("json_schema");
+            schema.put("name", switch (request.scenario()) {
+                case REQUIREMENTS_EXTRACTION -> "requirements_proposal";
+                case OUTLINE_GENERATION -> "outline_proposal";
+                default -> "solution_section_claims";
+            });
+            schema.put("strict", true);
+            schema.set("schema", responseSchema(request.scenario()));
+        }
         return root;
     }
 

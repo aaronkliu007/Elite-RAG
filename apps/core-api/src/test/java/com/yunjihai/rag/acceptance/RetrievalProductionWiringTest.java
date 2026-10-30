@@ -210,6 +210,31 @@ class RetrievalProductionWiringTest {
     }
 
     @Test
+    void chatOnlyConfigurationWiresWithoutEmbeddingOrRerankerModels() {
+        try (var context = startContext(Map.ofEntries(
+                Map.entry("rag.workers.enabled", "false"),
+                Map.entry("rag.ai.enabled", "true"),
+                Map.entry("rag.ai.provider", "deepseek"),
+                Map.entry("rag.ai.config-version", "chat-only-test"),
+                Map.entry("rag.ai.endpoint", modelEndpoint.toString()),
+                Map.entry("rag.ai.approved-hosts", "127.0.0.1"),
+                Map.entry("rag.ai.api-key", "test-key"),
+                Map.entry("rag.ai.embedding-model", ""),
+                Map.entry("rag.ai.reranker-model", ""),
+                Map.entry("rag.ai.chat-model", "deepseek-flash"),
+                Map.entry("rag.ai.allow-insecure-loopback-for-tests", "true")))) {
+            assertThat(context.getBean(com.yunjihai.rag.qa.model.ChatCompletionPort.class))
+                    .isInstanceOf(com.yunjihai.rag.infrastructure.model.OpenAiChatCompletionAdapter.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                    context.getBean(EmbeddingPort.class).embedAll(List.of("测试")))
+                    .isInstanceOf(com.yunjihai.rag.retrieval.embedding.EmbeddingUnavailableException.class);
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                    context.getBean(RerankerPort.class).rerank("测试", List.of()))
+                    .isInstanceOf(com.yunjihai.rag.qa.model.ModelGatewayException.class);
+        }
+    }
+
+    @Test
     void vectorEnabledWiresApprovedAdaptersAndUsesOneDimensionForRebuildProjectionAndQuery()
             throws Exception {
         MODEL_REQUEST_BODIES.clear();

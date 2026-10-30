@@ -62,6 +62,44 @@ def test_real_docling_converts_locked_markdown_sample() -> None:
     assert "知识库" in text
 
 
+def test_docling_nodes_follow_nested_document_order_without_duplicates() -> None:
+    exported = {
+        "body": {"children": [{"$ref": "#/groups/0"}]},
+        "groups": [{"children": [{"$ref": "#/texts/0"}, {"$ref": "#/texts/2"}]}],
+        "texts": [
+            {"self_ref": "#/texts/0", "text": "标题", "children": [
+                {"$ref": "#/texts/1"}, {"$ref": "#/tables/0"}, {"$ref": "#/groups/0"}
+            ]},
+            {"self_ref": "#/texts/1", "text": "表格前"},
+            {"self_ref": "#/texts/2", "text": "表格后"},
+            {"self_ref": "#/texts/3", "text": "孤立段落"},
+        ],
+        "tables": [{"self_ref": "#/tables/0", "label": "table", "text": "表格"}],
+        "pictures": [],
+    }
+
+    nodes = DoclingConverter._map_nodes(exported)
+
+    assert [node.text for node in nodes] == ["标题", "表格前", "表格", "表格后", "孤立段落"]
+
+
+def test_docling_preserves_heading_parent_through_structural_group() -> None:
+    exported = {
+        "body": {"children": [{"$ref": "#/texts/0"}]},
+        "groups": [{"parent": {"$ref": "#/texts/0"}, "children": [{"$ref": "#/texts/1"}]}],
+        "texts": [
+            {"self_ref": "#/texts/0", "label": "section_header", "text": "建设目标",
+             "children": [{"$ref": "#/groups/0"}]},
+            {"self_ref": "#/texts/1", "text": "建设知识库", "parent": {"$ref": "#/groups/0"}},
+        ],
+    }
+
+    heading, paragraph = DoclingConverter._map_nodes(exported)
+
+    assert heading.kind == "HEADING"
+    assert paragraph.parentNodeId == heading.nodeId
+
+
 def test_real_docling_converts_representative_pdf(tmp_path: Path) -> None:
     sample = tmp_path / "foundation.pdf"
     sample.write_bytes(_minimal_pdf("Knowledge Foundation Acceptance"))

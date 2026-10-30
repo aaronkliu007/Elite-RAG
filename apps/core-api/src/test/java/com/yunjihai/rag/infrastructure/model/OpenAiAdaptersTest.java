@@ -162,6 +162,42 @@ class OpenAiAdaptersTest {
     }
 
     @Test
+    void deepseekChatUsesJsonObjectWithExplicitSchemaAndRejectsUnknownFields() throws Exception {
+        client.close();
+        properties = new ApprovedModelGatewayProperties(true, "deepseek", "config-v1",
+                URI.create(server.baseUrl()), Set.of("localhost"), "test-key", "", "", "deepseek-flash",
+                Duration.ofMillis(200), Duration.ofSeconds(2), Duration.ofSeconds(3),
+                8_000, 1_000, 2, 100_000, true);
+        client = new OpenAiCompatibleClient(properties, JSON, new ModelUsagePolicy(properties));
+        var response = JSON.createObjectNode();
+        response.putArray("choices").addObject().put("finish_reason", "stop")
+                .putObject("message").put("content", "{\"decision\":\"REFUSE\",\"answer\":\"\",\"claims\":[]}");
+        response.putObject("usage").put("prompt_tokens", 10).put("completion_tokens", 10);
+        server.stubFor(post("/v1/chat/completions").willReturn(json(JSON.writeValueAsString(response))));
+        var adapter = new OpenAiChatCompletionAdapter(properties, client, JSON, SANITIZER);
+        adapter.generate(prompt(UUID.randomUUID()));
+        var sent = JSON.readTree(server.findAll(postRequestedFor(urlEqualTo("/v1/chat/completions"))).getFirst().getBodyAsString());
+        assertThat(sent.path("response_format").path("type").asText()).isEqualTo("json_object");
+        assertThat(sent.path("messages").get(0).path("content").asText()).contains("JSON", "decision", "claims");
+        assertThat(sent.path("thinking").path("type").asText()).isEqualTo("disabled");
+        server.resetAll();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) response.path("choices").get(0).path("message"))
+                .put("content", "{\"decision\":\"REFUSE\",\"answer\":\"\",\"claims\":[],\"extra\":\"x\"}");
+        server.stubFor(post("/v1/chat/completions").willReturn(json(JSON.writeValueAsString(response))));
+        assertThatThrownBy(() -> adapter.generate(prompt(UUID.randomUUID())))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
+        server.resetAll();
+        ((com.fasterxml.jackson.databind.node.ObjectNode) response.path("choices").get(0)).put("finish_reason", "length");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) response.path("choices").get(0).path("message"))
+                .put("content", "{\"decision\":\"REFUSE\",\"answer\":\"\",\"claims\":[]}");
+        server.stubFor(post("/v1/chat/completions").willReturn(json(JSON.writeValueAsString(response))));
+        assertThatThrownBy(() -> adapter.generate(prompt(UUID.randomUUID())))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
+    }
+
+    @Test
     void requestsStructuredNonStreamingChatAndBuildsGroundedAnswer() {
         var evidenceId = UUID.randomUUID();
         var claimId = UUID.randomUUID();

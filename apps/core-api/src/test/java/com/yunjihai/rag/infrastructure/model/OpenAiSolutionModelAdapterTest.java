@@ -66,6 +66,22 @@ class OpenAiSolutionModelAdapterTest {
         server.verify(1, postRequestedFor(urlEqualTo("/v1/chat/completions")));
     }
 
+    @Test void deepseekSolutionGenerationUsesJsonObjectAndIncludesOutputSchema() throws Exception {
+        client.close();
+        properties = new ApprovedModelGatewayProperties(true, "deepseek", "config-v1", URI.create(server.baseUrl()),
+                Set.of("localhost"), "test-key", "", "", "deepseek-flash", Duration.ofMillis(200),
+                Duration.ofSeconds(2), Duration.ofSeconds(3), 8_000, 1_000, 2, 100_000, true);
+        client = new OpenAiCompatibleClient(properties, JSON, new ModelUsagePolicy(properties));
+        respondWithClaims("""
+                {"claims":[{"claimId":"%s","text":"平台支持100名用户", "evidenceIds":["%s"]}]}
+                """.formatted(CLAIM_ID, EVIDENCE_ID));
+        assertThat(adapter().execute(request(), GeneratedSectionDraft.class).body().claims()).hasSize(1);
+        var sent = JSON.readTree(server.findAll(postRequestedFor(urlEqualTo("/v1/chat/completions"))).getFirst().getBodyAsString());
+        assertThat(sent.path("response_format").path("type").asText()).isEqualTo("json_object");
+        assertThat(sent.path("messages").get(0).path("content").asText()).contains("JSON", "claims", "evidenceIds");
+        assertThat(sent.path("thinking").path("type").asText()).isEqualTo("disabled");
+    }
+
     @Test void generatesOnlyEvidenceLinkedClaimsAndServerBuildsMarkdown() throws Exception {
         respondWithClaims("""
                 {"claims":[{"claimId":"%s","text":"平台支持100名用户", "evidenceIds":["%s"]}]}

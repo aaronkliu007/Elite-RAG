@@ -27,13 +27,23 @@ class EvaluationGateTest {
     }
 
     @Test
-    void ratioCalculationIsDivisionByZeroSafe() {
+    void missingMetricSamplesCannotPassTheQualityGate() {
         var metrics=new EvaluationMetrics(0,0,0,0,0,0,0,0,0);
-        assertThat(metrics.recallAt10()).isEqualTo(1d);
-        assertThat(metrics.citationValidity()).isEqualTo(1d);
-        assertThat(metrics.claimSupport()).isEqualTo(1d);
-        assertThat(metrics.correctRefusalRate()).isEqualTo(1d);
-        assertThat(new EvaluationGate().assess(metrics).passed()).isTrue();
+        assertThat(metrics.recallAt10()).isZero();
+        assertThat(metrics.citationValidity()).isZero();
+        assertThat(metrics.claimSupport()).isZero();
+        assertThat(metrics.correctRefusalRate()).isZero();
+        assertThat(new EvaluationGate().assess(metrics).failures()).containsExactly(
+                EvaluationGate.Failure.CITATION_VALIDITY,EvaluationGate.Failure.RECALL_AT_10,
+                EvaluationGate.Failure.CLAIM_SUPPORT,EvaluationGate.Failure.CORRECT_REFUSAL);
+        assertThat(new EvaluationGate().assess(new EvaluationMetrics(1,1,1,1,1,1,0,0,0)).failures())
+                .containsExactly(EvaluationGate.Failure.CORRECT_REFUSAL);
+        assertThat(new EvaluationGate().assess(new EvaluationMetrics(0,0,1,1,1,1,1,1,0)).failures())
+                .containsExactly(EvaluationGate.Failure.RECALL_AT_10);
+        assertThat(new EvaluationGate().assess(new EvaluationMetrics(1,1,0,0,1,1,1,1,0)).failures())
+                .containsExactly(EvaluationGate.Failure.CITATION_VALIDITY);
+        assertThat(new EvaluationGate().assess(new EvaluationMetrics(1,1,1,1,0,0,1,1,0)).failures())
+                .containsExactly(EvaluationGate.Failure.CLAIM_SUPPORT);
     }
 
     @Test

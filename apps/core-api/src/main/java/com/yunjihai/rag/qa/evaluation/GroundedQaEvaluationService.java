@@ -65,9 +65,14 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
     private void evaluate(EvaluationCase item,Accumulator total) {
         UUID requestId=UuidV7.generate(clock.instant());
         traces.begin(requestId);
-        QaOutcome outcome=qa.ask(new AskQuestionCommand(requestId,item.evaluationActorId(),item.question()));
-        EvaluationRepository.Observation observation=repository.observe(requestId);
-        traces.consume(requestId);
+        final QaOutcome outcome;
+        final EvaluationRepository.Observation observation;
+        try {
+            outcome=qa.ask(new AskQuestionCommand(requestId,item.evaluationActorId(),item.question()));
+            observation=repository.observe(requestId);
+        } finally {
+            traces.consume(requestId);
+        }
         total.expected+=item.expectedEvidence().size();
         total.retrieved+=item.expectedEvidence().stream().filter(observation.retrievedTop10()::contains).count();
         if(item.shouldRefuse()) {

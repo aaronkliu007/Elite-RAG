@@ -9,11 +9,43 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Set;
+import java.util.List;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
+import com.yunjihai.rag.retrieval.embedding.EmbeddingUnavailableException;
+import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.github.tomakehurst.wiremock.WireMockServer;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ApprovedModelGatewayPropertiesTest {
+
+    @Test
+    void chatOnlyGatewayDoesNotCallUnavailableEmbeddingOrReranker() {
+        var server = new WireMockServer(0);
+        server.start();
+        try {
+            var properties = new ApprovedModelGatewayProperties(true, "deepseek", "config-v1",
+                    URI.create(server.baseUrl()), Set.of("localhost"), "test-key",
+                    "", "", "deepseek-flash", Duration.ofSeconds(1), Duration.ofSeconds(2),
+                    Duration.ofSeconds(3), 8000, 1000, 1, 10000, true);
+            try (var client = new OpenAiCompatibleClient(properties,new ObjectMapper(),new ModelUsagePolicy(properties))) {
+                var sanitizer = new RegexSensitiveContentSanitizer(Set.of());
+                var config = new ModelGatewayConfiguration();
+                var embedding = config.approvedEmbeddingPort(properties,client,sanitizer,false);
+                var reranker = config.approvedRerankerPort(properties,client,sanitizer);
+
+                assertThatThrownBy(() -> embedding.embedAll(List.of("虚构测试")))
+                        .isInstanceOf(EmbeddingUnavailableException.class);
+                assertThatThrownBy(() -> reranker.rerank("虚构测试",List.of()))
+                        .isInstanceOf(ModelGatewayException.class);
+                assertThat(server.getAllServeEvents()).isEmpty();
+                assertThatThrownBy(() -> config.approvedEmbeddingPort(properties,client,sanitizer,true))
+                        .isInstanceOf(IllegalArgumentException.class).hasMessage("MODEL_GATEWAY_CONFIGURATION_INVALID");
+            }
+        } finally { server.stop(); }
+    }
 
     @Test
     void acceptsApprovedHttpsEndpointAndRedactsCredential() {

@@ -7,6 +7,7 @@ import java.time.*;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class GroundedQaEvaluationServiceTest {
     private static final Instant NOW=Instant.parse("2026-10-27T07:00:00Z");
@@ -33,7 +34,8 @@ class GroundedQaEvaluationServiceTest {
         assertThat(run.promptVersion()).isEqualTo("prompt-v4");
         assertThat(run.sanitizationVersion()).isEqualTo("sanitizer-v5");
         assertThat(run.modelConfigVersion()).isEqualTo("model-approved-v3");
-        assertThat(run.assessment().passed()).isTrue();
+        assertThat(run.assessment().passed()).isFalse();
+        assertThat(run.assessment().failures()).containsExactly(EvaluationGate.Failure.CORRECT_REFUSAL);
         assertThat(repository.saved).isEqualTo(run);
     }
 
@@ -51,6 +53,33 @@ class GroundedQaEvaluationServiceTest {
 
         assertThat(run.metrics().leakageCount()).isPositive();
         assertThat(run.assessment().failures()).contains(EvaluationGate.Failure.LEAKAGE);
+    }
+
+    @Test
+    void failedEvaluationReleasesTraceCapacityEvenWhenQaOrObservationThrows() {
+        UUID actor=UUID.randomUUID(),document=UUID.randomUUID();
+        var dataset=dataset(actor,document,false);
+        var traces=new EvaluationTraceRegistry();
+        var repository=new MemoryRepository(dataset,new EvaluationRepository.Observation(Set.of(),Set.of(),Set.of(),Set.of()));
+        var failedQa=new GroundedQaEvaluationService(command->{ throw new IllegalStateException("qa failed"); },
+                repository,new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC),traces);
+        for(int i=0;i<101;i++) {
+            assertThatThrownBy(()->failedQa.run(dataset.id(),"code","policy","model"))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("qa failed");
+        }
+        EvaluationRepository unavailable=new EvaluationRepository() {
+            public Optional<EvaluationDataset> findDataset(UUID id) { return repository.findDataset(id); }
+            public Observation observe(UUID id) { throw new IllegalStateException("observation failed"); }
+            public void save(EvaluationRun run) { repository.save(run); }
+            public Optional<EvaluationRun> findRun(UUID id) { return repository.findRun(id); }
+        };
+        var failedObservation=new GroundedQaEvaluationService(command->new QaOutcome.Refused(
+                command.requestId(),RefusalReason.INSUFFICIENT_EVIDENCE,false),unavailable,
+                new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC),traces);
+        for(int i=0;i<101;i++) {
+            assertThatThrownBy(()->failedObservation.run(dataset.id(),"code","policy","model"))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("observation failed");
+        }
     }
 
     private static EvaluationDataset dataset(UUID actor,UUID document,boolean refusal) {

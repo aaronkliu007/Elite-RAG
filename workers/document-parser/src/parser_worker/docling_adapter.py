@@ -106,8 +106,19 @@ class DoclingConverter:
     @staticmethod
     def _map_nodes(exported: dict[str, Any]) -> list[CanonicalNode]:
         nodes: list[CanonicalNode] = []
+        reference_items: dict[str, dict[str, Any]] = {}
+        for group in ("groups", "texts", "tables", "pictures"):
+            values = exported.get(group, [])
+            if isinstance(values, list):
+                reference_items.update({
+                    f"#/{group}/{index}": item
+                    for index, item in enumerate(values) if isinstance(item, dict)
+                })
+        emitted: dict[str, str] = {}
         for index, item in enumerate(_items(exported)):
             label = str(item.get("label", "paragraph")).upper()
+            if label == "SECTION_HEADER":
+                label = "HEADING"
             kind = (
                 label
                 if label
@@ -129,16 +140,19 @@ class DoclingConverter:
             text = str(item.get("text", ""))
             if kind == "TABLE" and not text and cells:
                 text = "\n".join(cell.text for cell in cells if cell.text)
+            node_id = str(item.get("self_ref", f"node-{index + 1}"))
             nodes.append(
                 CanonicalNode(
-                    nodeId=str(item.get("self_ref", f"node-{index + 1}")),
+                    nodeId=node_id,
                     kind=cast(NodeKind, kind),
                     text=text,
+                    parentNodeId=_nearest_emitted_parent(item, reference_items, emitted),
                     page=_page(item),
                     tableCells=cells,
                     confidence=_confidence(item),
                 )
             )
+            emitted[node_id] = node_id
         return nodes
 
     @staticmethod
@@ -150,10 +164,64 @@ class DoclingConverter:
 
 
 def _items(exported: dict[str, Any]) -> Iterable[dict[str, Any]]:
-    for group in ("texts", "tables", "pictures"):
+    content_groups = ("texts", "tables", "pictures")
+    references: dict[str, tuple[dict[str, Any], bool]] = {}
+    ordered_content: list[str] = []
+    for group in ("groups", *content_groups):
         values = exported.get(group, [])
-        if isinstance(values, list):
-            yield from (item for item in values if isinstance(item, dict))
+        if not isinstance(values, list):
+            continue
+        for index, item in enumerate(values):
+            if not isinstance(item, dict):
+                continue
+            reference = f"#/{group}/{index}"
+            references[reference] = (item, group in content_groups)
+            if group in content_groups:
+                ordered_content.append(reference)
+
+    def child_refs(item: dict[str, Any]) -> list[str]:
+        children = item.get("children", [])
+        if not isinstance(children, list):
+            return []
+        return [child["$ref"] for child in children
+                if isinstance(child, dict) and isinstance(child.get("$ref"), str)]
+
+    body = exported.get("body")
+    pending = list(reversed(child_refs(body))) if isinstance(body, dict) else []
+    visited: set[str] = set()
+    while pending:
+        reference = pending.pop()
+        if reference in visited or reference not in references:
+            continue
+        visited.add(reference)
+        item, is_content = references[reference]
+        if is_content:
+            yield item
+        pending.extend(reversed(child_refs(item)))
+
+    # Keep content omitted from the body tree, without pretending its original position is known.
+    for reference in ordered_content:
+        if reference not in visited:
+            yield references[reference][0]
+
+
+def _nearest_emitted_parent(
+    item: dict[str, Any], references: dict[str, dict[str, Any]], emitted: dict[str, str]
+) -> str | None:
+    visited: set[str] = set()
+    parent = item.get("parent")
+    while isinstance(parent, dict):
+        ref = parent.get("$ref")
+        if not isinstance(ref, str) or ref in visited:
+            break
+        if ref in emitted:
+            return emitted[ref]
+        visited.add(ref)
+        parent_item = references.get(ref)
+        if parent_item is None:
+            break
+        parent = parent_item.get("parent")
+    return None
 
 
 def _page(item: dict[str, Any]) -> int | None:

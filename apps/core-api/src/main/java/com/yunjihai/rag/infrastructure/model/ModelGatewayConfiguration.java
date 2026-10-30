@@ -16,6 +16,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.time.Clock;
 
@@ -47,7 +48,12 @@ public class ModelGatewayConfiguration {
     @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "true")
     EmbeddingPort approvedEmbeddingPort(
             ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client,
-            SensitiveContentSanitizer sanitizer) {
+            SensitiveContentSanitizer sanitizer,
+            @Value("${rag.retrieval.vector.enabled:false}") boolean vectorEnabled) {
+        if (properties.embeddingModel() == null || properties.embeddingModel().isBlank()) {
+            if (vectorEnabled) throw new IllegalArgumentException("MODEL_GATEWAY_CONFIGURATION_INVALID");
+            return texts -> { throw new EmbeddingUnavailableException("EMBEDDING_DISABLED"); };
+        }
         return new OpenAiEmbeddingAdapter(properties, client, sanitizer);
     }
 
@@ -57,6 +63,9 @@ public class ModelGatewayConfiguration {
     RerankerPort approvedRerankerPort(
             ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client,
             SensitiveContentSanitizer sanitizer) {
+        if (properties.rerankerModel() == null || properties.rerankerModel().isBlank()) {
+            return (query, candidates) -> { throw new ModelGatewayException(ModelGatewayException.Kind.UNAVAILABLE); };
+        }
         return new OpenAiRerankerAdapter(properties, client, sanitizer);
     }
 

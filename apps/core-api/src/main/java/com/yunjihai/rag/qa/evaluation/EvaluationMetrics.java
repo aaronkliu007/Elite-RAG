@@ -23,5 +23,5 @@ public record EvaluationMetrics(
     public double citationValidity() { return ratio(validCitationCount,citationCount); }
     public double claimSupport() { return ratio(supportedClaimCount,claimCount); }
     public double correctRefusalRate() { return ratio(correctlyRefusedCount,refusalCaseCount); }
-    private static double ratio(int numerator,int denominator) { return denominator==0?1d:(double)numerator/denominator; }
+    private static double ratio(int numerator,int denominator) { return denominator==0?0d:(double)numerator/denominator; }
 }
