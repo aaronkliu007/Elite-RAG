@@ -55,10 +55,13 @@ test('从文档提取、审阅来源，采纳响应丢失后按原键恢复', as
   await page.goto('/solutions/solution-1')
   const panel = page.getByRole('region', { name: '从文档提取需求' })
   await panel.locator(`[data-document="${docId}"]`).check()
+  await expect(panel.getByRole('list', { name: '已选择的文档' })).toContainText(document.title)
   await panel.getByLabel('关注问题').fill('提取建设目标和范围')
   await panel.getByRole('button', { name: '提取需求候选' }).click()
   await expect(panel.getByText(candidateText, { exact: true })).toBeVisible()
   await expect(panel.getByText(/客户需求 \/ 建设目标/)).toBeVisible()
+  await expect(panel.locator('[data-source-document]')).toContainText(document.title)
+  await expect(panel.getByText('供核对的是按规则处理的脱敏片段。')).toBeVisible()
   await panel.getByRole('button', { name: '核对原文片段 1' }).click()
   await expect(panel.getByText('客户原始需求片段：建设公司知识库。')).toBeVisible()
   for (const width of [1920, 1366, 390]) {

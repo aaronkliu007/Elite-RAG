@@ -11,6 +11,8 @@ const props = withDefaults(defineProps<{ actorId: string, solutionId: string, sp
   currentTexts: string[], disabled: boolean, sourceAccessValid?: boolean }>(), { sourceAccessValid: true })
 const emit = defineEmits<{ adopted: [], busyChange: [value: boolean] }>()
 const documents = ref<KnowledgeDocument[]>([])
+const documentNames = ref<Record<string, string>>({})
+const observedVersions = ref<Record<string, string | null>>({})
 const page = ref(1)
 const more = ref(false)
 const selected = ref<DocumentRef[]>([])
@@ -33,6 +35,8 @@ const published = computed(() => documents.value.filter(document => !document.ar
   && document.allowedActions.includes('VIEW') && document.versions.some(version =>
     version.id === document.currentPublishedVersionId && version.status === 'PUBLISHED' && version.parseStatus === 'SUCCEEDED')))
 const candidate = computed(() => attempt.value?.result?.kind === 'REQUIREMENTS' ? attempt.value.result : null)
+const staleSelection = computed(() => selected.value.some(item => item.documentId in observedVersions.value
+  && observedVersions.value[item.documentId] !== item.versionId))
 const categoryLabels: Record<string, string> = { GOAL: '目标', SCOPE: '范围', CONSTRAINT: '约束',
   DELIVERABLE: '交付物', STAKEHOLDER: '相关方', DATE: '时间', RISK: '风险', UNKNOWN: '待确认' }
 const statuses = { RUNNING: '正在处理，请查询原请求', SUCCEEDED: '候选待人工审阅', FAILED: '请求已失败，可放弃后重新生成',
@@ -42,6 +46,9 @@ const canAdopt = computed(() => !props.disabled && props.sourceAccessValid && !b
 function setBusy(value: boolean) { busy.value = value; emit('busyChange', value) }
 function showError(failure: unknown) { error.value = failure instanceof ApiRequestError ? failure.displayMessage : '操作失败，请稍后查询原请求' }
 function persist() { if (saved.value) sessionStorage.setItem(storageKey, JSON.stringify(saved.value)) }
+function documentName(document: DocumentRef) {
+  return documentNames.value[`${document.documentId}:${document.versionId}`] ?? `文档 ${document.documentId}`
+}
 function locatorLabel(locator: SolutionLocator) {
   switch (locator.type) {
     case 'PAGE': return `第 ${locator.pageNumber} 页`
@@ -73,7 +80,18 @@ async function loadDocuments(nextPage: number) {
   documentError.value = ''
   try {
     const values = await documentsApi.list(props.spaceId, nextPage, 50)
-    if (!disposed) { documents.value = values; page.value = nextPage; more.value = values.length === 50 }
+    if (!disposed) {
+      documents.value = values; page.value = nextPage; more.value = values.length === 50
+      const names = { ...documentNames.value }
+      const versions = { ...observedVersions.value }
+      for (const document of values) {
+        versions[document.id] = document.archived ? null : document.currentPublishedVersionId
+        if (document.currentPublishedVersionId && !document.archived && document.allowedActions.includes('VIEW'))
+          names[`${document.id}:${document.currentPublishedVersionId}`] = document.title
+      }
+      documentNames.value = names
+      observedVersions.value = versions
+    }
   } catch (failure) { if (!disposed) documentError.value = failure instanceof ApiRequestError ? failure.displayMessage : '加载文档失败' }
   finally { loadingDocuments.value = false }
 }
@@ -81,7 +99,15 @@ function toggle(document: KnowledgeDocument, checked: boolean) {
   const versionId = document.currentPublishedVersionId
   if (!versionId || saved.value || pending.value || props.disabled || !props.sourceAccessValid) return
   if (!checked) selected.value = selected.value.filter(item => item.documentId !== document.id)
-  else if (selected.value.length < 10) selected.value.push({ documentId: document.id, versionId })
+  else if (selected.value.length < 10 && !selected.value.some(item => item.documentId === document.id))
+    selected.value.push({ documentId: document.id, versionId })
+}
+function versionChanged(document: KnowledgeDocument) {
+  return selected.value.some(item => item.documentId === document.id && item.versionId !== document.currentPublishedVersionId)
+}
+function removeSelected(document: DocumentRef) {
+  if (saved.value || pending.value || props.disabled || !props.sourceAccessValid || busy.value) return
+  selected.value = selected.value.filter(item => item.documentId !== document.documentId || item.versionId !== document.versionId)
 }
 function clearAttempt() {
   if (props.disabled || busy.value || !attempt.value || saved.value?.adoptionKey
@@ -101,7 +127,7 @@ function clearPendingAdoption() {
   pending.value = null; saved.value = null; attempt.value = null; selected.value = []; excerpts.value = {}; reviewed.value = false; pendingResetAllowed.value = false; error.value = ''
 }
 async function generate() {
-  if (props.disabled || !props.sourceAccessValid || busy.value || attempt.value || pending.value) return
+  if (props.disabled || !props.sourceAccessValid || busy.value || attempt.value || pending.value || (!saved.value && staleSelection.value)) return
   if (!saved.value) {
     if (!query.value.trim() || !selected.value.length) return
     saved.value = { key: crypto.randomUUID(), query: query.value.trim(), documents: selected.value.map(item => ({ ...item })) }
@@ -251,6 +277,35 @@ onUnmounted(() => { disposed = true })
       />
     </label>
     <p>已选择 {{ selected.length }} / 10 个文档</p>
+    <ul
+      v-if="selected.length"
+      aria-label="已选择的文档"
+      class="selected-documents"
+    >
+      <li
+        v-for="item in selected"
+        :key="`${item.documentId}:${item.versionId}`"
+      >
+        <span>{{ documentName(item) }} · 版本 {{ item.versionId }}</span>
+        <button
+          class="button button-secondary"
+          type="button"
+          :data-remove-document="item.documentId"
+          :aria-label="`移除 ${documentName(item)}`"
+          :disabled="disabled || !sourceAccessValid || busy || !!saved || !!pending"
+          @click="removeSelected(item)"
+        >
+          移除
+        </button>
+      </li>
+    </ul>
+    <p
+      v-if="staleSelection && !saved && !pending"
+      class="notice"
+      role="status"
+    >
+      文档已换版，请移除旧版本后重新选择。
+    </p>
     <p
       v-if="documentError"
       role="alert"
@@ -273,8 +328,8 @@ onUnmounted(() => { disposed = true })
         <input
           type="checkbox"
           :data-document="document.id"
-          :checked="selected.some(item => item.documentId === document.id)"
-          :disabled="disabled || !sourceAccessValid || busy || !!saved || !!pending || (selected.length >= 10 && !selected.some(item => item.documentId === document.id))"
+          :checked="selected.some(item => item.documentId === document.id && item.versionId === document.currentPublishedVersionId)"
+          :disabled="disabled || !sourceAccessValid || busy || !!saved || !!pending || versionChanged(document) || (selected.length >= 10 && !selected.some(item => item.documentId === document.id))"
           @change="toggle(document, ($event.target as HTMLInputElement).checked)"
         >
         <span>{{ document.title }} <small>· 已发布版本 {{ document.currentPublishedVersionId }}</small></span>
@@ -304,7 +359,7 @@ onUnmounted(() => { disposed = true })
         class="button button-primary"
         type="button"
         data-action="generate-document-proposal"
-        :disabled="disabled || !sourceAccessValid || busy || !!attempt || !!pending || (!saved && (!selected.length || !query.trim()))"
+        :disabled="disabled || !sourceAccessValid || busy || !!attempt || !!pending || (!saved && (!selected.length || !query.trim() || staleSelection))"
         @click="generate"
       >
         {{ busy ? '处理中…' : saved ? '重发原请求（沿用原键）' : '提取需求候选' }}
@@ -372,8 +427,9 @@ onUnmounted(() => { disposed = true })
           <li
             v-for="item in candidate.documentsWithoutEvidence"
             :key="item.documentId"
+            :data-missing-document="item.documentId"
           >
-            {{ item.documentId }} · 版本 {{ item.versionId }}
+            {{ documentName(item) }} · 版本 {{ item.versionId }}
           </li>
         </ul>
       </div>
@@ -399,12 +455,14 @@ onUnmounted(() => { disposed = true })
                 <li
                   v-for="source in item.sources"
                   :key="`${source.documentId}:${source.versionId}:${locatorLabel(source.locator)}`"
+                  :data-source-document="source.documentId"
                 >
-                  文档 {{ source.documentId }} · 版本 {{ source.versionId }} · {{ locatorLabel(source.locator) }}
+                  {{ documentName(source) }} · 版本 {{ source.versionId }} · {{ locatorLabel(source.locator) }}
                   <div
                     v-if="source.evidenceIds?.length"
                     class="evidence-list"
                   >
+                    <small>供核对的是按规则处理的脱敏片段。</small>
                     <div
                       v-for="(evidenceId, evidenceIndex) in source.evidenceIds"
                       :key="evidenceId"
@@ -463,6 +521,7 @@ onUnmounted(() => { disposed = true })
 .document-proposal { margin: 18px 0; padding: 18px; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface, #fff); min-width: 0; }
 h4, h5 { margin: 0 0 10px; } p, li, label, small { overflow-wrap: anywhere; line-height: 1.6; } textarea { display: block; box-sizing: border-box; width: 100%; padding: 10px; font: inherit; border: 1px solid var(--color-border); border-radius: var(--radius-control); }
 .document-row { display: flex; align-items: flex-start; gap: 8px; margin: 8px 0; min-width: 0; }.document-row span { min-width: 0; }.document-row small { color: var(--color-text-muted); }
+.selected-documents li { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }.selected-documents li span { flex: 1 1 240px; min-width: 0; }
 .actions, .adoption { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 14px 0; }.adoption label { display: flex; align-items: flex-start; gap: 8px; }
 .comparison { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 20px; }.comparison > div { min-width: 0; padding: 14px; background: var(--color-background, #f5f7fa); border-radius: var(--radius-control); }
 ol, ul { padding-left: 22px; } li { margin: 8px 0; white-space: pre-wrap; }.notice { color: #8a3d0a; }

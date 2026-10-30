@@ -15,6 +15,96 @@ const proposal = { id: 'proposal-1', kind: 'DOCUMENT_REQ', status: 'SUCCEEDED', 
 const props = { actorId: 'user-1', solutionId: 'solution-1', spaceId: 'space-1', revision: 0,
   currentTexts: ['原有需求'], disabled: false }
 
+it('跨页选中文档后仍能核对名称并移除之前页面的文档', async () => {
+  sessionStorage.clear()
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({ ...documents[0], id: `doc-${index + 1}`,
+    title: index === 0 ? '第一页客户需求说明' : `文档 ${index + 1}` }))
+  const secondPage = [{ ...documents[0], id: 'doc-51', title: '第二页项目方案' }]
+  vi.spyOn(documentsApi, 'list').mockResolvedValueOnce(firstPage as never).mockResolvedValueOnce(secondPage as never)
+  const wrapper = mount(DocumentRequirementProposalPanel, { props })
+  await flushPromises()
+  await wrapper.get('[data-document="doc-1"]').setValue(true)
+  await wrapper.findAll('button').find(button => button.text() === '下一页')!.trigger('click')
+  await flushPromises()
+  await wrapper.get('[data-document="doc-51"]').setValue(true)
+  const selected = wrapper.get('[aria-label="已选择的文档"]')
+  expect(selected.text()).toContain('第一页客户需求说明')
+  expect(selected.text()).toContain('第二页项目方案')
+  await selected.get('[data-remove-document="doc-1"]').trigger('click')
+  expect(selected.text()).not.toContain('第一页客户需求说明')
+  expect(wrapper.text()).toContain('已选择 1 / 10 个文档')
+  wrapper.unmount(); sessionStorage.clear(); vi.restoreAllMocks()
+})
+
+it('候选和未命中文档显示已选文件名，脱敏片段有明确提示', async () => {
+  sessionStorage.clear()
+  vi.spyOn(documentsApi, 'list').mockResolvedValue(documents as never)
+  vi.spyOn(solutionsApi, 'generateDocumentProposal').mockResolvedValue({ ...proposal,
+    result: { ...proposal.result, documentsWithoutEvidence: [{ documentId: 'doc-1', versionId: 'version-1' }] } } as never)
+  const wrapper = mount(DocumentRequirementProposalPanel, { props })
+  await flushPromises()
+  await wrapper.get('[data-document="doc-1"]').setValue(true)
+  await wrapper.get('[data-action="document-query"]').setValue('提取建设目标')
+  await wrapper.get('[data-action="generate-document-proposal"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.get('[data-missing-document="doc-1"]').text()).toContain('客户需求说明')
+  expect(wrapper.get('[data-source-document="doc-1"]').text()).toContain('客户需求说明')
+  expect(wrapper.text()).toContain('脱敏片段')
+  wrapper.unmount(); sessionStorage.clear(); vi.restoreAllMocks()
+})
+
+it('恢复旧版本时不把新版本的名称误标为旧证据，也不持久化文档名称', async () => {
+  sessionStorage.clear()
+  const list = vi.spyOn(documentsApi, 'list').mockResolvedValueOnce(documents as never)
+    .mockResolvedValueOnce([{ ...documents[0], title: '换版后的文档', currentPublishedVersionId: 'version-2',
+      versions: [{ id: 'version-2', status: 'PUBLISHED', parseStatus: 'SUCCEEDED' }] }] as never)
+  vi.spyOn(solutionsApi, 'generateDocumentProposal').mockResolvedValue(proposal as never)
+  vi.spyOn(solutionsApi, 'getDocumentProposal').mockResolvedValue(proposal as never)
+  const first = mount(DocumentRequirementProposalPanel, { props })
+  await flushPromises()
+  await first.get('[data-document="doc-1"]').setValue(true)
+  await first.get('[data-action="document-query"]').setValue('提取建设目标')
+  await first.get('[data-action="generate-document-proposal"]').trigger('click')
+  await flushPromises()
+  expect(sessionStorage.getItem('document-requirement-proposal:user-1:solution-1:0')).not.toContain('客户需求说明')
+  first.unmount()
+  const second = mount(DocumentRequirementProposalPanel, { props })
+  await flushPromises()
+  expect(list).toHaveBeenCalledTimes(2)
+  expect(second.get('[data-source-document="doc-1"]').text()).toContain('文档 doc-1')
+  expect(second.get('[data-source-document="doc-1"]').text()).not.toContain('换版后的文档')
+  second.unmount(); sessionStorage.clear(); vi.restoreAllMocks()
+})
+
+it('翻页期间文档换版时不把新版本误显示为已选择，可移除旧版本重新选择', async () => {
+  sessionStorage.clear()
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({ ...documents[0], id: `doc-${index + 1}` }))
+  const newDocument = { ...documents[0], currentPublishedVersionId: 'version-2',
+    versions: [{ id: 'version-2', status: 'PUBLISHED', parseStatus: 'SUCCEEDED' }] }
+  vi.spyOn(documentsApi, 'list').mockResolvedValueOnce(firstPage as never)
+    .mockResolvedValueOnce([] as never).mockResolvedValueOnce([newDocument] as never)
+  const generate = vi.spyOn(solutionsApi, 'generateDocumentProposal').mockResolvedValue(proposal as never)
+  const wrapper = mount(DocumentRequirementProposalPanel, { props })
+  await flushPromises()
+  await wrapper.get('[data-document="doc-1"]').setValue(true)
+  await wrapper.findAll('button').find(button => button.text() === '下一页')!.trigger('click')
+  await flushPromises()
+  await wrapper.findAll('button').find(button => button.text() === '上一页')!.trigger('click')
+  await flushPromises()
+  expect(wrapper.get('[data-document="doc-1"]').element).toHaveProperty('checked', false)
+  expect(wrapper.get('[data-document="doc-1"]').element).toHaveProperty('disabled', true)
+  expect(wrapper.text()).toContain('文档已换版，请移除旧版本后重新选择')
+  await wrapper.get('[data-action="document-query"]').setValue('提取建设目标')
+  expect(wrapper.get('[data-action="generate-document-proposal"]').element).toHaveProperty('disabled', true)
+  await wrapper.get('[data-remove-document="doc-1"]').trigger('click')
+  await wrapper.get('[data-document="doc-1"]').setValue(true)
+  await wrapper.get('[data-action="generate-document-proposal"]').trigger('click')
+  await flushPromises()
+  expect(generate).toHaveBeenCalledWith('solution-1', '提取建设目标',
+    [{ documentId: 'doc-1', versionId: 'version-2' }], 0, expect.any(String))
+  wrapper.unmount(); sessionStorage.clear(); vi.restoreAllMocks()
+})
+
 it('选择已发布文档，审阅候选后保存为待确认修订', async () => {
   sessionStorage.clear()
   vi.spyOn(documentsApi, 'list').mockResolvedValue(documents as never)
