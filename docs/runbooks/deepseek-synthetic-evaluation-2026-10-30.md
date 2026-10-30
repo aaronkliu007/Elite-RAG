@@ -49,6 +49,8 @@ try {
 
 诊断输出 `SYNTHETIC_RETRIEVAL_DIAGNOSTIC` 只包含汇总数量；测试通过表示诊断和反例成功运行，**不表示黄金集质量门槛通过或过度拒答已经解决**。下一步需补充问题与证据相关性的独立标注及覆盖对照，比较候选方案的相关冲突召回、误拒答和不足证据拒答，不应仅针对这套合成资料调参。
 
+独立的合成相关性样例和不调用模型的对照基线见[问题与证据相关性合成评测](relevance-benchmark.md)。该样例仅供研发比较，尚未经业务专家审阅。
+
 ## 复现边界
 
 `DeepSeekLiveIntegrationTest` 和 `PostgresOpenSearchRetrievalAcceptanceTest` 的真实模型用例默认关闭。显式设置 `RAG_DEEPSEEK_LIVE_TEST=true` 才执行小样本真实模型测试；显式设置 `RAG_DEEPSEEK_GOLDEN_TEST=true` 才执行 50 条黄金样例。两者读取进程内的 `RAG_AI_API_KEY`，每次执行可能产生费用。基础设施验收使用临时 Testcontainers，不能指向真实业务数据；密钥注入方法见 [DeepSeek 联调说明](deepseek-local-integration.md)。

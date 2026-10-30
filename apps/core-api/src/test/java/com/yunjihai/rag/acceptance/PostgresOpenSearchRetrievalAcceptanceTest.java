@@ -60,6 +60,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
     private static final String INDEX = "chunks-acceptance";
     private static URI endpoint;
     private static final AtomicInteger EMBEDDING_CALLS = new AtomicInteger();
+    private static final AtomicInteger RELEVANCE_MODEL_CALLS = new AtomicInteger();
 
     @BeforeAll
     static void startInfrastructure() throws Exception {
@@ -78,6 +79,130 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
     static void stopInfrastructure() {
         OPENSEARCH.stop();
         LocalFoundationInfrastructure.stop();
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_RELEVANCE_DIAGNOSTIC", matches = "true")
+    void measuresAnnotatedRelevanceThroughTrustedRetrieval() throws Exception {
+        try (var context = startContext(Map.of(
+                "rag.test.counting-embedding", "false",
+                "rag.test.relevance-chat", "true",
+                "rag.ai.enabled", "false",
+                "rag.qa.hmac-key", "synthetic-relevance-test-hmac-key-32-bytes"))) {
+            RELEVANCE_MODEL_CALLS.set(0);
+            var dataset = RelevanceBenchmark.load();
+            var jdbc = context.getBean(JdbcClient.class);
+            var publisher = context.getBean(ProjectionChangePublisher.class);
+            var transactions = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+            record Scenario(RelevanceBenchmark.Sample sample, UUID user, UUID space, Map<UUID, String> ids) { }
+            var scenarios = new java.util.ArrayList<Scenario>();
+            int documentCount = 0;
+            for (var sample : dataset.cases()) {
+                UUID user = relevanceId("user:" + sample.id()), space = relevanceId("space:" + sample.id());
+                var ids = new HashMap<UUID, String>();
+                for (int index = 0; index < sample.documents().size(); index++) {
+                    var source = sample.documents().get(index);
+                    UUID document = relevanceId("document:" + sample.id() + ":" + source.id());
+                    UUID version = relevanceId("version:" + sample.id() + ":" + source.id());
+                    if (index == 0) {
+                        seedPublishedDocument(jdbc, user, space, document, version, UUID.randomUUID());
+                        jdbc.sql("UPDATE canonical_node SET body_text=:text WHERE version_id=:version")
+                                .param("text", source.text()).param("version", version).update();
+                    } else {
+                        seedAdditionalPublishedDocument(jdbc, user, space, document, version, source.text());
+                    }
+                    ids.put(document, source.id());
+                    transactions.executeWithoutResult(status -> publisher.withDocumentChangeLock(document, () -> {
+                        publisher.documentAclChanged(space, document, Instant.now()); return null;
+                    }));
+                    documentCount++;
+                }
+                scenarios.add(new Scenario(sample, user, space, Map.copyOf(ids)));
+            }
+            var worker = context.getBean(ProjectionWorker.class);
+            int projected = 0;
+            for (int iteration = 0; iteration < 100 && projected < documentCount; iteration++)
+                projected += worker.runOnce("relevance-worker", OpenSearchIndexManager.WRITE_ALIAS);
+            assertThat(projected).isEqualTo(documentCount);
+            var retrieval = context.getBean(TrustedRetrievalService.class);
+            var detector = new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector();
+            int relevantTotal = 0, relevantRetrieved = 0, irrelevantRetrieved = 0, uncertainRetrieved = 0;
+            int relevantPairsTotal = 0, relevantPairsComplete = 0, relevantPairsPartial = 0;
+            int irrelevantPairsComplete = 0, uncertainPairsComplete = 0, uncertainPairsPartial = 0, belowMinimum = 0;
+            int qaConflictRefusals = 0, qaAnswered = 0, cautionCasesAnswered = 0, answersUsingIrrelevant = 0;
+            for (var scenario : scenarios) {
+                var pack = retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(), scenario.user(),
+                        Set.of(scenario.space()), scenario.sample().question(), Map.of(), 10));
+                assertThat(pack.evidence()).allSatisfy(e -> assertThat(scenario.ids()).containsKey(e.documentId()));
+                assertThat(pack.stats().reauthorizedCount()).isGreaterThanOrEqualTo(pack.evidence().size());
+                var ids = pack.evidence().stream().map(e -> scenario.ids().get(e.documentId())).toList();
+                var result = RelevanceBenchmark.measure(scenario.sample(), ids);
+                relevantTotal += result.relevantTotal(); relevantRetrieved += result.relevantRetrieved();
+                irrelevantRetrieved += result.irrelevantRetrieved(); uncertainRetrieved += result.uncertainRetrieved();
+                relevantPairsTotal += result.relevantPairsTotal(); relevantPairsComplete += result.relevantPairsComplete();
+                relevantPairsPartial += result.relevantPairsPartial();
+                irrelevantPairsComplete += result.irrelevantPairsComplete();
+                uncertainPairsComplete += result.uncertainPairsComplete();
+                uncertainPairsPartial += result.uncertainPairsPartial();
+                if (pack.evidence().size() < com.yunjihai.rag.qa.QaPolicy.defaults().minEvidenceCount()) belowMinimum++;
+                boolean conflictDetected = detector.hasConflict(pack.evidence());
+                context.getBean(com.yunjihai.rag.access.role.RoleAssignmentStore.class).grantSpaceRole(
+                        scenario.space(), scenario.user(), com.yunjihai.rag.access.role.SpaceRole.SPACE_ADMIN,
+                        scenario.user(), Instant.now());
+                UUID requestId = UUID.randomUUID();
+                int callsBefore = RELEVANCE_MODEL_CALLS.get();
+                var outcome = context.getBean(com.yunjihai.rag.qa.GroundedQaService.class).ask(
+                        new com.yunjihai.rag.qa.AskQuestionCommand(requestId, scenario.user(), scenario.sample().question()));
+                int calls = RELEVANCE_MODEL_CALLS.get() - callsBefore;
+                long audits = jdbc.sql("SELECT count(*) FROM qa_model_call_audit WHERE request_id=:id")
+                        .param("id", requestId).query(Long.class).single();
+                assertThat(audits).isEqualTo(calls);
+                if (conflictDetected && pack.evidence().size() >= com.yunjihai.rag.qa.QaPolicy.defaults().minEvidenceCount()) {
+                    assertThat(outcome).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                            refused -> assertThat(refused.reason()).isEqualTo(
+                                    com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+                    assertThat(calls).isZero();
+                    qaConflictRefusals++;
+                }
+                String answerLabel = "NOT_ANSWERED";
+                if (outcome instanceof com.yunjihai.rag.qa.domain.QaOutcome.Answered answered) {
+                    qaAnswered++;
+                    if (scenario.sample().conflicts().stream().anyMatch(pair ->
+                            pair.scope() != RelevanceBenchmark.Judgment.IRRELEVANT)) cautionCasesAnswered++;
+                    answerLabel = scenario.sample().documents().stream()
+                            .filter(document -> document.text().equals(answered.answer()))
+                            .map(document -> document.judgment().name()).findFirst().orElse("UNJUDGED");
+                    if (answerLabel.equals("IRRELEVANT")) answersUsingIrrelevant++;
+                }
+                System.out.println("RELEVANCE_CASE id=" + scenario.sample().id() + " evidence=" + ids
+                        + " conflictDetected=" + conflictDetected + " qaStatus=" + outcome.status()
+                        + " fakeModelCalls=" + calls + " fakeAnswerLabel=" + answerLabel + " result=" + result);
+            }
+            var first = scenarios.getFirst();
+            var other = scenarios.get(1);
+            var unauthorized = retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(), first.user(),
+                    Set.of(other.space()), other.sample().question(), Map.of(), 10));
+            assertThat(unauthorized.evidence()).isEmpty();
+            jdbc.sql("UPDATE acl_entry SET revoked_at=:at WHERE space_id=:space AND principal_id=:user")
+                    .param("at", OffsetDateTime.now(ZoneOffset.UTC))
+                    .param("space", first.space()).param("user", first.user()).update();
+            var afterRevocation = retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(), first.user(),
+                    Set.of(first.space()), first.sample().question(), Map.of(), 10));
+            assertThat(afterRevocation.stats().fusedCount()).isPositive();
+            assertThat(afterRevocation.stats().reauthorizedCount()).isZero();
+            assertThat(afterRevocation.evidence()).isEmpty();
+            System.out.println("RELEVANCE_BASELINE version=" + dataset.version() + " cases=" + scenarios.size()
+                    + " relevant=" + relevantRetrieved + "/" + relevantTotal
+                    + " irrelevantRetrieved=" + irrelevantRetrieved + " uncertainRetrieved=" + uncertainRetrieved
+                    + " relevantConflictPairsComplete=" + relevantPairsComplete + "/" + relevantPairsTotal
+                    + " relevantConflictPairsPartial=" + relevantPairsPartial
+                    + " irrelevantConflictPairsComplete=" + irrelevantPairsComplete
+                    + " uncertainConflictPairsComplete=" + uncertainPairsComplete
+                    + " uncertainConflictPairsPartial=" + uncertainPairsPartial
+                    + " belowQaEvidenceMinimum=" + belowMinimum + " qaConflictRefusals=" + qaConflictRefusals
+                    + " qaAnswered=" + qaAnswered + " cautionCasesAnswered=" + cautionCasesAnswered
+                    + " answersUsingIrrelevant=" + answersUsingIrrelevant);
+        }
     }
 
     @Test
@@ -539,6 +664,11 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
         }
     }
 
+    private static UUID relevanceId(String value) {
+        return UUID.nameUUIDFromBytes(("synthetic-relevance-v1:" + value)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     private static ConfigurableApplicationContext startContext() {
         return startContext(Map.of());
     }
@@ -569,11 +699,39 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                         "org.springframework.boot.security.autoconfigure.UserDetailsServiceAutoConfiguration")),
                 Map.entry("logging.level.root", "ERROR")));
         properties.putAll(overrides);
-        return new SpringApplicationBuilder(RagApplication.class, CountingEmbeddingConfiguration.class)
+        return new SpringApplicationBuilder(RagApplication.class, CountingEmbeddingConfiguration.class,
+                RelevanceChatConfiguration.class)
                 .profiles("local")
                 .initializers(application -> application.getEnvironment().getPropertySources()
                         .addFirst(new MapPropertySource("retrieval-acceptance-test", properties)))
                 .run();
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(name = "rag.test.relevance-chat", havingValue = "true")
+    static class RelevanceChatConfiguration {
+        @Bean
+        @Primary
+        com.yunjihai.rag.qa.model.ChatCompletionPort relevanceChatPort() {
+            return new com.yunjihai.rag.qa.model.ChatCompletionPort() {
+                @Override public com.yunjihai.rag.qa.model.ModelCallDescriptor descriptor() {
+                    return new com.yunjihai.rag.qa.model.ModelCallDescriptor("synthetic", "local-test",
+                            "fake-chat", "relevance-test-v1");
+                }
+                @Override public com.yunjihai.rag.qa.model.ModelGeneration generate(
+                        com.yunjihai.rag.qa.model.GroundedAnswerPrompt prompt) {
+                    RELEVANCE_MODEL_CALLS.incrementAndGet();
+                    var source = prompt.evidence().evidence().getFirst();
+                    String quote = source.excerpt();
+                    var support = new com.yunjihai.rag.qa.domain.EvidenceSupport(source.evidenceId(), quote);
+                    var claim = new com.yunjihai.rag.qa.domain.GroundedClaim(UUID.randomUUID(), quote, java.util.List.of(support));
+                    var answer = new com.yunjihai.rag.qa.domain.CandidateAnswer(
+                            com.yunjihai.rag.qa.domain.CandidateAnswer.Decision.ANSWER, quote, java.util.List.of(claim));
+                    return new com.yunjihai.rag.qa.model.ModelGeneration(answer,
+                            new com.yunjihai.rag.qa.model.ModelUsage(0, 0, Duration.ZERO), "local-test", 0);
+                }
+            };
+        }
     }
 
     @Configuration(proxyBeanMethods = false)
