@@ -57,6 +57,28 @@ class DeterministicEvidenceConflictDetectorTest {
                 evidence(2,"项目预算：1万元\n服务期限：24个月")))).isTrue();
     }
 
+    @Test
+    void refusesExplicitOppositeApprovalStatesAcrossEvidence() {
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"虚构结论 A：该方案已经正式批准并立即生效。"),
+                evidence(2,"虚构结论 B：该方案明确未获批准且禁止执行。")))).isTrue();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目甲已批准。"), evidence(2,"项目甲尚未批准。")))).isTrue();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目甲已被批准。"), evidence(2,"项目甲未被批准。")))).isTrue();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目甲予以批准。"), evidence(2,"项目甲不予批准。")))).isTrue();
+    }
+
+    @Test
+    void doesNotTreatDifferentSubjectsOrSameApprovalStatusAsConflicts() {
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目甲已批准。"), evidence(2,"项目乙未获批准。")))).isFalse();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目甲尚未批准。"), evidence(2,"项目甲未获批准。")))).isFalse();
+        assertThat(detector.hasConflict(List.of(evidence(1,"项目甲已批准。项目甲未获批准。")))).isFalse();
+    }
+
     @ParameterizedTest
     @MethodSource("equivalentFacts")
     void treatsEquivalentUnitsAndStatesAsTheSameValue(String left,String right){

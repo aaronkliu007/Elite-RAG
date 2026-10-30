@@ -27,11 +27,17 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
             Pattern.CASE_INSENSITIVE|Pattern.UNICODE_CASE);
     private static final Pattern STATE=Pattern.compile(
             "^(启用|开启|生效|有效|允许|停用|关闭|失效|无效|禁止|是|否)$");
+    private static final Pattern APPROVAL=Pattern.compile(
+            "(?:^|[\\n。；;，,：:])\\s*([\\p{IsHan}A-Za-z0-9_]{2,30}?)"
+                    + "(?:已经|已|明确|正式|尚|仍)*"
+                    + "(未获得批准|未获批准|未被批准|未正式批准|尚未批准|没有批准|不予批准|未批准|未获批|"
+                    + "未通过审核|予以批准|被批准|获得批准|获批准|获批|批准|通过审核)");
 
     @Override
     public boolean hasConflict(List<Evidence> evidence){
         var items=List.copyOf(evidence);
         if(hasIdentityConflict(items))return true;
+        if(hasApprovalConflict(items))return true;
         var facts=new ArrayList<Fact>();
         items.forEach(item->facts.addAll(extract(item)));
         for(int left=0;left<facts.size();left++){
@@ -41,6 +47,28 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
                 if(!first.evidenceId().equals(second.evidenceId())
                         && keysMatch(first.key(),second.key())
                         && !first.value().equals(second.value()))return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean hasApprovalConflict(List<Evidence> evidence) {
+        var facts = new ArrayList<ApprovalFact>();
+        for (var item : evidence) {
+            var matcher = APPROVAL.matcher(normalizeFactText(item.excerpt()));
+            while (matcher.find()) {
+                String state = matcher.group(2);
+                boolean approved = !(state.startsWith("未") || state.startsWith("尚未")
+                        || state.startsWith("没有") || state.startsWith("不予"));
+                facts.add(new ApprovalFact(item.evidenceId(), normalizeKey(matcher.group(1)), approved));
+            }
+        }
+        for (int left = 0; left < facts.size(); left++) {
+            for (int right = left + 1; right < facts.size(); right++) {
+                var first = facts.get(left);
+                var second = facts.get(right);
+                if (!first.evidenceId().equals(second.evidenceId()) && first.subject().equals(second.subject())
+                        && first.approved() != second.approved()) return true;
             }
         }
         return false;
@@ -139,5 +167,6 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
     }
 
     private record Fact(UUID evidenceId,String key,String value){}
+    private record ApprovalFact(UUID evidenceId, String subject, boolean approved) {}
     private record EvidenceIdentity(UUID spaceId,UUID documentId,UUID versionId,String nodeId){}
 }

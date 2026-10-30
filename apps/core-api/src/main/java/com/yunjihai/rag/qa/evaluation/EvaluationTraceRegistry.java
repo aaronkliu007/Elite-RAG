@@ -30,26 +30,39 @@ public final class EvaluationTraceRegistry {
         if (trace != null) trace.addResponse(refs);
     }
 
+    public void recordRetrieval(UUID requestId, Collection<EvaluationCase.EvidenceRef> refs) {
+        var trace = active.get(requestId);
+        if (trace != null) trace.setRetrieval(refs);
+    }
+
     public Trace consume(UUID requestId) {
         var trace = active.remove(requestId);
         return trace == null ? Trace.empty() : trace.snapshot();
     }
 
     public record Trace(
+            boolean retrievalObserved,
+            Set<EvaluationCase.EvidenceRef> retrievedTop10,
             Set<EvaluationCase.EvidenceRef> modelRequest,
             Set<EvaluationCase.EvidenceRef> modelResponse) {
         public Trace {
+            retrievedTop10 = Set.copyOf(retrievedTop10);
             modelRequest = Set.copyOf(modelRequest);
             modelResponse = Set.copyOf(modelResponse);
         }
-        static Trace empty() { return new Trace(Set.of(), Set.of()); }
+        static Trace empty() { return new Trace(false, Set.of(), Set.of(), Set.of()); }
     }
 
     private static final class MutableTrace {
         private final Set<EvaluationCase.EvidenceRef> request = new LinkedHashSet<>();
         private final Set<EvaluationCase.EvidenceRef> response = new LinkedHashSet<>();
+        private final Set<EvaluationCase.EvidenceRef> retrieval = new LinkedHashSet<>();
+        private boolean retrievalObserved;
+        synchronized void setRetrieval(Collection<EvaluationCase.EvidenceRef> refs) {
+            retrieval.clear(); retrieval.addAll(refs); retrievalObserved = true;
+        }
         synchronized void addRequest(Collection<EvaluationCase.EvidenceRef> refs) { request.addAll(refs); }
         synchronized void addResponse(Collection<EvaluationCase.EvidenceRef> refs) { response.addAll(refs); }
-        synchronized Trace snapshot() { return new Trace(request, response); }
+        synchronized Trace snapshot() { return new Trace(retrievalObserved, retrieval, request, response); }
     }
 }

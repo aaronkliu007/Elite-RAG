@@ -48,7 +48,8 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
                 if(row.ordinal()<10)top10.add(new EvaluationCase.EvidenceRef(row.documentId(),row.nodeId()));
             });
             EvaluationTraceRegistry.Trace trace=traces.consume(requestId);
-            return new Observation(top10,evidenceIds,trace.modelRequest(),trace.modelResponse());
+            return new Observation(trace.retrievalObserved() ? trace.retrievedTop10() : top10,
+                    evidenceIds,trace.modelRequest(),trace.modelResponse());
         } catch(DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }

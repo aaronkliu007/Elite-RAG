@@ -220,6 +220,8 @@ public final class GroundedQaService {
             return complete(state, command.actorId(), new QaOutcome.Failed(
                     command.requestId(), "RETRIEVAL_REQUEST_MISMATCH"));
         }
+        evaluationTraces.recordRetrieval(command.requestId(), pack.evidence().stream().limit(10)
+                .map(item -> new EvaluationCase.EvidenceRef(item.documentId(), item.nodeId())).toList());
         if (pack.evidence().size() < policy.minEvidenceCount()
                 || pack.evidence().stream().mapToDouble(Evidence::score).max().orElse(0.0) <= 0.0) {
             return complete(state, command.actorId(), new QaOutcome.Refused(

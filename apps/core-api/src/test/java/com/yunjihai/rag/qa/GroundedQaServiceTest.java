@@ -149,6 +149,19 @@ class GroundedQaServiceTest {
     }
 
     @Test
+    void recordsAuthorizedRetrievalIdentitiesForEvaluationBeforeConflictRefusal() {
+        var harness = new Harness();
+        harness.traces.begin(id(1));
+        harness.conflictDetector = ignored -> true;
+        assertThat(harness.service().ask(command("问题")))
+                .isInstanceOf(QaOutcome.Refused.class);
+        var trace = harness.traces.consume(id(1));
+        assertThat(trace.retrievalObserved()).isTrue();
+        assertThat(trace.retrievedTop10()).hasSize(8);
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
     void failsClosedWhenConflictDetectorIsUnavailable() {
         var harness = new Harness();
         harness.conflictDetector = ignored -> {
@@ -367,6 +380,8 @@ class GroundedQaServiceTest {
         private boolean finalAuthorization = true;
         private QaOutcome persistedOutcome;
         private QaMetrics metrics = QaMetrics.noop();
+        private final com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry traces =
+                new com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry();
         private EvidenceConflictDetector conflictDetector = new DeterministicEvidenceConflictDetector();
         private final List<com.yunjihai.rag.retrieval.domain.RetrievalQuery> queries = new ArrayList<>();
         private final AtomicReference<com.yunjihai.rag.qa.model.GroundedAnswerPrompt> prompt =
@@ -423,7 +438,7 @@ class GroundedQaServiceTest {
                     scope, retrieval, new FakePersistence(), audit, value -> "digest:" + value.length(),
                     sanitizer, chat, conflictDetector, new ExactQuoteCitationSupportVerifier(), QaPolicy.defaults(),
                     (requestId, actorId, at) -> finalAuthorization,
-                    Clock.fixed(NOW, ZoneOffset.UTC), metrics);
+                    Clock.fixed(NOW, ZoneOffset.UTC), metrics, traces);
         }
 
         private final class FakePersistence implements QaPersistencePort {

@@ -125,6 +125,17 @@ class JdbcEvaluationRepositoryIntegrationTest {
         assertThat(traces.consume(request).modelRequest()).isEmpty();
     }
 
+    @Test
+    void observesAuthorizedRetrievalEvenWhenNoEvidenceSnapshotWasSaved() {
+        UUID request = UUID.randomUUID(), document = UUID.randomUUID();
+        var reference = new EvaluationCase.EvidenceRef(document, "synthetic-node");
+        traces.begin(request);
+        traces.recordRetrieval(request, List.of(reference));
+        var observation = repository.observe(request);
+        assertThat(observation.retrievedTop10()).containsExactly(reference);
+        assertThat(observation.evidenceIds()).isEmpty();
+    }
+
     private static EvaluationDataset dataset() {
         UUID actor=UUID.randomUUID(),document=UUID.randomUUID();
         List<EvaluationCase> cases=new ArrayList<>();
