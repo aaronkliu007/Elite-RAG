@@ -57,10 +57,9 @@ public final class SolutionProposalService implements SolutionProposalPort {
     public ProposalAttempt find(Command command, ProposalKind kind) {
         var context = context(command, kind);
         var key = new ProposalKey(command.actorId(), command.solutionId(), kind, command.clientKey());
-        return attempts.findByKey(key).filter(attempt -> attempt.request().requirementVersionId()
-                .equals(context.version().id()) && attempt.request().expectedRevision() == command.expectedRevision()
-                && attempt.request().inputFingerprint().equals(SolutionRequestDigest.proposal(
-                        kind, command.solutionId(), command.expectedRevision(), context.version())))
+        var request = new ProposalRegistrationRequest(key, context.version().id(), command.expectedRevision(),
+                SolutionRequestDigest.proposal(kind, command.solutionId(), command.expectedRevision(), context.version()));
+        return attempts.findCurrent(request)
                 .orElseThrow(AccessDeniedAsNotFoundException::new);
     }
 

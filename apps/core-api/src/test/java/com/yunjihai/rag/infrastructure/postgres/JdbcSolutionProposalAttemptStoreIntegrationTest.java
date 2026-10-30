@@ -100,6 +100,21 @@ class JdbcSolutionProposalAttemptStoreIntegrationTest {
         assertThat(recovered.attempt().resultJson()).isEmpty();
     }
 
+    @Test void authorizedQueryTransitionsOnlyMatchingExpiredAttemptToIndeterminate() {
+        var key = seed(600, ProposalKind.REQUIREMENTS, "read-expired");
+        var request = new ProposalRegistrationRequest(key, id(603), 0, "a".repeat(64));
+        var registered = store.register(request, Duration.ofMinutes(3));
+        assertThat(store.findCurrent(request).orElseThrow().status()).isEqualTo(ProposalStatus.RUNNING);
+        jdbc.sql("UPDATE solution_model_proposal_attempt SET lease_until = statement_timestamp() - INTERVAL '1 second' WHERE id = :id")
+                .param("id", registered.attempt().id()).update();
+        var different = new ProposalRegistrationRequest(key, id(603), 1, "b".repeat(64));
+        assertThat(store.findCurrent(different)).isEmpty();
+        assertThat(store.findByKey(key).orElseThrow().status()).isEqualTo(ProposalStatus.RUNNING);
+        assertThat(store.findCurrent(request).orElseThrow().status()).isEqualTo(ProposalStatus.INDETERMINATE);
+        assertThat(store.register(request, Duration.ofMinutes(3)).created()).isFalse();
+        assertThat(store.succeed(request, "{\"items\":[]}")).isFalse();
+    }
+
     @Test void concurrentRegistrationsCreateExactlyOneModelCallOwner() throws Exception {
         var key = seed(300, ProposalKind.OUTLINE, "concurrent-key");
         var request = new ProposalRegistrationRequest(key, id(303), 0, "d".repeat(64));

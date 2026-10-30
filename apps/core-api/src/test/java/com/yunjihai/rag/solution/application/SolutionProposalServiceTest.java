@@ -196,6 +196,9 @@ class SolutionProposalServiceTest {
             return new ProposalRegistration(attempt, true);
         }
         @Override public Optional<ProposalAttempt> findByKey(ProposalKey key) { return Optional.ofNullable(saved.get(key)); }
+        @Override public Optional<ProposalAttempt> findCurrent(ProposalRegistrationRequest request) {
+            return findByKey(request.key()).filter(attempt -> attempt.request().equals(request));
+        }
         @Override public boolean succeed(ProposalRegistrationRequest request, String json) {
             var previous = saved.get(request.key());
             saved.put(request.key(), new ProposalAttempt(previous.id(), request, ProposalStatus.SUCCEEDED,

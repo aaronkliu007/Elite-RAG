@@ -94,6 +94,28 @@ public final class JdbcSolutionProposalAttemptStore implements ProposalAttemptSt
     }
 
     @Override
+    public Optional<ProposalAttempt> findCurrent(ProposalRegistrationRequest request) {
+        Objects.requireNonNull(request);
+        try {
+            jdbc.sql("""
+                    UPDATE solution_model_proposal_attempt SET
+                        status = 'INDETERMINATE', failure_code = 'MODEL_OUTCOME_UNKNOWN',
+                        updated_at = statement_timestamp()
+                    WHERE actor_id = :actor AND solution_id = :solution
+                      AND kind = :kind AND client_key = :client
+                      AND requirement_version_id = :requirement AND expected_revision = :revision
+                      AND input_fingerprint = :fingerprint AND status = 'RUNNING'
+                      AND lease_until <= statement_timestamp()
+                    """).params(keyParams(request.key())).param("requirement", request.requirementVersionId())
+                    .param("revision", request.expectedRevision()).param("fingerprint", request.inputFingerprint())
+                    .update();
+            return findByKey(request.key()).filter(attempt -> attempt.request().equals(request));
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
+    @Override
     public boolean succeed(ProposalRegistrationRequest request, String resultJson) {
         Objects.requireNonNull(request);
         if (resultJson == null || resultJson.isBlank() || resultJson.length() > 262_144) {
