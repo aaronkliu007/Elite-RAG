@@ -123,6 +123,12 @@ import tools.jackson.databind.ObjectMapper;
 public class PostgresAdapterConfiguration {
 
     @Bean
+    JdbcSolutionProposalAttemptStore jdbcSolutionProposalAttemptStore(JdbcClient jdbc,
+            PlatformTransactionManager transactions) {
+        return new JdbcSolutionProposalAttemptStore(jdbc, transactions);
+    }
+
+    @Bean
     JdbcSolutionCommandIdempotencyStore jdbcSolutionCommandIdempotencyStore(JdbcClient jdbc) {
         return new JdbcSolutionCommandIdempotencyStore(jdbc);
     }
