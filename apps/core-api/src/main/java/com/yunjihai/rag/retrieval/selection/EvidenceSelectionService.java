@@ -6,12 +6,10 @@ import com.yunjihai.rag.retrieval.domain.ScoredCandidate;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 
 public final class EvidenceSelectionService {
@@ -37,7 +35,7 @@ public final class EvidenceSelectionService {
                 break;
             }
             var normalized = normalize(candidate.candidate().text());
-            if (isNearDuplicate(normalized, selected)) {
+            if (isDuplicate(normalized, selected)) {
                 continue;
             }
             var documentId = candidate.candidate().documentId();
@@ -45,20 +43,16 @@ public final class EvidenceSelectionService {
             if (documentCount >= policy.maxPerDocument()) {
                 continue;
             }
-            selected.add(new SelectedCandidate(candidate, normalized, trigrams(normalized)));
+            selected.add(new SelectedCandidate(candidate, normalized));
             countsByDocument.put(documentId, documentCount + 1);
         }
         return selected.stream().map(SelectedCandidate::candidate).toList();
     }
 
-    private boolean isNearDuplicate(String normalized, List<SelectedCandidate> selected) {
-        var codePoints = normalized.codePoints().toArray();
-        if (codePoints.length < 3) {
-            return selected.stream().anyMatch(existing -> existing.normalized().equals(normalized));
-        }
-        var grams = trigrams(normalized);
-        return selected.stream().anyMatch(existing ->
-                similarity(grams, existing.grams()) >= policy.nearDuplicateThreshold());
+    private static boolean isDuplicate(String normalized, List<SelectedCandidate> selected) {
+        // Similar passages can differ only by a negation or a critical number.
+        // Only discard candidates whose normalized text is identical.
+        return selected.stream().anyMatch(existing -> existing.normalized().equals(normalized));
     }
 
     private static String normalize(String text) {
@@ -119,32 +113,8 @@ public final class EvidenceSelectionService {
         };
     }
 
-    private static Set<String> trigrams(String normalized) {
-        var codePoints = normalized.codePoints().toArray();
-        var grams = new HashSet<String>();
-        for (int index = 0; index + 2 < codePoints.length; index++) {
-            grams.add(new String(codePoints, index, 3));
-        }
-        return Set.copyOf(grams);
-    }
-
-    private static double similarity(Set<String> first, Set<String> second) {
-        if (first.isEmpty() || second.isEmpty()) {
-            return first.equals(second) ? 1 : 0;
-        }
-        int intersection = 0;
-        for (var gram : first) {
-            if (second.contains(gram)) {
-                intersection++;
-            }
-        }
-        int union = first.size() + second.size() - intersection;
-        return (double) intersection / union;
-    }
-
     private record SelectedCandidate(
             ScoredCandidate candidate,
-            String normalized,
-            Set<String> grams) {
+            String normalized) {
     }
 }

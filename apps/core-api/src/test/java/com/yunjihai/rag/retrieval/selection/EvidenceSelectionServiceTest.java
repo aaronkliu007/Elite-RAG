@@ -1,6 +1,8 @@
 package com.yunjihai.rag.retrieval.selection;
 
+import com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector;
 import com.yunjihai.rag.retrieval.domain.Candidate;
+import com.yunjihai.rag.retrieval.domain.Evidence;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
 import com.yunjihai.rag.retrieval.domain.RecallSource;
 import com.yunjihai.rag.retrieval.domain.RetrievalPolicy;
@@ -47,6 +49,27 @@ class EvidenceSelectionServiceTest {
                 List.of(decimalAmount, layoutVariant, tenfoldAmount), 8);
 
         assertThat(selected).containsExactly(decimalAmount, tenfoldAmount);
+    }
+
+    @Test
+    void preservesNearIdenticalEvidenceWhenNegationOrAmountChanges() {
+        String context = "经项目评审委员会审议，团队完成需求分析与安全审查，供应商提供交付材料，相关人员应按项目计划记录进度并执行验收流程。";
+        var approved = scored(21, 121, context + "该方案已经批准。");
+        var rejected = scored(22, 122, context + "该方案未批准。");
+        var budget = scored(23, 123, context + "实施预算为100万元。");
+        var changedBudget = scored(24, 124, context + "实施预算为101万元。");
+
+        var selected = new EvidenceSelectionService(RetrievalPolicy.defaults()).select(
+                List.of(approved, rejected, budget, changedBudget), 8);
+
+        assertThat(selected).containsExactly(approved, rejected, budget, changedBudget);
+        var approvalEvidence = selected.subList(0, 2).stream().map(item -> {
+            var candidate = item.candidate();
+            return new Evidence(candidate.spaceId(), candidate.candidateId(), candidate.documentId(),
+                    candidate.versionId(), candidate.nodeId(), candidate.title(), candidate.text(),
+                    item.score(), candidate.locator());
+        }).toList();
+        assertThat(new DeterministicEvidenceConflictDetector().hasConflict(approvalEvidence)).isTrue();
     }
 
     @Test
