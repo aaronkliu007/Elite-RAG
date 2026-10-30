@@ -5,6 +5,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -20,6 +21,17 @@ public final class JdbcGenerationAttemptStore implements GenerationAttemptStore 
 
     public JdbcGenerationAttemptStore(JdbcClient jdbc) {
         this.jdbc = Objects.requireNonNull(jdbc);
+    }
+
+    @Override
+    public Instant authoritativeNow(Instant fallback) {
+        Objects.requireNonNull(fallback);
+        try {
+            return jdbc.sql("SELECT statement_timestamp()")
+                    .query(OffsetDateTime.class).single().toInstant();
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
     }
 
     @Override
@@ -138,6 +150,38 @@ public final class JdbcGenerationAttemptStore implements GenerationAttemptStore 
             if (updated != 1) {
                 throw new GenerationStateException();
             }
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
+    /** Expires a bounded set of abandoned pre-verification attempts using the database clock. */
+    public int expireStale(Duration recoveryAfter, int batchSize) {
+        Objects.requireNonNull(recoveryAfter, "recoveryAfter");
+        long leaseMillis = recoveryAfter.toMillis();
+        if (leaseMillis < 1 || batchSize < 1 || batchSize > 500) {
+            throw new IllegalArgumentException("invalid generation recovery scan limits");
+        }
+        try {
+            return jdbc.sql("""
+                    WITH expired AS (
+                        SELECT id FROM solution_generation_attempt
+                        WHERE status IN ('PENDING', 'RETRIEVING', 'GENERATING')
+                          AND updated_at <= statement_timestamp()
+                              - CAST(:leaseMillis AS bigint) * INTERVAL '1 millisecond'
+                        ORDER BY updated_at, id
+                        LIMIT :batchSize
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE solution_generation_attempt AS attempt SET
+                        status = 'FAILED_RETRYABLE',
+                        retry_checkpoint = attempt.status,
+                        failure_code = 'WORKER_LEASE_EXPIRED',
+                        revision = attempt.revision + 1,
+                        updated_at = statement_timestamp()
+                    FROM expired WHERE attempt.id = expired.id
+                    """).param("leaseMillis", leaseMillis)
+                    .param("batchSize", batchSize).update();
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }

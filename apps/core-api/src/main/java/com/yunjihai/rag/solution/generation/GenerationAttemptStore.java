@@ -1,8 +1,15 @@
 package com.yunjihai.rag.solution.generation;
 
+import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
 
 public interface GenerationAttemptStore {
+
+    /** Persistence implementations should return their authoritative clock for lease decisions. */
+    default Instant authoritativeNow(Instant fallback) {
+        return Objects.requireNonNull(fallback);
+    }
 
     Optional<GenerationAttempt> findByClientKey(String clientKey);
 

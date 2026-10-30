@@ -3,6 +3,7 @@ package com.yunjihai.rag.runtime;
 import com.yunjihai.rag.api.idempotency.IdempotencyService;
 import com.yunjihai.rag.audit.AuditService;
 import com.yunjihai.rag.infrastructure.minio.MinioBlobReader;
+import com.yunjihai.rag.infrastructure.postgres.JdbcGenerationAttemptStore;
 import com.yunjihai.rag.infrastructure.opensearch.OpenSearchIndexManager;
 import com.yunjihai.rag.ingestion.BlobStore;
 import com.yunjihai.rag.ingestion.DefaultUploadSecurityScanner;
@@ -38,6 +39,7 @@ import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
 import com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry;
 import com.yunjihai.rag.qa.evaluation.GroundedQaEvaluationService;
 import com.yunjihai.rag.qa.evaluation.QaEvaluationUseCase;
+import com.yunjihai.rag.solution.generation.GenerationPolicy;
 import com.yunjihai.rag.retrieval.RetrievalService;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.annotation.Value;
@@ -235,5 +237,18 @@ public class WorkerRuntimeConfiguration {
             @Value("${rag.opensearch.worker.target-index:" + OpenSearchIndexManager.WRITE_ALIAS + "}")
             String targetIndex) {
         return new ProjectionWorkerScheduler(worker, workerId, targetIndex);
+    }
+
+    @Bean
+    @ConditionalOnProperty(name = {"rag.workers.enabled", "rag.solution.generation.recovery.enabled"},
+            havingValue = "true")
+    GenerationAttemptRecoveryScheduler generationAttemptRecoveryScheduler(
+            JdbcGenerationAttemptStore attempts, GenerationPolicy policy,
+            @Value("${rag.solution.generation.recovery.batch-size:100}") int batchSize) {
+        if (batchSize < 1 || batchSize > 500) {
+            throw new IllegalArgumentException("invalid generation recovery batch size");
+        }
+        return new GenerationAttemptRecoveryScheduler(
+                () -> attempts.expireStale(policy.recoveryAfter(), batchSize));
     }
 }

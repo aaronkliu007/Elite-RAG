@@ -140,7 +140,8 @@ public final class SectionGenerationService implements SectionGenerationPort {
                 command.clientKey(), command.solutionId(),
                 context.requirements().id(), context.outline().id(),
                 command.sectionId(), command.baselineSectionVersionId());
-        var registration = attempts.register(GenerationAttempt.start(command.attemptId(), key, command.at()));
+        var registration = attempts.register(GenerationAttempt.start(
+                command.attemptId(), key, attempts.authoritativeNow(command.at())));
         var attempt = registration.attempt();
         attempt.validateRequest(key);
         if (attempt.status() == GenerationStatus.SUCCEEDED) {
@@ -160,30 +161,30 @@ public final class SectionGenerationService implements SectionGenerationPort {
         if (!registration.created() && isActive(attempt.status())) {
             if (attempt.status() == GenerationStatus.VERIFYING) {
                 if (sections.findByAttemptId(attempt.id()).isPresent()
-                        || leaseExpired(attempt, command.at())) {
+                        || leaseExpired(attempt, attempts.authoritativeNow(command.at()))) {
                     return recoverVerification(attempt, command);
                 }
                 return new SectionGenerationResult(attempt, Optional.empty());
             }
-            if (!leaseExpired(attempt, command.at())) {
+            if (!leaseExpired(attempt, attempts.authoritativeNow(command.at()))) {
                 return new SectionGenerationResult(attempt, Optional.empty());
             }
-            var expired = attempt.failRetryable("WORKER_LEASE_EXPIRED", command.at());
+            var expired = attempt.failRetryable("WORKER_LEASE_EXPIRED", progressAt(attempt, command.at()));
             saveAttempt(expired, attempt);
             attempt = expired;
         }
         if (attempt.status() == GenerationStatus.FAILED_RETRYABLE) {
             if (attempt.executionCount() >= policy.maxExecutions()) {
-                var exhausted = attempt.exhaustRetries(command.at());
+                var exhausted = attempt.exhaustRetries(progressAt(attempt, command.at()));
                 saveAttempt(exhausted, attempt);
                 return new SectionGenerationResult(exhausted, Optional.empty());
             }
-            var retried = attempt.retry(command.at());
+            var retried = attempt.retry(progressAt(attempt, command.at()));
             saveAttempt(retried, attempt);
             attempt = retried;
         }
         if (attempt.status() == GenerationStatus.PENDING) {
-            var retrieving = attempt.startRetrieval(command.at());
+            var retrieving = attempt.startRetrieval(progressAt(attempt, command.at()));
             saveAttempt(retrieving, attempt);
             attempt = retrieving;
         }
@@ -203,7 +204,7 @@ public final class SectionGenerationService implements SectionGenerationPort {
         if (pack.evidence().size() < policy.minimumEvidenceCount()) {
             if (attempt.status() == GenerationStatus.RETRIEVING) {
                 var insufficient = attempt.insufficientEvidence(
-                        pack.requestId(), evidenceIds(pack.evidence()), command.at());
+                        pack.requestId(), evidenceIds(pack.evidence()), progressAt(attempt, command.at()));
                 saveAttempt(insufficient, attempt);
                 return new SectionGenerationResult(insufficient, Optional.empty());
             }
@@ -215,14 +216,14 @@ public final class SectionGenerationService implements SectionGenerationPort {
         if (attempt.status() == GenerationStatus.GENERATING) {
             snapshot = evidenceStore.findByAttemptId(attempt.id());
             if (snapshot.isEmpty() || !sourceIds(snapshot).equals(attempt.evidenceIds())) {
-                var failed = attempt.failManual("EVIDENCE_SNAPSHOT_MISSING", command.at());
+                var failed = attempt.failManual("EVIDENCE_SNAPSHOT_MISSING", progressAt(attempt, command.at()));
                 saveAttempt(failed, attempt);
                 return new SectionGenerationResult(failed, Optional.empty());
             }
             try {
                 selectedEvidence = alignEvidence(snapshot, pack.evidence());
             } catch (IllegalArgumentException changed) {
-                var failed = attempt.failManual("EVIDENCE_SNAPSHOT_CHANGED", command.at());
+                var failed = attempt.failManual("EVIDENCE_SNAPSHOT_CHANGED", progressAt(attempt, command.at()));
                 saveAttempt(failed, attempt);
                 return new SectionGenerationResult(failed, Optional.empty());
             }
@@ -232,7 +233,7 @@ public final class SectionGenerationService implements SectionGenerationPort {
         var selectedEvidenceIds = evidenceIds(selectedEvidence);
         if (attempt.status() == GenerationStatus.RETRIEVING) {
             var generating = attempt.recordEvidence(
-                    pack.requestId(), selectedEvidenceIds, command.at());
+                    pack.requestId(), selectedEvidenceIds, progressAt(attempt, command.at()));
             saveAttempt(generating, attempt);
             attempt = generating;
             evidenceStore.saveSnapshot(attempt.id(), snapshot);
@@ -246,6 +247,9 @@ public final class SectionGenerationService implements SectionGenerationPort {
             cancel(attempt, command);
             throw denied;
         }
+        var refreshed = attempt.heartbeat(progressAt(attempt, command.at()));
+        saveAttempt(refreshed, attempt);
+        attempt = refreshed;
         com.yunjihai.rag.solution.model.SolutionModelResponse<GeneratedSectionDraft> response;
         try {
             response = model.execute(new SolutionModelRequest(
@@ -256,7 +260,7 @@ public final class SectionGenerationService implements SectionGenerationPort {
                     GeneratedSectionDraft.class);
         } catch (ModelGatewayException denied) {
             if (denied.kind() == ModelGatewayException.Kind.POLICY_VIOLATION) {
-                var failed = attempt.failManual("MODEL_POLICY_VIOLATION", command.at());
+                var failed = attempt.failManual("MODEL_POLICY_VIOLATION", progressAt(attempt, command.at()));
                 saveAttempt(failed, attempt);
                 return new SectionGenerationResult(failed, Optional.empty());
             }
@@ -265,11 +269,11 @@ public final class SectionGenerationService implements SectionGenerationPort {
             return failRetryable(attempt, "MODEL_UNAVAILABLE", command);
         }
         if (response == null) {
-            var failed = attempt.failManual("INVALID_MODEL_RESPONSE", command.at());
+            var failed = attempt.failManual("INVALID_MODEL_RESPONSE", progressAt(attempt, command.at()));
             saveAttempt(failed, attempt);
             return new SectionGenerationResult(failed, Optional.empty());
         }
-        var verifying = attempt.startVerification(response.usage(), command.at());
+        var verifying = attempt.startVerification(response.usage(), progressAt(attempt, command.at()));
         saveAttempt(verifying, attempt);
         if (!isCurrent(key)) {
             return cancel(verifying, command);
@@ -290,7 +294,7 @@ public final class SectionGenerationService implements SectionGenerationPort {
                     command.baselineSectionVersionId(), command.baselineSectionVersionId(),
                     Optional.empty(), Optional.of(response.modelId()), command.at(), report);
         } catch (IllegalArgumentException | NullPointerException invalidModelStructure) {
-            var failed = verifying.failManual("INVALID_MODEL_STRUCTURE", command.at());
+            var failed = verifying.failManual("INVALID_MODEL_STRUCTURE", progressAt(verifying, command.at()));
             saveAttempt(failed, verifying);
             return new SectionGenerationResult(failed, Optional.empty());
         }
@@ -303,7 +307,7 @@ public final class SectionGenerationService implements SectionGenerationPort {
             cancel(verifying, command);
             throw denied;
         }
-        var succeeded = verifying.succeed(version.id(), command.at());
+        var succeeded = verifying.succeed(version.id(), progressAt(verifying, command.at()));
         if (!commit.commitIfCurrent(key, attempt.id(), version, succeeded, verifying.revision())) {
             return cancel(verifying, command);
         }
@@ -453,7 +457,7 @@ public final class SectionGenerationService implements SectionGenerationPort {
             GenerationAttempt attempt,
             String errorCode,
             GenerateSectionCommand command) {
-        var failed = attempt.failRetryable(errorCode, command.at());
+        var failed = attempt.failRetryable(errorCode, progressAt(attempt, command.at()));
         saveAttempt(failed, attempt);
         return new SectionGenerationResult(failed, Optional.empty());
     }
@@ -462,7 +466,7 @@ public final class SectionGenerationService implements SectionGenerationPort {
             GenerationAttempt withLatestResults,
             GenerationAttempt persisted,
             GenerateSectionCommand command) {
-        var cancelled = withLatestResults.cancel(command.at());
+        var cancelled = withLatestResults.cancel(progressAt(withLatestResults, command.at()));
         saveAttempt(cancelled, persisted);
         return new SectionGenerationResult(cancelled, Optional.empty());
     }
@@ -480,11 +484,11 @@ public final class SectionGenerationService implements SectionGenerationPort {
         if (checkpoint.isPresent()) {
             authorizeStoredEvidence(command.actorId(), command.spaceId(), attempt.id(),
                     attempt.evidenceIds());
-            var succeeded = attempt.succeed(checkpoint.orElseThrow().id(), command.at());
+            var succeeded = attempt.succeed(checkpoint.orElseThrow().id(), progressAt(attempt, command.at()));
             saveAttempt(succeeded, attempt);
             return new SectionGenerationResult(succeeded, checkpoint);
         }
-        var failed = attempt.failManual("VERIFICATION_CHECKPOINT_MISSING", command.at());
+        var failed = attempt.failManual("VERIFICATION_CHECKPOINT_MISSING", progressAt(attempt, command.at()));
         saveAttempt(failed, attempt);
         return new SectionGenerationResult(failed, Optional.empty());
     }
@@ -556,6 +560,13 @@ public final class SectionGenerationService implements SectionGenerationPort {
 
     private void saveAttempt(GenerationAttempt next, GenerationAttempt previous) {
         attempts.replace(next, previous.revision());
+    }
+
+    private Instant progressAt(GenerationAttempt attempt, Instant requestAt) {
+        var now = clock.instant();
+        if (now.isBefore(requestAt)) now = requestAt;
+        now = attempts.authoritativeNow(now);
+        return now.isBefore(attempt.updatedAt()) ? attempt.updatedAt() : now;
     }
 
     private static Set<UUID> evidenceIds(List<Evidence> evidence) {

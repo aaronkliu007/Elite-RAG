@@ -113,6 +113,13 @@ public record GenerationAttempt(
                 resultSectionVersionId, Optional.empty(), Optional.empty());
     }
 
+    public GenerationAttempt heartbeat(Instant at) {
+        requireStatus(GenerationStatus.GENERATING);
+        return next(GenerationStatus.GENERATING, executionCount, at,
+                retrievalRequestId, evidenceIds, modelUsage, resultSectionVersionId,
+                Optional.empty(), Optional.empty());
+    }
+
     public GenerationAttempt succeed(UUID sectionVersionId, Instant at) {
         requireStatus(GenerationStatus.VERIFYING);
         if (modelUsage.isEmpty()) {

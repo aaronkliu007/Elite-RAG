@@ -39,6 +39,7 @@ import com.yunjihai.rag.ingestion.OrphanBlobRecorder;
 import com.yunjihai.rag.ingestion.ParsedDocumentStore;
 import com.yunjihai.rag.infrastructure.minio.MinioBlobReader;
 import com.yunjihai.rag.infrastructure.crypto.HmacQuestionDigest;
+import com.yunjihai.rag.infrastructure.model.ApprovedModelGatewayProperties;
 import com.yunjihai.rag.knowledge.AuthorizedDocumentQuery;
 import com.yunjihai.rag.knowledge.DocumentContentGateway;
 import com.yunjihai.rag.knowledge.DocumentCreationAuthorization;
@@ -184,6 +185,16 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
+    GenerationPolicy generationPolicy(
+            @Value("${rag.solution.generation.recovery.lease-duration:PT2M}") Duration recoveryAfter,
+            ApprovedModelGatewayProperties modelProperties) {
+        var defaults = GenerationPolicy.defaults();
+        var policy = new GenerationPolicy(defaults.requestedEvidenceCount(), defaults.minimumEvidenceCount(),
+                defaults.sectionPrompt(), defaults.modelTimeout(), recoveryAfter, defaults.maxExecutions());
+        return modelProperties.enabled() ? policy.requireGatewayTimeout(modelProperties.totalTimeout()) : policy;
+    }
+
+    @Bean
     JdbcGenerationEvidenceStore jdbcGenerationEvidenceStore(
             JdbcClient jdbc, PlatformTransactionManager transactions) {
         return new JdbcGenerationEvidenceStore(jdbc, transactions);
@@ -303,10 +314,10 @@ public class PostgresAdapterConfiguration {
             TrustedRetrievalService retrieval, GenerationEvidenceAuthorizationPort evidenceAuthorization,
             SolutionModelPort model,
             SectionVerificationService verification, JdbcSectionGenerationCommitPort commit,
-            AuditService audit, Clock clock) {
+            GenerationPolicy policy, AuditService audit, Clock clock) {
         return new SectionGenerationService(solutions, requirements, outlines, sections,
                 attempts, evidenceStore, authorization, retrieval, evidenceAuthorization, model, verification,
-                GenerationPolicy.defaults(), commit, audit, clock);
+                policy, commit, audit, clock);
     }
 
     @Bean

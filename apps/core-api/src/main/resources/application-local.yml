@@ -50,6 +50,13 @@ rag:
       output-cost-per-million-tokens: ${RAG_AI_OUTPUT_COST_PER_MILLION_TOKENS:0}
   workers:
     enabled: ${RAG_WORKERS_ENABLED:true}
+  solution:
+    generation:
+      recovery:
+        enabled: ${RAG_SOLUTION_GENERATION_RECOVERY_ENABLED:true}
+        poll-delay: ${RAG_SOLUTION_GENERATION_RECOVERY_POLL_DELAY:PT30S}
+        lease-duration: ${RAG_SOLUTION_GENERATION_RECOVERY_LEASE_DURATION:PT2M}
+        batch-size: ${RAG_SOLUTION_GENERATION_RECOVERY_BATCH_SIZE:100}
   upload:
     quarantine-directory: ${RAG_UPLOAD_QUARANTINE_DIRECTORY:}
   parser:

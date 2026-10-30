@@ -35,31 +35,25 @@ public class JdbcQaActorRateLimiter implements QaActorRateLimiter {
         Objects.requireNonNull(actorId);
         try {
             WindowState state=jdbc.sql("""
-                    WITH request_time AS MATERIALIZED (
-                        SELECT clock_timestamp() AS at
-                    ), upserted AS (
                     INSERT INTO qa_actor_rate_limit(
                         actor_id,window_started_at,request_count,updated_at)
-                    SELECT :actorId,at,1,at FROM request_time
+                    VALUES (:actorId,clock_timestamp(),1,clock_timestamp())
                     ON CONFLICT (actor_id) DO UPDATE SET
-                        request_count=CASE
-                            WHEN qa_actor_rate_limit.window_started_at>(SELECT at FROM request_time)
-                              OR qa_actor_rate_limit.window_started_at<=(SELECT at FROM request_time)
-                                    - (:windowMillis * interval '1 millisecond') THEN 1
-                            ELSE qa_actor_rate_limit.request_count+1
-                        END,
-                        window_started_at=CASE
-                            WHEN qa_actor_rate_limit.window_started_at>(SELECT at FROM request_time)
-                              OR qa_actor_rate_limit.window_started_at<=(SELECT at FROM request_time)
-                                    - (:windowMillis * interval '1 millisecond')
-                                THEN (SELECT at FROM request_time)
-                            ELSE qa_actor_rate_limit.window_started_at
-                        END,
-                        updated_at=(SELECT at FROM request_time)
-                    RETURNING request_count,window_started_at
-                    )
-                    SELECT upserted.request_count,upserted.window_started_at,request_time.at AS request_time
-                    FROM upserted CROSS JOIN request_time
+                        (request_count,window_started_at,updated_at)=(
+                            WITH request_time AS MATERIALIZED (SELECT clock_timestamp() AS at)
+                            SELECT
+                                CASE WHEN qa_actor_rate_limit.window_started_at>request_time.at
+                                       OR qa_actor_rate_limit.window_started_at<=request_time.at
+                                           - (:windowMillis * interval '1 millisecond')
+                                     THEN 1 ELSE qa_actor_rate_limit.request_count+1 END,
+                                CASE WHEN qa_actor_rate_limit.window_started_at>request_time.at
+                                       OR qa_actor_rate_limit.window_started_at<=request_time.at
+                                           - (:windowMillis * interval '1 millisecond')
+                                     THEN request_time.at ELSE qa_actor_rate_limit.window_started_at END,
+                                request_time.at
+                            FROM request_time
+                        )
+                    RETURNING request_count,window_started_at,updated_at AS request_time
                     """)
                     .param("actorId",actorId)
                     .param("windowMillis",windowMillis)

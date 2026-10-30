@@ -69,6 +69,8 @@ PENDING -> RETRIEVING -> GENERATING -> VERIFYING -> SUCCEEDED
 
 生成成功必须通过 `SectionGenerationCommitPort` 在同一事务中完成最后一次版本围栏校验、按 attempt 绑定草稿、以及 attempt 变更为 `SUCCEEDED`；围栏失败不得留下任何草稿或成功状态。历史 `VERIFYING` 记录可通过 `findByAttemptId` 的草稿检查点恢复为成功；检查点缺失时进入 `VERIFICATION_CHECKPOINT_MISSING`，不能永久卡住。生产适配器还必须用超时扫描器把崩溃后遗留的 `PENDING`、`RETRIEVING`、`GENERATING` 标记为可重试失败。
 
+`local` profile 的后台扫描器默认每 30 秒扫描一次，以数据库时钟判定 2 分钟无进展的上述三种状态，每批最多 100 条；尝试创建、阶段进展、请求内租约判断和后台扫描均使用数据库时钟。调用模型前会在来源权限复核之后刷新 `GENERATING` 租约；若扫描器已先行回收，修订号冲突会阻止模型调用。扫描器只将状态原子改为 `FAILED_RETRYABLE` 并保留原状态检查点，不自动发起检索或模型调用。多实例使用行锁跳过其他实例正在处理的记录，生成线程随后写入时由修订号冲突阻止覆盖。`VERIFYING` 不参与扫描，仍由原幂等键请求恢复检查点。可分别设置 `RAG_SOLUTION_GENERATION_RECOVERY_ENABLED`、`RAG_SOLUTION_GENERATION_RECOVERY_POLL_DELAY`、`RAG_SOLUTION_GENERATION_RECOVERY_LEASE_DURATION`、`RAG_SOLUTION_GENERATION_RECOVERY_BATCH_SIZE`；全局 `RAG_WORKERS_ENABLED=false` 也会关闭扫描。租约必须长于分章模型截止时间和模型网关总超时，否则启动失败；调整前还应留出正常检索和核验处理的余量。
+
 ## 5. 引用与风险门禁
 
 - 事实 Claim 必须引用至少一个本次 Evidence ID；

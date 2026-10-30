@@ -303,6 +303,27 @@ class GenerationContractTest {
         assertThat(policy.minimumEvidenceCount()).isEqualTo(1);
         assertThat(policy.sectionPrompt()).isEqualTo(new PromptRef("solution-section", "v1"));
         assertThat(policy.modelTimeout()).isEqualTo(java.time.Duration.ofSeconds(60));
+        assertThatThrownBy(() -> new GenerationPolicy(8, 1, policy.sectionPrompt(),
+                java.time.Duration.ofSeconds(60), java.time.Duration.ofSeconds(30), 3))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> policy.requireGatewayTimeout(java.time.Duration.ofMinutes(3)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void generatingHeartbeatPreservesEvidenceAndAdvancesRevision() {
+        var key = new GenerationKey("heartbeat-test", id(110), id(111), id(112), id(113), Optional.empty());
+        var pending = GenerationAttempt.start(id(114), key, NOW);
+        var retrieving = pending.startRetrieval(NOW);
+        var generating = retrieving.recordEvidence(id(115), Set.of(id(116)), NOW);
+
+        var refreshed = generating.heartbeat(NOW.plusSeconds(59));
+
+        assertThat(refreshed.status()).isEqualTo(GenerationStatus.GENERATING);
+        assertThat(refreshed.updatedAt()).isEqualTo(NOW.plusSeconds(59));
+        assertThat(refreshed.revision()).isEqualTo(generating.revision() + 1);
+        assertThat(refreshed.evidenceIds()).isEqualTo(generating.evidenceIds());
+        assertThat(refreshed.executionCount()).isEqualTo(generating.executionCount());
     }
 
     @Test

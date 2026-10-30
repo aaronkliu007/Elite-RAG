@@ -25,7 +25,7 @@ public record GenerationPolicy(
             throw new IllegalArgumentException("model timeout must be positive");
         }
         Objects.requireNonNull(recoveryAfter, "recoveryAfter");
-        if (recoveryAfter.isZero() || recoveryAfter.isNegative() || maxExecutions < 1) {
+        if (recoveryAfter.compareTo(modelTimeout) <= 0 || maxExecutions < 1) {
             throw new IllegalArgumentException("invalid generation recovery policy");
         }
     }
@@ -42,5 +42,13 @@ public record GenerationPolicy(
                 1,
                 new PromptRef("solution-section", "v1"),
                 Duration.ofSeconds(60), Duration.ofMinutes(2), 3);
+    }
+
+    public GenerationPolicy requireGatewayTimeout(Duration gatewayTotalTimeout) {
+        Objects.requireNonNull(gatewayTotalTimeout, "gatewayTotalTimeout");
+        if (recoveryAfter.compareTo(gatewayTotalTimeout) <= 0) {
+            throw new IllegalArgumentException("generation recovery lease must exceed gateway timeout");
+        }
+        return this;
     }
 }

@@ -41,6 +41,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -715,6 +716,63 @@ class SectionGenerationServiceTest {
                 "client-section-1", Optional.empty(), 3, at);
     }
 
+    @Test void refreshesAttemptProgressTimeAfterRequestStart() {
+        var fixture = new Fixture(true, (actor, space, solutionId, action, at) -> { },
+                "建设企业知识库", Clock.fixed(NOW.plusSeconds(70), java.time.ZoneOffset.UTC));
+
+        var result = fixture.service.generate(commandAt(NOW));
+
+        assertThat(result.attempt().status()).isEqualTo(GenerationStatus.SUCCEEDED);
+        assertThat(result.attempt().updatedAt()).isEqualTo(NOW.plusSeconds(70));
+    }
+
+    @Test void usesAuthoritativeStoreTimeWhenApplicationClockIsSkewed() {
+        var slowNode = new Fixture(true, (actor, space, solutionId, action, at) -> { },
+                "建设企业知识库", Clock.fixed(NOW.minusSeconds(7_200), java.time.ZoneOffset.UTC));
+        slowNode.attempts.authoritativeTime = NOW;
+        assertThat(slowNode.service.generate(commandAt(NOW.minusSeconds(7_200)))
+                .attempt().updatedAt()).isEqualTo(NOW);
+
+        var fastNode = new Fixture(true, (actor, space, solutionId, action, at) -> { },
+                "建设企业知识库", Clock.fixed(NOW.plusSeconds(7_200), java.time.ZoneOffset.UTC));
+        fastNode.attempts.authoritativeTime = NOW;
+        assertThat(fastNode.service.generate(commandAt(NOW.plusSeconds(7_200)))
+                .attempt().updatedAt()).isEqualTo(NOW);
+    }
+
+    @Test void refreshesGeneratingLeaseAfterSourceChecksBeforeCallingModel() {
+        var time = new java.util.concurrent.atomic.AtomicReference<>(NOW);
+        Clock clock = new Clock() {
+            @Override public java.time.ZoneId getZone() { return java.time.ZoneOffset.UTC; }
+            @Override public Clock withZone(java.time.ZoneId zone) { return this; }
+            @Override public Instant instant() { return time.get(); }
+        };
+        var fixture = new Fixture(true, (actor, space, solutionId, action, at) -> { },
+                "建设企业知识库", clock);
+        fixture.duringEvidenceAuthorization = () -> time.set(NOW.plusSeconds(59));
+        fixture.duringModel = () -> {
+            var active = fixture.attempts.findByClientKey("client-section-1").orElseThrow();
+            assertThat(active.status()).isEqualTo(GenerationStatus.GENERATING);
+            assertThat(active.updatedAt()).isEqualTo(NOW.plusSeconds(59));
+        };
+
+        assertThat(fixture.service.generate(commandAt(NOW)).attempt().status())
+                .isEqualTo(GenerationStatus.SUCCEEDED);
+    }
+
+    @Test void scannerWinningBeforeModelHeartbeatPreventsBillableCall() {
+        var fixture = Fixture.ready();
+        fixture.duringEvidenceAuthorization = () -> {
+            var active = fixture.attempts.findByClientKey("client-section-1").orElseThrow();
+            var expired = active.failRetryable("WORKER_LEASE_EXPIRED", NOW.plusSeconds(120));
+            fixture.attempts.replace(expired, active.revision());
+        };
+
+        assertThatThrownBy(() -> fixture.service.generate(commandAt(NOW)))
+                .isInstanceOf(GenerationRequestConflictException.class);
+        assertThat(fixture.modelCalls).isZero();
+    }
+
     private static UUID id(int suffix) {
         return UUID.fromString("00000000-0000-0000-0000-" + String.format("%012d", suffix));
     }
@@ -739,6 +797,7 @@ class SectionGenerationServiceTest {
         private boolean modelPolicyViolation;
         private Runnable duringModel = () -> { };
         private Runnable duringRetrieval = () -> { };
+        private Runnable duringEvidenceAuthorization = () -> { };
         private boolean evidenceReadable = true;
         private boolean randomEvidenceIdsAfterFirst;
         private CitationVerdict semanticVerdict = CitationVerdict.SUPPORTED;
@@ -757,6 +816,12 @@ class SectionGenerationServiceTest {
         }
 
         private Fixture(boolean confirm, SolutionAuthorizationPort authorizationPort, String requirementText) {
+            this(confirm, authorizationPort, requirementText,
+                    Clock.fixed(NOW, java.time.ZoneOffset.UTC));
+        }
+
+        private Fixture(boolean confirm, SolutionAuthorizationPort authorizationPort,
+                String requirementText, Clock clock) {
             var requirement = requirements(requirementText);
             var outline = outline();
             requirements.insert(requirement);
@@ -823,6 +888,7 @@ class SectionGenerationServiceTest {
             service = new SectionGenerationService(
                     solutions, requirements, outlines, sections, attempts, evidenceSources,
                     authorization, retrieval, (actor, space, selected, at) -> {
+                        duringEvidenceAuthorization.run();
                         if (!evidenceReadable || selected.stream().anyMatch(source -> !source.spaceId().equals(space))) {
                             throw new SecurityException("source not readable");
                         }
@@ -840,7 +906,7 @@ class SectionGenerationServiceTest {
                     }, command -> {
                         audit.add(command);
                         return null;
-                    });
+                    }, clock);
         }
 
         private boolean isCurrent(GenerationKey key) {
@@ -1010,6 +1076,7 @@ class SectionGenerationServiceTest {
     private static final class InMemoryAttemptStore implements GenerationAttemptStore {
         private final Map<String, GenerationAttempt> values = new HashMap<>();
         private final List<String> events;
+        private Instant authoritativeTime;
 
         private InMemoryAttemptStore(List<String> events) {
             this.events = events;
@@ -1018,6 +1085,11 @@ class SectionGenerationServiceTest {
         @Override
         public Optional<GenerationAttempt> findByClientKey(String clientKey) {
             return Optional.ofNullable(values.get(clientKey));
+        }
+
+        @Override
+        public Instant authoritativeNow(Instant fallback) {
+            return authoritativeTime == null ? fallback : authoritativeTime;
         }
 
         @Override

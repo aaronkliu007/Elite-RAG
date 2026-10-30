@@ -11,7 +11,9 @@ import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.testcontainers.containers.PostgreSQLContainer;
 
 import java.sql.DriverManager;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -98,6 +100,101 @@ class JdbcGenerationAttemptStoreIntegrationTest {
             assertThat(results.get(0).attempt()).isEqualTo(results.get(1).attempt());
             assertThat(attempts.findByClientKey(key.clientKey())).contains(results.get(0).attempt());
         }
+    }
+
+    @Test void expiresOnlyStalePreVerificationAttemptsInBoundedBatches() {
+        var dbNow = jdbc.sql("SELECT statement_timestamp()")
+                .query(OffsetDateTime.class).single().toInstant();
+        var staleAt = dbNow.minus(Duration.ofMinutes(4));
+        var pending = GenerationAttempt.start(id(506), seed(500, "stale-pending"), staleAt);
+        attempts.register(pending);
+        var retrievingStart = GenerationAttempt.start(id(606), seed(600, "stale-retrieving"), staleAt);
+        attempts.register(retrievingStart);
+        var retrieving = retrievingStart.startRetrieval(staleAt.plusSeconds(1));
+        attempts.replace(retrieving, retrievingStart.revision());
+        var generatingStart = GenerationAttempt.start(id(706), seed(700, "stale-generating"), staleAt);
+        attempts.register(generatingStart);
+        var generatingRetrieval = generatingStart.startRetrieval(staleAt.plusSeconds(1));
+        attempts.replace(generatingRetrieval, generatingStart.revision());
+        var generating = generatingRetrieval.recordEvidence(id(707), Set.of(id(708)), staleAt.plusSeconds(2));
+        attempts.replace(generating, generatingRetrieval.revision());
+        var verifyingStart = GenerationAttempt.start(id(806), seed(800, "stale-verifying"), staleAt);
+        attempts.register(verifyingStart);
+        var verifyingRetrieval = verifyingStart.startRetrieval(staleAt.plusSeconds(1));
+        attempts.replace(verifyingRetrieval, verifyingStart.revision());
+        var verifyingGenerating = verifyingRetrieval.recordEvidence(id(807), Set.of(id(808)), staleAt.plusSeconds(2));
+        attempts.replace(verifyingGenerating, verifyingRetrieval.revision());
+        var verifying = verifyingGenerating.startVerification(new ModelUsage(1, 1, 1, 1), staleAt.plusSeconds(3));
+        attempts.replace(verifying, verifyingGenerating.revision());
+        var fresh = GenerationAttempt.start(id(906), seed(900, "fresh-pending"), dbNow.minusSeconds(20));
+        attempts.register(fresh);
+
+        var store = new JdbcGenerationAttemptStore(jdbc);
+        for (int scan = 0; scan < 20; scan++) {
+            assertThat(store.expireStale(Duration.ofMinutes(2), 2)).isBetween(0, 2);
+            if (isExpired(pending) && isExpired(retrieving) && isExpired(generating)) break;
+        }
+        assertExpired(pending);
+        assertExpired(retrieving);
+        assertExpired(generating);
+        assertThat(attempts.findByClientKey(verifying.key().clientKey())).contains(verifying);
+        assertThat(attempts.findByClientKey(fresh.key().clientKey())).contains(fresh);
+    }
+
+    @Test void concurrentScannersExpireOneAttemptOnce() throws Exception {
+        var dbNow = jdbc.sql("SELECT statement_timestamp()")
+                .query(OffsetDateTime.class).single().toInstant();
+        var pending = GenerationAttempt.start(id(1006), seed(1000, "concurrent-expiry"),
+                dbNow.minus(Duration.ofMinutes(4)));
+        attempts.register(pending);
+        long eligibleBefore = jdbc.sql("""
+                SELECT count(*) FROM solution_generation_attempt
+                WHERE status IN ('PENDING', 'RETRIEVING', 'GENERATING')
+                  AND updated_at <= statement_timestamp() - INTERVAL '2 minutes'
+                """).query(Long.class).single();
+        var ready = new CountDownLatch(2);
+        var start = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(() -> expireAfterBarrier(ready, start));
+            var second = pool.submit(() -> expireAfterBarrier(ready, start));
+            assertThat(ready.await(5, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+            assertThat(first.get(10, TimeUnit.SECONDS) + second.get(10, TimeUnit.SECONDS))
+                    .isEqualTo(eligibleBefore);
+        }
+        assertExpired(pending);
+    }
+
+    private static int expireAfterBarrier(CountDownLatch ready, CountDownLatch start)
+            throws InterruptedException {
+        ready.countDown();
+        if (!start.await(5, TimeUnit.SECONDS)) throw new AssertionError("scanner did not start");
+        return new JdbcGenerationAttemptStore(JdbcClient.create(dataSource))
+                .expireStale(Duration.ofMinutes(2), 100);
+    }
+
+    private static void assertExpired(GenerationAttempt previous) {
+        var actual = attempts.findByClientKey(previous.key().clientKey()).orElseThrow();
+        assertThat(actual.status()).isEqualTo(GenerationStatus.FAILED_RETRYABLE);
+        assertThat(actual.retryCheckpoint()).contains(previous.status());
+        assertThat(actual.failureCode()).contains("WORKER_LEASE_EXPIRED");
+        assertThat(actual.revision()).isEqualTo(previous.revision() + 1);
+        assertThat(actual.executionCount()).isEqualTo(previous.executionCount());
+    }
+
+    private static boolean isExpired(GenerationAttempt previous) {
+        return attempts.findByClientKey(previous.key().clientKey()).orElseThrow().status()
+                == GenerationStatus.FAILED_RETRYABLE;
+    }
+
+    @Test void usesDatabaseTimeEvenWhenApplicationClockDiffers() {
+        var dbNow = jdbc.sql("SELECT statement_timestamp()")
+                .query(OffsetDateTime.class).single().toInstant();
+        var store = new JdbcGenerationAttemptStore(jdbc);
+        assertThat(store.authoritativeNow(dbNow.minus(Duration.ofHours(2))))
+                .isBetween(dbNow.minusSeconds(2), dbNow.plusSeconds(5));
+        assertThat(store.authoritativeNow(dbNow.plus(Duration.ofHours(2))))
+                .isBetween(dbNow.minusSeconds(2), dbNow.plusSeconds(5));
     }
 
     private static GenerationAttemptRegistration registerAfterBarrier(GenerationKey key, UUID attemptId,
