@@ -296,6 +296,7 @@ class RetrievalContractTest {
         reasons.clear();
 
         assertThat(pack.evidence()).containsExactly(evidence);
+        assertThat(pack.conflictScreeningEvidence()).containsExactly(evidence);
         assertThat(pack.degradationReasons()).containsExactly(DegradationReason.VECTOR_UNAVAILABLE);
         assertThatThrownBy(() -> pack.evidence().clear())
                 .isInstanceOf(UnsupportedOperationException.class);
@@ -307,6 +308,16 @@ class RetrievalContractTest {
                 REQUEST_ID, List.of(), false, Set.of(DegradationReason.VECTOR_UNAVAILABLE), stats,
                 Instant.parse("2026-09-28T02:00:00Z")))
                 .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new EvidencePack(REQUEST_ID, List.of(evidence), false, Set.of(), stats,
+                Instant.parse("2026-09-28T02:00:00Z"), List.of()))
+                .isInstanceOf(IllegalArgumentException.class);
+        var mutableScreening = new java.util.ArrayList<>(List.of(evidence));
+        var expanded = new EvidencePack(REQUEST_ID, List.of(evidence), false, Set.of(), stats,
+                Instant.parse("2026-09-28T02:00:00Z"), mutableScreening);
+        mutableScreening.clear();
+        assertThat(expanded.conflictScreeningEvidence()).containsExactly(evidence);
+        assertThatThrownBy(() -> expanded.conflictScreeningEvidence().clear())
+                .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(() -> new RetrievalStats(0, 0, 0, -1, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }

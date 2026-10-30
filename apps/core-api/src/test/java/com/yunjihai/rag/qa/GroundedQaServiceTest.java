@@ -149,6 +149,40 @@ class GroundedQaServiceTest {
     }
 
     @Test
+    void refusesConflictInAuthorizedCandidatesBeyondSelectedEvidence() {
+        var harness = new Harness();
+        var selected = evidence(8, 0.9);
+        var screening = new ArrayList<>(selected);
+        var locator = new MarkdownLocator(List.of("审批"), "node-extra");
+        screening.add(new Evidence(id(10), id(900), id(901), id(902), "node-extra-1",
+                "审批一", "该方案已经批准。", 0.1, locator));
+        screening.add(new Evidence(id(10), id(903), id(904), id(905), "node-extra-2",
+                "审批二", "该方案未批准。", 0.1, locator));
+        harness.pack = new EvidencePack(id(1), selected, false, Set.of(),
+                new RetrievalStats(10, 0, 10, 10, 8), NOW, screening);
+
+        assertThat(harness.service().ask(command("方案是否批准？")))
+                .isEqualTo(new QaOutcome.Refused(id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void neverSendsExtraScreeningCandidatesToModel() {
+        var harness = new Harness();
+        var selected = evidence(8, 0.9);
+        var screening = new ArrayList<>(selected);
+        screening.add(new Evidence(id(10), id(950), id(951), id(952), "extra",
+                "额外候选", "只用于内部冲突筛查", 0.1,
+                new MarkdownLocator(List.of("其他"), "extra")));
+        harness.pack = new EvidencePack(id(1), selected, false, Set.of(),
+                new RetrievalStats(9, 0, 9, 9, 8), NOW, screening);
+
+        assertThat(harness.service().ask(command("问题"))).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(harness.prompt.get().evidence().evidence()).hasSize(8)
+                .extracting(item -> item.title()).doesNotContain("额外候选");
+    }
+
+    @Test
     void recordsAuthorizedRetrievalIdentitiesForEvaluationBeforeConflictRefusal() {
         var harness = new Harness();
         harness.traces.begin(id(1));
@@ -172,6 +206,28 @@ class GroundedQaServiceTest {
 
         assertThat(outcome).isEqualTo(new QaOutcome.Refused(
                 id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void refusesWhenConflictScreeningExceedsFactLimit() {
+        var harness = new Harness();
+        var selected = evidence(8, 0.9);
+        var screening = new ArrayList<>(selected);
+        for (int index = 0; index < 30; index++) {
+            int item = index;
+            String text = java.util.stream.IntStream.range(0, 50)
+                    .mapToObj(fact -> "指标" + item + "项" + fact + "为1天；")
+                    .collect(java.util.stream.Collectors.joining());
+            screening.add(new Evidence(id(10), id(1000 + index), id(1100 + index), id(1200 + index),
+                    "dense-" + index, "密集资料", text, 0.1,
+                    new MarkdownLocator(List.of("章节"), "dense-" + index)));
+        }
+        harness.pack = new EvidencePack(id(1), selected, false, Set.of(),
+                new RetrievalStats(38, 0, 38, 38, 8), NOW, screening);
+
+        assertThat(harness.service().ask(command("问题")))
+                .isEqualTo(new QaOutcome.Refused(id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
         assertThat(harness.modelCalls).hasValue(0);
     }
 

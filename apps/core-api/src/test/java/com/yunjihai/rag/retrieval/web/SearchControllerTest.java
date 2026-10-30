@@ -45,6 +45,22 @@ class SearchControllerTest {
     private static final UUID SPACE = id(2);
 
     @Test
+    void doesNotExposeInternalConflictScreeningCandidates() {
+        var selected = new Evidence(SPACE, id(10), id(11), id(12), "selected", "可展示",
+                "可展示正文", 1.0, new MarkdownLocator(List.of("章节"), "selected"));
+        var hidden = new Evidence(SPACE, id(20), id(21), id(22), "screened", "内部筛查材料",
+                "内部筛查正文", 0.5, new MarkdownLocator(List.of("章节"), "screened"));
+        var pack = new EvidencePack(id(100), List.of(selected), false, Set.of(),
+                new RetrievalStats(2, 0, 2, 2, 1), NOW, List.of(selected, hidden));
+
+        var response = SearchResponse.from(pack);
+
+        assertThat(response.evidence()).hasSize(1).extracting(SearchResponse.EvidenceView::title)
+                .containsExactly("可展示");
+        assertThat(response.toString()).doesNotContain("内部筛查材料", "内部筛查正文");
+    }
+
+    @Test
     void rejectsInvalidQueriesBeforeCallingRetrieval() {
         var calls = new AtomicInteger();
         var controller = controller(query -> {

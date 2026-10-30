@@ -228,7 +228,7 @@ public final class GroundedQaService {
                     command.requestId(), RefusalReason.INSUFFICIENT_EVIDENCE, pack.degraded()));
         }
         try {
-            if (conflictDetector.hasConflict(pack.evidence())) {
+            if (conflictDetector.hasConflict(pack.conflictScreeningEvidence())) {
                 return complete(state, command.actorId(), new QaOutcome.Refused(
                         command.requestId(), RefusalReason.CONFLICTING_EVIDENCE, pack.degraded()));
             }

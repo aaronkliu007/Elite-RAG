@@ -122,6 +122,42 @@ class TrustedRetrievalServiceTest {
     }
 
     @Test
+    void retainsOnlyReauthorizedCandidatesForConflictScreeningBeforeSelection() {
+        var candidates = new ArrayList<Candidate>();
+        for (int index = 1; index <= 13; index++) {
+            candidates.add(candidate(index, 100 + index, RecallSource.LEXICAL, index,
+                    "第" + index + "个不同候选的正文"));
+        }
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var policy = RetrievalPolicy.defaults();
+            var ids = new AtomicInteger(5000);
+            var service = new TrustedRetrievalService(
+                    (userId, at) -> Set.of(new PrincipalRef(PrincipalType.USER, userId)),
+                    new HybridRecallService((query, filter, limit) -> candidates,
+                            (query, filter, limit) -> List.of(), executor, policy),
+                    new RerankingService((query, values) -> values.stream()
+                            .map(value -> new RerankScore(value.candidate().candidateId(), value.score())).toList(),
+                            executor, policy),
+                    (userId, requested, at) -> flatten(requested).stream()
+                            .filter(version -> !version.documentId().equals(uuid(113)))
+                            .collect(java.util.stream.Collectors.toUnmodifiableSet()),
+                    new EvidenceSelectionService(policy), at -> uuid(ids.incrementAndGet()), policy,
+                    Clock.fixed(NOW, ZoneOffset.UTC), command -> null);
+
+            var result = service.retrieve(new RetrievalQuery(
+                    REQUEST_ID, USER_ID, Set.of(SPACE_ID), "证据", Map.of(), 8));
+
+            assertThat(result.evidence()).hasSize(8);
+            assertThat(result.conflictScreeningEvidence()).hasSize(12)
+                    .extracting(item -> item.documentId()).doesNotContain(uuid(113))
+                    .contains(uuid(111), uuid(112));
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
     void groupsFinalAuthorizationByCandidateSpaceAndPreservesSpaceInEvidence() {
         var secondSpace = uuid(4);
         var first = new Candidate(

@@ -134,6 +134,8 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                 var pack = retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(), scenario.user(),
                         Set.of(scenario.space()), scenario.sample().question(), Map.of(), 10));
                 assertThat(pack.evidence()).allSatisfy(e -> assertThat(scenario.ids()).containsKey(e.documentId()));
+                assertThat(pack.conflictScreeningEvidence())
+                        .allSatisfy(e -> assertThat(scenario.ids()).containsKey(e.documentId()));
                 assertThat(pack.stats().reauthorizedCount()).isGreaterThanOrEqualTo(pack.evidence().size());
                 var ids = pack.evidence().stream().map(e -> scenario.ids().get(e.documentId())).toList();
                 var result = RelevanceBenchmark.measure(scenario.sample(), ids);
@@ -145,7 +147,8 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                 uncertainPairsComplete += result.uncertainPairsComplete();
                 uncertainPairsPartial += result.uncertainPairsPartial();
                 if (pack.evidence().size() < com.yunjihai.rag.qa.QaPolicy.defaults().minEvidenceCount()) belowMinimum++;
-                boolean conflictDetected = detector.hasConflict(pack.evidence());
+                boolean selectedConflictDetected = detector.hasConflict(pack.evidence());
+                boolean conflictDetected = detector.hasConflict(pack.conflictScreeningEvidence());
                 context.getBean(com.yunjihai.rag.access.role.RoleAssignmentStore.class).grantSpaceRole(
                         scenario.space(), scenario.user(), com.yunjihai.rag.access.role.SpaceRole.SPACE_ADMIN,
                         scenario.user(), Instant.now());
@@ -157,6 +160,15 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                 long audits = jdbc.sql("SELECT count(*) FROM qa_model_call_audit WHERE request_id=:id")
                         .param("id", requestId).query(Long.class).single();
                 assertThat(audits).isEqualTo(calls);
+                var screenedIds = pack.conflictScreeningEvidence().stream()
+                        .map(e -> scenario.ids().get(e.documentId())).collect(java.util.stream.Collectors.toSet());
+                for (var pair : scenario.sample().conflicts()) {
+                    if (pair.scope() != RelevanceBenchmark.Judgment.IRRELEVANT) {
+                        assertThat(screenedIds).contains(pair.first(), pair.second());
+                        assertThat(outcome).isInstanceOf(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class);
+                        assertThat(calls).isZero();
+                    }
+                }
                 if (conflictDetected && pack.evidence().size() >= com.yunjihai.rag.qa.QaPolicy.defaults().minEvidenceCount()) {
                     assertThat(outcome).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
                             refused -> assertThat(refused.reason()).isEqualTo(
@@ -175,7 +187,8 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                     if (answerLabel.equals("IRRELEVANT")) answersUsingIrrelevant++;
                 }
                 System.out.println("RELEVANCE_CASE id=" + scenario.sample().id() + " evidence=" + ids
-                        + " conflictDetected=" + conflictDetected + " qaStatus=" + outcome.status()
+                        + " selectedConflict=" + selectedConflictDetected + " candidateConflict=" + conflictDetected
+                        + " screeningCount=" + pack.conflictScreeningEvidence().size() + " qaStatus=" + outcome.status()
                         + " fakeModelCalls=" + calls + " fakeAnswerLabel=" + answerLabel + " result=" + result);
             }
             var first = scenarios.getFirst();
@@ -191,6 +204,7 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             assertThat(afterRevocation.stats().fusedCount()).isPositive();
             assertThat(afterRevocation.stats().reauthorizedCount()).isZero();
             assertThat(afterRevocation.evidence()).isEmpty();
+            assertThat(afterRevocation.conflictScreeningEvidence()).isEmpty();
             System.out.println("RELEVANCE_BASELINE version=" + dataset.version() + " cases=" + scenarios.size()
                     + " relevant=" + relevantRetrieved + "/" + relevantTotal
                     + " irrelevantRetrieved=" + irrelevantRetrieved + " uncertainRetrieved=" + uncertainRetrieved

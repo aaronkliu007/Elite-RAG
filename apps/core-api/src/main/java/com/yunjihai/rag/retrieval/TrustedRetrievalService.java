@@ -209,7 +209,8 @@ public final class TrustedRetrievalService implements RetrievalService {
                 !progress.reasons.isEmpty(),
                 progress.reasons,
                 stats,
-                completedAt);
+                completedAt,
+                toConflictScreeningEvidence(reauthorized));
     }
 
     private Set<PrincipalRef> resolvePrincipals(RetrievalQuery query, Instant startedAt) {
@@ -286,6 +287,15 @@ public final class TrustedRetrievalService implements RetrievalService {
                     candidate.locator()));
         }
         return List.copyOf(evidence);
+    }
+
+    private static List<Evidence> toConflictScreeningEvidence(List<ScoredCandidate> candidates) {
+        return candidates.stream().map(scored -> {
+            var candidate = scored.candidate();
+            return new Evidence(candidate.spaceId(), candidate.candidateId(), candidate.documentId(),
+                    candidate.versionId(), candidate.nodeId(), candidate.title(),
+                    truncate(candidate.text(), 1200), scored.score(), candidate.locator());
+        }).toList();
     }
 
     private List<ScoredCandidate> sanitizeForReranking(List<ScoredCandidate> candidates) {

@@ -16,6 +16,7 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 public final class DeterministicEvidenceConflictDetector implements EvidenceConflictDetector {
+    private static final int MAX_EXTRACTED_FACTS = 1024;
     private static final Pattern FACT=Pattern.compile(
             "([\\p{IsHan}A-Za-z0-9_（）()·\\-/ ]{2,40})\\s*"
                     + "(?:设置为|设为|定为|[:：]|(?<!设置)(?<!设)(?<!定)为|是)"
@@ -39,7 +40,10 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
         if(hasIdentityConflict(items))return true;
         if(hasApprovalConflict(items))return true;
         var facts=new ArrayList<Fact>();
-        items.forEach(item->facts.addAll(extract(item)));
+        for (var item : items) {
+            facts.addAll(extract(item));
+            requireBounded(facts.size());
+        }
         for(int left=0;left<facts.size();left++){
             for(int right=left+1;right<facts.size();right++){
                 Fact first=facts.get(left);
@@ -61,6 +65,7 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
                 boolean approved = !(state.startsWith("未") || state.startsWith("尚未")
                         || state.startsWith("没有") || state.startsWith("不予"));
                 facts.add(new ApprovalFact(item.evidenceId(), normalizeKey(matcher.group(1)), approved));
+                requireBounded(facts.size());
             }
         }
         for (int left = 0; left < facts.size(); left++) {
@@ -84,6 +89,10 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
             if(existing!=null&&!existing.equals(content))return true;
         }
         return false;
+    }
+
+    private static void requireBounded(int count) {
+        if (count > MAX_EXTRACTED_FACTS) throw new IllegalStateException("CONFLICT_SCREENING_LIMIT_EXCEEDED");
     }
 
     private static List<Fact> extract(Evidence evidence){

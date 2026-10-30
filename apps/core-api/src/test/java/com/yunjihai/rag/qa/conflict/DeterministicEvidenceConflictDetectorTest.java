@@ -12,10 +12,40 @@ import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 class DeterministicEvidenceConflictDetectorTest {
     private final DeterministicEvidenceConflictDetector detector=
             new DeterministicEvidenceConflictDetector();
+
+    @Test
+    void failsClosedWithinBoundedWorkForDenseScreeningCandidates() {
+        var dense = java.util.stream.IntStream.range(0, 30).mapToObj(index -> {
+            String text = java.util.stream.IntStream.range(0, 50)
+                    .mapToObj(fact -> "指标" + index + "项" + fact + "为1天；")
+                    .collect(java.util.stream.Collectors.joining());
+            return evidence(index + 1, text);
+        }).toList();
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), () ->
+                assertThatThrownBy(() -> detector.hasConflict(dense))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage("CONFLICT_SCREENING_LIMIT_EXCEEDED"));
+    }
+
+    @Test
+    void failsClosedWhenApprovalFactsExceedTheLimit() {
+        var dense = java.util.stream.IntStream.range(0, 30).mapToObj(index -> {
+            String text = java.util.stream.IntStream.range(0, 50)
+                    .mapToObj(fact -> "方案" + index + "项" + fact + "已批准；")
+                    .collect(java.util.stream.Collectors.joining());
+            return evidence(index + 1, text);
+        }).toList();
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), () ->
+                assertThatThrownBy(() -> detector.hasConflict(dense))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessage("CONFLICT_SCREENING_LIMIT_EXCEEDED"));
+    }
 
     @ParameterizedTest
     @MethodSource("conflictingFacts")
