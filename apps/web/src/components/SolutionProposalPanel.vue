@@ -34,6 +34,15 @@ function fail(failure: unknown) {
   error.value = failure instanceof ApiRequestError ? failure.displayMessage : '操作失败，当前候选已保留'
 }
 function setBusy(value: boolean) { busy.value = value; emit('busyChange', value) }
+function discard() {
+  if (props.disabled || busy.value || adoptionKey.value
+      || !attempt.value || !['FAILED', 'SUCCEEDED'].includes(attempt.value.status)) return
+  sessionStorage.removeItem(storageKey)
+  attempt.value = null
+  clientKey.value = ''
+  reviewed.value = false
+  error.value = ''
+}
 async function generate() {
   if (props.disabled || busy.value || attempt.value) return
   clientKey.value ||= crypto.randomUUID()
@@ -130,6 +139,16 @@ onUnmounted(() => { disposed = true })
         @click="refresh"
       >
         查询原请求
+      </button>
+      <button
+        v-if="attempt && ['FAILED', 'SUCCEEDED'].includes(attempt.status) && !adoptionKey"
+        class="button button-secondary"
+        type="button"
+        data-action="discard-proposal"
+        :disabled="disabled || busy"
+        @click="discard"
+      >
+        放弃本次候选
       </button>
     </div>
     <p
