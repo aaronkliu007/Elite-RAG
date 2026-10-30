@@ -3,6 +3,7 @@ package com.yunjihai.rag.infrastructure.model;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import com.yunjihai.rag.retrieval.domain.ScoredCandidate;
 import com.yunjihai.rag.retrieval.selection.RerankScore;
 import com.yunjihai.rag.retrieval.selection.RerankerPort;
@@ -16,11 +17,14 @@ public final class OpenAiRerankerAdapter implements RerankerPort {
     private static final int MAX_CANDIDATES = 100;
     private final ApprovedModelGatewayProperties properties;
     private final OpenAiCompatibleClient client;
+    private final SensitiveContentSanitizer sanitizer;
 
     public OpenAiRerankerAdapter(
-            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client) {
+            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client,
+            SensitiveContentSanitizer sanitizer) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.client = Objects.requireNonNull(client, "client must not be null");
+        this.sanitizer = Objects.requireNonNull(sanitizer, "sanitizer must not be null");
     }
 
     @Override
@@ -32,7 +36,7 @@ public final class OpenAiRerankerAdapter implements RerankerPort {
         var requestedIds = new HashSet<UUID>();
         var request = JsonNodeFactory.instance.objectNode();
         request.put("model", properties.rerankerModel());
-        request.put("query", queryText);
+        request.put("query", ModelOutboundTextPolicy.requireAlreadySanitized(sanitizer, queryText));
         var documents = request.putArray("documents");
         for (var scored : candidates) {
             var candidate = scored.candidate();
@@ -41,7 +45,7 @@ public final class OpenAiRerankerAdapter implements RerankerPort {
             }
             var item = documents.addObject();
             item.put("candidate_id", candidate.candidateId().toString());
-            item.put("text", candidate.text());
+            item.put("text", ModelOutboundTextPolicy.requireAlreadySanitized(sanitizer, candidate.text()));
         }
 
         JsonNode results = client.post(ModelEndpoint.RERANK, request).body().path("results");

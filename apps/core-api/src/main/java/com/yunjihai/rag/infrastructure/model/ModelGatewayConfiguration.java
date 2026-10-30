@@ -46,24 +46,27 @@ public class ModelGatewayConfiguration {
     @Primary
     @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "true")
     EmbeddingPort approvedEmbeddingPort(
-            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client) {
-        return new OpenAiEmbeddingAdapter(properties, client);
+            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client,
+            SensitiveContentSanitizer sanitizer) {
+        return new OpenAiEmbeddingAdapter(properties, client, sanitizer);
     }
 
     @Bean
     @Primary
     @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "true")
     RerankerPort approvedRerankerPort(
-            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client) {
-        return new OpenAiRerankerAdapter(properties, client);
+            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client,
+            SensitiveContentSanitizer sanitizer) {
+        return new OpenAiRerankerAdapter(properties, client, sanitizer);
     }
 
     @Bean
     @Primary
     @ConditionalOnProperty(name = "rag.ai.enabled", havingValue = "true")
     ChatCompletionPort approvedChatCompletionPort(
-            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client) {
-        return new OpenAiChatCompletionAdapter(properties, client, new ObjectMapper());
+            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client,
+            SensitiveContentSanitizer sanitizer) {
+        return new OpenAiChatCompletionAdapter(properties, client, new ObjectMapper(), sanitizer);
     }
 
     @Bean

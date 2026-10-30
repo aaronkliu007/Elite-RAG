@@ -3,6 +3,7 @@ package com.yunjihai.rag.infrastructure.model;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import com.yunjihai.rag.retrieval.embedding.EmbeddingPort;
 import com.yunjihai.rag.retrieval.embedding.EmbeddingVector;
 
@@ -15,11 +16,14 @@ public final class OpenAiEmbeddingAdapter implements EmbeddingPort {
     private static final int MAX_BATCH_SIZE = 128;
     private final ApprovedModelGatewayProperties properties;
     private final OpenAiCompatibleClient client;
+    private final SensitiveContentSanitizer sanitizer;
 
     public OpenAiEmbeddingAdapter(
-            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client) {
+            ApprovedModelGatewayProperties properties, OpenAiCompatibleClient client,
+            SensitiveContentSanitizer sanitizer) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.client = Objects.requireNonNull(client, "client must not be null");
+        this.sanitizer = Objects.requireNonNull(sanitizer, "sanitizer must not be null");
     }
 
     @Override
@@ -31,7 +35,7 @@ public final class OpenAiEmbeddingAdapter implements EmbeddingPort {
         var request = JsonNodeFactory.instance.objectNode();
         request.put("model", properties.embeddingModel());
         var input = request.putArray("input");
-        texts.forEach(input::add);
+        texts.forEach(text -> input.add(ModelOutboundTextPolicy.requireAlreadySanitized(sanitizer, text)));
 
         JsonNode data = client.post(ModelEndpoint.EMBEDDINGS, request).body().path("data");
         if (!data.isArray() || data.size() != texts.size()) throw invalidResponse();

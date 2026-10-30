@@ -7,6 +7,7 @@ import com.yunjihai.rag.qa.domain.QaEvidence;
 import com.yunjihai.rag.qa.domain.QaQuestion;
 import com.yunjihai.rag.qa.model.GroundedAnswerPrompt;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
+import com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer;
 import com.yunjihai.rag.retrieval.domain.Candidate;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
 import com.yunjihai.rag.retrieval.domain.RecallSource;
@@ -25,11 +26,15 @@ import java.util.UUID;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.containing;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
+import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class OpenAiAdaptersTest {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final RegexSensitiveContentSanitizer SANITIZER =
+            new RegexSensitiveContentSanitizer(Set.of());
     private WireMockServer server;
     private ApprovedModelGatewayProperties properties;
     private OpenAiCompatibleClient client;
@@ -64,7 +69,7 @@ class OpenAiAdaptersTest {
                         ]}
                         """)));
 
-        var result = new OpenAiEmbeddingAdapter(properties, client).embedAll(List.of("one", "two"));
+        var result = new OpenAiEmbeddingAdapter(properties, client, SANITIZER).embedAll(List.of("one", "two"));
 
         assertThat(result).hasSize(2);
         assertThat(result.get(0).values()).containsExactly(0.1, 0.2);
@@ -80,10 +85,19 @@ class OpenAiAdaptersTest {
                 ]}
                 """)));
 
-        assertThatThrownBy(() -> new OpenAiEmbeddingAdapter(properties, client).embedAll(List.of("one", "two")))
+        assertThatThrownBy(() -> new OpenAiEmbeddingAdapter(properties, client, SANITIZER).embedAll(List.of("one", "two")))
                 .isInstanceOf(ModelGatewayException.class)
                 .extracting("kind")
                 .isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
+    }
+
+    @Test
+    void rejectsUnsanitizedEmbeddingBatchBeforeProviderCall() {
+        assertThatThrownBy(() -> new OpenAiEmbeddingAdapter(properties, client, SANITIZER)
+                .embedAll(List.of("safe text", "alice@example.com")))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        server.verify(0, postRequestedFor(urlEqualTo("/v1/embeddings")));
     }
 
     @Test
@@ -97,7 +111,7 @@ class OpenAiAdaptersTest {
                 ]}
                 """.formatted(first.candidate().candidateId(), second.candidate().candidateId()))));
 
-        var scores = new OpenAiRerankerAdapter(properties, client)
+        var scores = new OpenAiRerankerAdapter(properties, client, SANITIZER)
                 .rerank("safe query", List.of(first, second));
 
         assertThat(scores).extracting(score -> score.candidateId()).containsExactly(
@@ -107,7 +121,7 @@ class OpenAiAdaptersTest {
         server.stubFor(post("/v1/rerank").willReturn(json("""
                 {"results":[{"candidate_id":"%s","score":0.9}]}
                 """.formatted(UUID.randomUUID()))));
-        assertThatThrownBy(() -> new OpenAiRerankerAdapter(properties, client)
+        assertThatThrownBy(() -> new OpenAiRerankerAdapter(properties, client, SANITIZER)
                 .rerank("safe query", List.of(first)))
                 .isInstanceOf(ModelGatewayException.class)
                 .extracting("kind")
@@ -125,11 +139,26 @@ class OpenAiAdaptersTest {
                 ]}
                 """.formatted(first.candidate().candidateId(), first.candidate().candidateId()))));
 
-        assertThatThrownBy(() -> new OpenAiRerankerAdapter(properties, client)
+        assertThatThrownBy(() -> new OpenAiRerankerAdapter(properties, client, SANITIZER)
                 .rerank("safe query", List.of(first, second)))
                 .isInstanceOf(ModelGatewayException.class)
                 .extracting("kind")
                 .isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
+    }
+
+    @Test
+    void rejectsUnsanitizedRerankQueryAndCandidateBeforeProviderCall() {
+        var candidate = candidate(UUID.randomUUID(), "safe text");
+        assertThatThrownBy(() -> new OpenAiRerankerAdapter(properties, client, SANITIZER)
+                .rerank("alice@example.com", List.of(candidate)))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        assertThatThrownBy(() -> new OpenAiRerankerAdapter(properties, client, SANITIZER)
+                .rerank("safe query", List.of(candidate(UUID.randomUUID(),
+                        "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----"))))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        server.verify(0, postRequestedFor(urlEqualTo("/v1/rerank")));
     }
 
     @Test
@@ -147,7 +176,7 @@ class OpenAiAdaptersTest {
                         }
                         """.formatted(claimId, evidenceId))));
 
-        var generation = new OpenAiChatCompletionAdapter(properties, client, JSON)
+        var generation = new OpenAiChatCompletionAdapter(properties, client, JSON, SANITIZER)
                 .generate(prompt(evidenceId));
 
         assertThat(generation.answer().answer()).isEqualTo("根据证据，制度已生效。");
@@ -156,7 +185,7 @@ class OpenAiAdaptersTest {
         assertThat(generation.usage().totalTokens()).isEqualTo(150);
         assertThat(generation.providerRequestId()).isEqualTo("req-chat-1");
         assertThat(generation.retryCount()).isZero();
-        assertThat(new OpenAiChatCompletionAdapter(properties, client, JSON).descriptor())
+        assertThat(new OpenAiChatCompletionAdapter(properties, client, JSON, SANITIZER).descriptor())
                 .satisfies(descriptor -> {
                     assertThat(descriptor.provider()).isEqualTo("approved-openai-compatible");
                     assertThat(descriptor.endpointIdentifier()).isEqualTo("chat-completions");
@@ -176,11 +205,58 @@ class OpenAiAdaptersTest {
                 }
                 """.formatted(UUID.randomUUID(), UUID.randomUUID()))));
 
-        assertThatThrownBy(() -> new OpenAiChatCompletionAdapter(properties, client, JSON)
+        assertThatThrownBy(() -> new OpenAiChatCompletionAdapter(properties, client, JSON, SANITIZER)
                 .generate(prompt(knownEvidence)))
                 .isInstanceOf(ModelGatewayException.class)
                 .extracting("kind")
                 .isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
+    }
+
+    @Test
+    void rejectsUnsanitizedChatQuestionAndEvidenceBeforeProviderCall() {
+        var safe = prompt(UUID.randomUUID());
+        var unsafeQuestion = new GroundedAnswerPrompt(
+                QaQuestion.normalize("联系 alice@example.com"), safe.evidence(),
+                safe.language(), safe.policyVersion(), safe.promptVersion(), safe.maxOutputCodePoints());
+        assertThatThrownBy(() -> new OpenAiChatCompletionAdapter(properties, client, JSON, SANITIZER)
+                .generate(unsafeQuestion))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+
+        var original = safe.evidence().evidence().getFirst();
+        var unsafeEvidence = new QaEvidence(original.evidenceId(), original.spaceId(),
+                original.documentId(), original.versionId(), original.nodeId(),
+                original.title(), "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----",
+                original.score(), original.locator());
+        var unsafeBundle = new EvidenceBundle(List.of(unsafeEvidence),
+                unsafeEvidence.excerpt().codePointCount(0, unsafeEvidence.excerpt().length()));
+        var unsafePrompt = new GroundedAnswerPrompt(safe.question(), unsafeBundle,
+                safe.language(), safe.policyVersion(), safe.promptVersion(), safe.maxOutputCodePoints());
+        assertThatThrownBy(() -> new OpenAiChatCompletionAdapter(properties, client, JSON, SANITIZER)
+                .generate(unsafePrompt))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        server.verify(0, postRequestedFor(urlEqualTo("/v1/chat/completions")));
+    }
+
+    @Test
+    void rejectsUnsanitizedChatVersionBeforeProviderCall() {
+        var safe = prompt(UUID.randomUUID());
+        var unsafePolicyVersion = new GroundedAnswerPrompt(
+                safe.question(), safe.evidence(), safe.language(), "sk-ABCD1234",
+                safe.promptVersion(), safe.maxOutputCodePoints());
+        assertThatThrownBy(() -> new OpenAiChatCompletionAdapter(properties, client, JSON, SANITIZER)
+                .generate(unsafePolicyVersion))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        var unsafePromptVersion = new GroundedAnswerPrompt(
+                safe.question(), safe.evidence(), safe.language(), safe.policyVersion(),
+                "sk-ABCD1234", safe.maxOutputCodePoints());
+        assertThatThrownBy(() -> new OpenAiChatCompletionAdapter(properties, client, JSON, SANITIZER)
+                .generate(unsafePromptVersion))
+                .isInstanceOf(ModelGatewayException.class)
+                .extracting("kind").isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        server.verify(0, postRequestedFor(urlEqualTo("/v1/chat/completions")));
     }
 
     @Test
@@ -200,7 +276,7 @@ class OpenAiAdaptersTest {
                 """)));
 
         try (var limitedClient = new OpenAiCompatibleClient(limited, JSON, new ModelUsagePolicy(limited))) {
-            assertThatThrownBy(() -> new OpenAiChatCompletionAdapter(limited, limitedClient, JSON)
+            assertThatThrownBy(() -> new OpenAiChatCompletionAdapter(limited, limitedClient, JSON, SANITIZER)
                     .generate(prompt(UUID.randomUUID())))
                     .isInstanceOf(ModelGatewayException.class)
                     .extracting("kind")

@@ -13,6 +13,7 @@ import com.yunjihai.rag.qa.model.ModelGatewayException;
 import com.yunjihai.rag.qa.model.ModelCallDescriptor;
 import com.yunjihai.rag.qa.model.ModelGeneration;
 import com.yunjihai.rag.qa.model.ModelUsage;
+import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -31,14 +32,17 @@ public final class OpenAiChatCompletionAdapter implements ChatCompletionPort {
     private final ApprovedModelGatewayProperties properties;
     private final OpenAiCompatibleClient client;
     private final ObjectMapper json;
+    private final SensitiveContentSanitizer sanitizer;
 
     public OpenAiChatCompletionAdapter(
             ApprovedModelGatewayProperties properties,
             OpenAiCompatibleClient client,
-            ObjectMapper json) {
+            ObjectMapper json,
+            SensitiveContentSanitizer sanitizer) {
         this.properties = Objects.requireNonNull(properties, "properties must not be null");
         this.client = Objects.requireNonNull(client, "client must not be null");
         this.json = Objects.requireNonNull(json, "json must not be null");
+        this.sanitizer = Objects.requireNonNull(sanitizer, "sanitizer must not be null");
     }
 
     @Override
@@ -86,15 +90,18 @@ public final class OpenAiChatCompletionAdapter implements ChatCompletionPort {
         var messages = root.putArray("messages");
         messages.addObject().put("role", "system").put("content", SYSTEM_INSTRUCTION);
         var userPayload = JsonNodeFactory.instance.objectNode();
-        userPayload.put("language", prompt.language());
-        userPayload.put("policyVersion", prompt.policyVersion());
-        userPayload.put("promptVersion", prompt.promptVersion());
-        userPayload.put("question", prompt.question().value());
+        userPayload.put("language", ModelOutboundTextPolicy.requireAlreadySanitized(sanitizer, prompt.language()));
+        userPayload.put("policyVersion", ModelOutboundTextPolicy.requireAlreadySanitized(
+                sanitizer, prompt.policyVersion()));
+        userPayload.put("promptVersion", ModelOutboundTextPolicy.requireAlreadySanitized(
+                sanitizer, prompt.promptVersion()));
+        userPayload.put("question", ModelOutboundTextPolicy.requireAlreadySanitized(
+                sanitizer, prompt.question().value()));
         var evidence = userPayload.putArray("evidence");
         prompt.evidence().evidence().forEach(item -> evidence.addObject()
                 .put("evidenceId", item.evidenceId().toString())
-                .put("title", item.title())
-                .put("excerpt", item.excerpt()));
+                .put("title", ModelOutboundTextPolicy.requireAlreadySanitized(sanitizer, item.title()))
+                .put("excerpt", ModelOutboundTextPolicy.requireAlreadySanitized(sanitizer, item.excerpt())));
         messages.addObject().put("role", "user").put("content", compactJson(userPayload));
         var responseFormat = root.putObject("response_format");
         responseFormat.put("type", "json_schema");
