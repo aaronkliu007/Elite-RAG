@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ApiRequestError } from '../api/http'
 import { solutionsApi, type ProposalKind, type SolutionProposal } from '../api/solutions'
+import { formatSolutionLocator } from '../api/solutionLocator'
 
 const props = defineProps<{ actorId: string, solutionId: string, kind: ProposalKind, revision: number,
   currentTexts: string[], disabled: boolean }>()
@@ -187,6 +188,9 @@ onUnmounted(() => { disposed = true })
             {{ text }}
           </li>
         </ol>
+        <p v-if="attempt.result.kind === 'REQUIREMENTS' && attempt.result.items.some(item => item.sources.length)">
+          打开的是文档当前版本，请核对记录的来源版本和位置；页面不会自动定位。
+        </p>
         <ul
           v-if="attempt.result.kind === 'REQUIREMENTS'"
           class="sources"
@@ -202,10 +206,12 @@ onUnmounted(() => { disposed = true })
               class="source-ref"
             >
               文档 {{ source.documentId }} · 版本 {{ source.versionId }} ·
-              {{ source.locator.type === 'PAGE' ? `第 ${source.locator.pageNumber} 页`
-                : source.locator.type === 'SLIDE' ? `第 ${source.locator.slideNumber} 张幻灯片`
-                  : source.locator.type === 'TABLE' ? `${source.locator.tableName} 第 ${source.locator.startRow}–${source.locator.endRow} 行`
-                    : source.locator.headingPath.join(' / ') }}
+              {{ formatSolutionLocator(source.locator) }}
+              <a
+                :href="`/documents/${encodeURIComponent(source.documentId)}`"
+                target="_blank"
+                rel="noopener"
+              >打开文档</a>
             </span>
           </li>
         </ul>
@@ -251,7 +257,8 @@ h4, h5 { margin: 0 0 10px; } p, li, .source-ref { overflow-wrap: anywhere; } p {
 .comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; margin-top: 16px; }
 .comparison > div { min-width: 0; padding: 14px; background: var(--color-background, #f5f7fa); border-radius: var(--radius-control); }
 ol, ul { padding-left: 22px; } li { margin: 8px 0; white-space: pre-wrap; line-height: 1.6; }.source-ref { display: block; font-size: 12px; color: var(--color-text-muted); }.notice { color: #8a3d0a; }
+.source-ref a { color: var(--color-primary); font-weight: 750; }
 .button { min-height: 44px; padding: 0 16px; border: 1px solid var(--color-primary); border-radius: var(--radius-control); appearance: none; font: inherit; font-weight: 750; cursor: pointer; }
-.button-primary { color: #fff; background: var(--color-primary); -webkit-text-fill-color: #fff; }.button-primary:hover:not(:disabled) { background: var(--color-primary-strong); border-color: var(--color-primary-strong); }.button-secondary { color: var(--color-primary); background: #fff; }.button:disabled { opacity: .52; cursor: not-allowed; }button:focus-visible, input:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+.button-primary { color: #fff; background: var(--color-primary); -webkit-text-fill-color: #fff; }.button-primary:hover:not(:disabled) { background: var(--color-primary-strong); border-color: var(--color-primary-strong); }.button-secondary { color: var(--color-primary); background: #fff; }.button:disabled { opacity: .52; cursor: not-allowed; }button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
 @media (max-width: 760px) { .comparison { grid-template-columns: minmax(0, 1fr); }.actions .button, .adoption .button { width: 100%; } }
 </style>

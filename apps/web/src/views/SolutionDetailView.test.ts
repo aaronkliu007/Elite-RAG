@@ -21,6 +21,37 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+it('已保存需求展示各类来源定位，并可打开文档以人工核对版本', async () => {
+  const sources = [
+    { documentId: 'pdf-1', versionId: 'ver-1', locator: { type: 'PAGE', pageNumber: 7 } },
+    { documentId: 'ppt-1', versionId: 'ver-2', locator: { type: 'SLIDE', slideNumber: 4 } },
+    { documentId: 'sheet-1', versionId: 'ver-3', locator: { type: 'TABLE', tableName: '项目清单', startRow: 2, endRow: 5, startColumn: 1, endColumn: 3 } },
+    { documentId: 'md-1', versionId: 'ver-4', locator: { type: 'MARKDOWN', headingPath: ['范围', '建设目标'], nodeId: 'node-1' } },
+  ]
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/solutions/solution-1')) return json({ ...detail, allowedActions: [],
+      requirementVersion: { ...detail.requirementVersion, items: [{ ...detail.requirementVersion.items[0], sources }] } })
+    throw new Error(String(input))
+  }))
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/solutions/:solutionId', component: SolutionDetailView },
+    { path: '/spaces/:spaceId/solutions', component: { template: '<div />' } },
+    { path: '/documents/:documentId', component: { template: '<div />' } },
+  ] })
+  await router.push('/solutions/solution-1'); await router.isReady()
+  const wrapper = mount(SolutionDetailView, { global: { plugins: [createPinia(), router] } })
+  await flushPromises()
+  expect(wrapper.text()).toContain('第 7 页')
+  expect(wrapper.text()).toContain('第 4 张幻灯片')
+  expect(wrapper.text()).toContain('项目清单')
+  expect(wrapper.text()).toContain('第 2–5 行')
+  expect(wrapper.text()).toContain('第 1–3 列')
+  expect(wrapper.text()).toContain('范围 / 建设目标')
+  expect(wrapper.text()).toContain('打开的是文档当前版本')
+  expect(wrapper.get('a[href="/documents/pdf-1"]').attributes('target')).toBe('_blank')
+  wrapper.unmount()
+})
+
 it('风险确认后才允许定稿，定稿后展示 Word 下载', async () => {
   let confirmed = false
   let finalized = false

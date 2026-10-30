@@ -4,6 +4,23 @@ import SolutionProposalPanel from './SolutionProposalPanel.vue'
 import { solutionsApi } from '../api/solutions'
 import { ApiRequestError } from '../api/http'
 
+it('需求整理候选允许审阅者根据来源定位打开文档', async () => {
+  sessionStorage.clear()
+  vi.spyOn(solutionsApi, 'generateProposal').mockResolvedValue({ id: 'candidate-1', kind: 'REQUIREMENTS',
+    status: 'SUCCEEDED', requirementVersionId: 'req-1', expectedRevision: 0, failureCode: null,
+    result: { kind: 'REQUIREMENTS', items: [{ category: 'GOAL', text: '客户目标', sources: [{ documentId: 'doc-1',
+      versionId: 'version-1', locator: { type: 'TABLE', tableName: '建设清单', startRow: 2, endRow: 5,
+        startColumn: 1, endColumn: 3 } }] }] } } as never)
+  const wrapper = mount(SolutionProposalPanel, { props: { actorId: 'user-1', solutionId: 'solution-1', kind: 'requirements',
+    revision: 0, currentTexts: [], disabled: false } })
+  await wrapper.get('[data-action="generate-proposal"]').trigger('click')
+  await flushPromises()
+  expect(wrapper.text()).toContain('建设清单 · 第 2–5 行 · 第 1–3 列')
+  expect(wrapper.text()).toContain('打开的是文档当前版本')
+  expect(wrapper.get('a[href="/documents/doc-1"]').attributes('target')).toBe('_blank')
+  wrapper.unmount(); sessionStorage.clear(); vi.restoreAllMocks()
+})
+
 it('候选经人工审阅才可采纳，版本冲突保留候选', async () => {
   const candidate = { id: 'candidate-1', kind: 'REQUIREMENTS', status: 'SUCCEEDED',
     requirementVersionId: 'req-1', expectedRevision: 0, failureCode: null,

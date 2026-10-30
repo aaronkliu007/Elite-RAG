@@ -8,6 +8,7 @@ import SolutionSectionEditor from '../components/SolutionSectionEditor.vue'
 import SolutionProposalPanel from '../components/SolutionProposalPanel.vue'
 import DocumentRequirementProposalPanel from '../components/DocumentRequirementProposalPanel.vue'
 import { useSessionStore } from '../stores/session'
+import { formatSolutionLocator } from '../api/solutionLocator'
 import { searchApi, type SearchEvidence, type SourceLocator } from '../api/search'
 import { solutionsApi, type OutlineNodeInput, type RequirementCategory, type RequirementItemInput,
   type RiskType, type SolutionDetail, type SolutionLocator, type SolutionSource,
@@ -518,12 +519,26 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           </div>
           <div class="source-area">
             <strong>来源 {{ item.sources.length }} 条</strong>
+            <p
+              v-if="item.sources.length"
+              class="source-note"
+            >
+              打开的是文档当前版本，请与记录的来源版本及位置核对；页面不会自动定位。
+            </p>
             <ul v-if="item.sources.length">
               <li
                 v-for="(source, sourceIndex) in item.sources"
                 :key="`${source.documentId}-${source.versionId}-${sourceIndex}`"
               >
                 <span :title="source.documentId">文档 {{ source.documentId }}</span><small :title="source.versionId">版本 {{ source.versionId }}</small>
+                <span>位置：{{ formatSolutionLocator(source.locator) }}</span>
+                <RouterLink
+                  :to="`/documents/${encodeURIComponent(source.documentId)}`"
+                  target="_blank"
+                  rel="noopener"
+                >
+                  打开文档
+                </RouterLink>
                 <button
                   v-if="canEditRequirements"
                   type="button"
@@ -1049,6 +1064,7 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
 .item-card { display: grid; gap: 14px; min-width: 0; margin-top: 15px; padding: 18px; border: 1px solid var(--color-border-soft); border-radius: 12px; background: #fbfcfd; }.item-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; }.item-heading button, .source-area button, .reorder-actions button { min-height: 32px; padding: 4px 9px; border: 1px solid var(--color-border); border-radius: 7px; color: var(--color-primary); background: #fff; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }.reorder-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .field-grid { display: grid; grid-template-columns: minmax(160px, 230px) minmax(0, 1fr); gap: 14px; min-width: 0; }.field-grid label, .source-picker label, .reason-field { display: grid; gap: 6px; min-width: 0; color: var(--color-muted); font-size: 13px; font-weight: 750; }.wide-field { min-width: 0; } input:not([type=checkbox]), select, textarea { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--color-border); border-radius: var(--radius-control); color: var(--color-ink); background: #fff; font: inherit; }.field-grid textarea { resize: vertical; }
 .source-area { display: grid; gap: 10px; min-width: 0; }.source-area > strong { font-size: 13px; }.source-area ul { margin: 0; padding: 0; list-style: none; }.source-area li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; padding: 7px 0; border-top: 1px solid var(--color-border-soft); }.source-area li span, .source-area li small { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }.source-area li small { color: var(--color-muted); }
+.source-note { margin: 0; color: var(--color-muted); font-size: 13px; overflow-wrap: anywhere; }.source-area a { color: var(--color-primary); font-weight: 750; }
 .source-picker { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }.source-picker label { flex: 1 1 250px; }.evidence-list li > span { display: grid; min-width: 0; flex: 1 1 230px; }.evidence-list strong, .evidence-list small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.evidence-list small { color: var(--color-muted); }
 .editor-actions, .confirm-block { display: flex; align-items: end; justify-content: flex-end; flex-wrap: wrap; gap: 12px; margin-top: 17px; }.reason-field { flex: 1 1 260px; }.confirm-block { padding-top: 15px; border-top: 1px solid var(--color-border-soft); }.confirm-block span { min-width: 0; flex: 1 1 260px; overflow-wrap: anywhere; color: var(--color-muted); font-size: 13px; }
 .button { min-height: 44px; padding: 0 18px; border: 1px solid var(--color-primary); border-radius: var(--radius-control); appearance: none; font: inherit; font-weight: 750; cursor: pointer; }.button-primary { color: #fff; background: var(--color-primary); -webkit-text-fill-color: #fff; }.button-primary:hover { border-color: var(--color-primary-strong); background: var(--color-primary-strong); }.button-secondary { color: var(--color-primary); background: #fff; }.button:disabled, button:disabled { opacity: .52; cursor: not-allowed; }

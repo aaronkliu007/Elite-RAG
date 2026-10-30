@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { ApiRequestError } from '../api/http'
 import { documentsApi, type KnowledgeDocument } from '../api/documents'
-import { solutionsApi, type SolutionProposal, type SolutionLocator } from '../api/solutions'
+import { solutionsApi, type SolutionProposal } from '../api/solutions'
+import { formatSolutionLocator } from '../api/solutionLocator'
 
 type DocumentRef = { documentId: string, versionId: string }
 type SavedRequest = { key: string, query: string, documents: DocumentRef[], adoptionKey?: string }
@@ -48,14 +49,6 @@ function showError(failure: unknown) { error.value = failure instanceof ApiReque
 function persist() { if (saved.value) sessionStorage.setItem(storageKey, JSON.stringify(saved.value)) }
 function documentName(document: DocumentRef) {
   return documentNames.value[`${document.documentId}:${document.versionId}`] ?? `文档 ${document.documentId}`
-}
-function locatorLabel(locator: SolutionLocator) {
-  switch (locator.type) {
-    case 'PAGE': return `第 ${locator.pageNumber} 页`
-    case 'SLIDE': return `第 ${locator.slideNumber} 张幻灯片`
-    case 'TABLE': return `${locator.tableName} 第 ${locator.startRow}–${locator.endRow} 行`
-    case 'MARKDOWN': return locator.headingPath.join(' / ') || '文档段落'
-  }
 }
 async function inspectEvidence(evidenceId: string) {
   if (!saved.value || busy.value || pending.value) return
@@ -454,10 +447,10 @@ onUnmounted(() => { disposed = true })
               <ul>
                 <li
                   v-for="source in item.sources"
-                  :key="`${source.documentId}:${source.versionId}:${locatorLabel(source.locator)}`"
+                  :key="`${source.documentId}:${source.versionId}:${formatSolutionLocator(source.locator)}`"
                   :data-source-document="source.documentId"
                 >
-                  {{ documentName(source) }} · 版本 {{ source.versionId }} · {{ locatorLabel(source.locator) }}
+                  {{ documentName(source) }} · 版本 {{ source.versionId }} · {{ formatSolutionLocator(source.locator) }}
                   <div
                     v-if="source.evidenceIds?.length"
                     class="evidence-list"
