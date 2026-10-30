@@ -246,6 +246,73 @@ class OpenAiSolutionModelAdapterTest {
                 .extracting("kind").isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
     }
 
+    @Test void extractsDocumentEvidenceUsingOnlyServerAssignedSources() throws Exception {
+        respondWithClaims("""
+                {"items":[{"category":"GOAL","text":"建设知识库","sourceIndexes":[0]}]}
+                """);
+        var evidence = new Evidence(id(3), id(11), id(30), id(31), "node-1", "客户需求",
+                "联系 alice@example.com 建设知识库", 0.9, new MarkdownLocator(List.of("客户需求"), "node-1"));
+        var request = new SolutionModelRequest(id(21), "document-key", ModelScenario.REQUIREMENTS_EXTRACTION,
+                new PromptRef("requirements", "v2"), List.of(), Optional.empty(), List.of(), List.of(evidence),
+                NOW.plusSeconds(60));
+        var result = adapter().execute(request, GeneratedRequirementProposal.class);
+        assertThat(result.body().items()).singleElement().satisfies(item -> assertThat(item.sources())
+                .containsExactly(new RequirementSource(new DocumentVersionRef(id(30), id(31)), evidence.locator())));
+        var body = server.findAll(postRequestedFor(urlEqualTo("/v1/chat/completions"))).getFirst().getBodyAsString();
+        assertThat(body).contains("[EMAIL]", "sourceIndex", "requirements_proposal")
+                .doesNotContain("alice@example.com", id(30).toString(), id(31).toString(), "node-1");
+    }
+
+    @Test void documentExtractionRejectsInventedSourceIndex() throws Exception {
+        respondWithClaims("""
+                {"items":[{"category":"GOAL","text":"建设知识库","sourceIndexes":[1]}]}
+                """);
+        var evidence = new Evidence(id(3), id(11), id(30), id(31), "node-1", "客户需求",
+                "建设知识库", 0.9, new MarkdownLocator(List.of("客户需求"), "node-1"));
+        var request = new SolutionModelRequest(id(21), "document-key", ModelScenario.REQUIREMENTS_EXTRACTION,
+                new PromptRef("requirements", "v2"), List.of(), Optional.empty(), List.of(), List.of(evidence),
+                NOW.plusSeconds(60));
+        assertThatThrownBy(() -> adapter().execute(request, GeneratedRequirementProposal.class))
+                .isInstanceOf(ModelGatewayException.class).extracting("kind")
+                .isEqualTo(ModelGatewayException.Kind.INVALID_RESPONSE);
+    }
+
+    @Test void documentExtractionBlocksSensitiveEvidenceBeforeCallingProvider() {
+        var evidence = new Evidence(id(3), id(11), id(30), id(31), "node-1", "客户需求",
+                "-----BEGIN PRIVATE KEY-----secret-----END PRIVATE KEY-----", 0.9,
+                new MarkdownLocator(List.of("客户需求"), "node-1"));
+        var request = new SolutionModelRequest(id(21), "document-key", ModelScenario.REQUIREMENTS_EXTRACTION,
+                new PromptRef("requirements", "v2"), List.of(), Optional.empty(), List.of(), List.of(evidence),
+                NOW.plusSeconds(60));
+        assertThatThrownBy(() -> adapter().execute(request, GeneratedRequirementProposal.class))
+                .isInstanceOf(ModelGatewayException.class).extracting("kind")
+                .isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        server.verify(0, postRequestedFor(urlEqualTo("/v1/chat/completions")));
+    }
+
+    @Test void documentExtractionMapsDistinctSourcesAndRejectsMixedInputBeforeExternalCall() throws Exception {
+        respondWithClaims("""
+                {"items":[{"category":"SCOPE","text":"支持组织协作","sourceIndexes":[1,0]}]}
+                """);
+        var first = new Evidence(id(3), id(11), id(30), id(31), "node-1", "需求一", "组织协作", 0.9,
+                new MarkdownLocator(List.of("范围"), "node-1"));
+        var second = new Evidence(id(3), id(12), id(40), id(41), "node-2", "需求二", "跨部门协作", 0.8,
+                new MarkdownLocator(List.of("目标"), "node-2"));
+        var request = new SolutionModelRequest(id(21), "document-key", ModelScenario.REQUIREMENTS_EXTRACTION,
+                new PromptRef("requirements", "v2"), List.of(), Optional.empty(), List.of(), List.of(first, second),
+                NOW.plusSeconds(60));
+        assertThat(adapter().execute(request, GeneratedRequirementProposal.class).body().items().getFirst().sources())
+                .containsExactly(new RequirementSource(new DocumentVersionRef(id(40), id(41)), second.locator()),
+                        new RequirementSource(new DocumentVersionRef(id(30), id(31)), first.locator()));
+        var mixed = new SolutionModelRequest(id(22), "bad-key", ModelScenario.REQUIREMENTS_EXTRACTION,
+                new PromptRef("requirements", "v2"), List.of(new RequirementItem(id(7), RequirementCategory.UNKNOWN,
+                        "待明确", List.of())), Optional.empty(), List.of(), List.of(first), NOW.plusSeconds(60));
+        assertThatThrownBy(() -> adapter().execute(mixed, GeneratedRequirementProposal.class))
+                .isInstanceOf(ModelGatewayException.class).extracting("kind")
+                .isEqualTo(ModelGatewayException.Kind.POLICY_VIOLATION);
+        server.verify(1, postRequestedFor(urlEqualTo("/v1/chat/completions")));
+    }
+
     @Test void blocksSensitiveRequirementBeforeAnyProposalProviderCall() {
         var unsafe = new SolutionModelRequest(id(21), "requirements-key",
                 ModelScenario.REQUIREMENTS_EXTRACTION, new PromptRef("requirements", "v1"),
