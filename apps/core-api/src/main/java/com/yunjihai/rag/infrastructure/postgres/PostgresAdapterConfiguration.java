@@ -113,7 +113,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.nio.charset.StandardCharsets;
-import java.io.IOException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -472,15 +471,12 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
-    EvaluationDataset evaluationDataset() {
-        var json=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
-        try(var input=PostgresAdapterConfiguration.class.getResourceAsStream(
-                "/contracts/qa/golden-dataset-v1.json")) {
-            if(input==null)throw new IllegalStateException("grounded QA golden dataset is missing");
-            return json.readValue(input,EvaluationDataset.class);
-        } catch(IOException failure) {
-            throw new IllegalStateException("grounded QA golden dataset is invalid",failure);
-        }
+    EvaluationDataset evaluationDataset(
+            @Value("${rag.qa.evaluation.dataset-path:${RAG_QA_EVALUATION_DATASET_PATH:}}") String datasetPath,
+            @Value("${rag.qa.evaluation.fixture.enabled:false}") boolean fixtureEnabled) {
+        if(fixtureEnabled && datasetPath!=null && !datasetPath.isBlank())
+            throw new IllegalStateException("EVALUATION_FIXTURE_EXTERNAL_DATASET_CONFLICT");
+        return EvaluationDatasetLoader.load(datasetPath);
     }
 
     @Bean

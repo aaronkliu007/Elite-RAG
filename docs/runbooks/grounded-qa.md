@@ -102,6 +102,16 @@ Embedding 与查询向量必须使用相同模型和维度。已有无向量索�
 
 仓库内 `contracts/qa/golden-dataset-v1.json` 是 50 条脱敏、虚构案例，覆盖 Word、PDF、PPT、Excel、Markdown、PNG OCR、跨文档、同义词、缩写、冲突、拒答和权限陷阱。评测必须复用生产问答的检索、鉴权、脱敏、模型和引用校验路径，不得创建绕过权限的“评测捷径”。
 
+管理员可在应用启动前通过环境变量 `RAG_QA_EVALUATION_DATASET_PATH` 指定独立维护的黄金集 JSON 文件，例如：
+
+```powershell
+$env:RAG_QA_EVALUATION_DATASET_PATH = 'E:\git_secrets\Elite-RAG\reviewed-qa-dataset.json'
+```
+
+该文件必须是应用进程可读取的绝对路径，最大 10 MiB，格式沿用内置黄金集。未配置时仍加载内置合成集；路径错误、文件无效、重复字段、尾随 JSON 或超限时启动失败，不会静默回退。配置在进程启动时读取，修改文件后需安全重启并重新评测；数据集内容变化会使旧记录不再通过当前门禁。文件应存放在代码仓库之外并限制访问，标注不得包含不适合本评测环境处理的信息。
+
+**不得同时设置外部黄金集和启用 `RAG_QA_EVALUATION_FIXTURE_ENABLED`**：本地虚构夹具会根据内置黄金集构建测试数据，两者同时启用时应用会拒绝启动。真实或脱敏业务黄金集必须使用已授权导入的知识及评测账号，不能使用虚构夹具代替。当前仍无审核标注界面，这项配置不自动产生人工审核结论。
+
 在全新的隔离评测数据库中，可在启动 Native Spring Boot 进程前显式设置：
 
 ```powershell
