@@ -344,6 +344,21 @@ class GroundedQaServiceTest {
     }
 
     @Test
+    void refusesAnswerThatQuotesOnlyThePositivePartOfANegatedFact() {
+        var harness = new Harness();
+        var values = new ArrayList<>(evidence(8, 0.9));
+        var first = values.getFirst();
+        values.set(0, new Evidence(first.spaceId(), first.evidenceId(), first.documentId(), first.versionId(),
+                first.nodeId(), first.title(), "该方案未批准。", first.score(), first.locator()));
+        harness.pack = pack(values);
+        harness.answer = answer(first.evidenceId(), "批准");
+
+        assertThat(harness.service().ask(command("方案是否批准？")))
+                .isEqualTo(new QaOutcome.Refused(id(1), RefusalReason.UNSUPPORTED_CLAIM, false));
+        assertThat(harness.modelCalls).hasValue(1);
+    }
+
+    @Test
     void rejectsInvalidModelResponseUnknownEvidenceAndForgedQuote() {
         var invalid = new Harness();
         invalid.modelFailure = new ModelGatewayException(ModelGatewayException.Kind.INVALID_RESPONSE);

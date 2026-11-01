@@ -113,6 +113,23 @@ class GroundedQaAcceptanceTest {
     }
 
     @Test
+    void rejectsNegationDroppedFromAnAuthorizedExactQuote() {
+        var scenario = environment.seed("negated-quote");
+        environment.appendNegatedApprovalToAuthorizedDocuments(scenario);
+        environment.gateway.truncatedNegatedQuote();
+        int before = environment.gateway.chatCalls();
+
+        var response = environment.qa.ask(environment.authentication(scenario.reader()),
+                "qa-negated-" + scenario.suffix(), new QaDtos.AskQuestionRequest("苍穹验收知识如何执行？"));
+
+        assertThat(response.status()).isEqualTo(QaStatus.REFUSED);
+        assertThat(response.refusal()).isEqualTo("UNSUPPORTED_CLAIM");
+        assertThat(environment.gateway.chatCalls() - before).isEqualTo(1);
+        assertThat(environment.jdbc.sql("SELECT count(*) FROM qa_model_call_audit WHERE request_id=:id")
+                .param("id", response.requestId()).query(Long.class).single()).isEqualTo(1);
+    }
+
+    @Test
     void concurrentIdempotentSubmissionInvokesChatOnlyOnce() throws Exception {
         var scenario = environment.seed("idempotent");
         environment.gateway.blockNextChat();
@@ -242,6 +259,30 @@ final class GroundedQaAcceptanceEnvironment implements AutoCloseable {
 
     UsernamePasswordAuthenticationToken authentication(UUID userId) {
         return new UsernamePasswordAuthenticationToken(userId.toString(), "n/a", List.of());
+    }
+
+    void appendNegatedApprovalToAuthorizedDocuments(Scenario scenario) {
+        var publisher = context.getBean(com.yunjihai.rag.retrieval.projection.ProjectionChangePublisher.class);
+        var transactions = new org.springframework.transaction.support.TransactionTemplate(
+                context.getBean(org.springframework.transaction.PlatformTransactionManager.class));
+        for (UUID space : scenario.allowedSpaces()) {
+            var documentIds = jdbc.sql("SELECT id FROM document WHERE space_id=:space")
+                    .param("space", space).query(UUID.class).list();
+            for (UUID document : documentIds) {
+                jdbc.sql("""
+                        UPDATE canonical_node SET body_text=body_text || '。本方案未批准。'
+                        WHERE version_id=(SELECT current_published_version_id FROM document WHERE id=:document)
+                        """).param("document", document).update();
+                transactions.executeWithoutResult(status -> publisher.withDocumentChangeLock(document, () -> {
+                    publisher.documentAclChanged(space, document, Instant.now()); return null;
+                }));
+            }
+        }
+        for (int attempt = 0; attempt < 10 && projections.runOnce(
+                "qa-negated-projection", OpenSearchIndexManager.WRITE_ALIAS) > 0; attempt++) {
+            // Drain synthetic projection events before querying.
+        }
+        indexes.refresh(OpenSearchIndexManager.READ_ALIAS);
     }
 
     String retrievalAudit(UUID requestId) {
@@ -375,6 +416,7 @@ final class GroundedQaAcceptanceEnvironment implements AutoCloseable {
         String lastChatRequest() { return chatRequests.getLast(); }
         void answerNormally() { mode.set(Mode.ANSWER); entered = new CountDownLatch(0); release = new CountDownLatch(0); }
         void invalidCitation() { mode.set(Mode.INVALID_CITATION); }
+        void truncatedNegatedQuote() { mode.set(Mode.NEGATED_EXTRACT); }
         void rateLimit() { mode.set(Mode.RATE_LIMIT); }
         void timeout() { mode.set(Mode.TIMEOUT); }
         void blockNextChat() { entered = new CountDownLatch(1); release = new CountDownLatch(1); }
@@ -414,6 +456,10 @@ final class GroundedQaAcceptanceEnvironment implements AutoCloseable {
                 String evidenceId = mode.get() == Mode.INVALID_CITATION
                         ? UUID.randomUUID().toString() : evidence.path("evidenceId").asText();
                 String quote = evidence.path("excerpt").asText();
+                if (mode.get() == Mode.NEGATED_EXTRACT) {
+                    if (!quote.contains("未批准")) throw new IllegalStateException("synthetic negated evidence missing");
+                    quote = "批准";
+                }
                 String content = JSON.createObjectNode()
                         .put("decision", "ANSWER")
                         .put("answer", quote)
@@ -443,6 +489,6 @@ final class GroundedQaAcceptanceEnvironment implements AutoCloseable {
 
         @Override public boolean applyGlobally() { return false; }
         @Override public void close() { if (server != null && server.isRunning()) server.stop(); }
-        enum Mode { ANSWER, INVALID_CITATION, RATE_LIMIT, TIMEOUT }
+        enum Mode { ANSWER, INVALID_CITATION, RATE_LIMIT, TIMEOUT, NEGATED_EXTRACT }
     }
 }
