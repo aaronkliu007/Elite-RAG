@@ -14,6 +14,7 @@ import com.yunjihai.rag.retrieval.domain.PageLocator;
 import com.yunjihai.rag.retrieval.domain.SlideLocator;
 import com.yunjihai.rag.retrieval.domain.TableLocator;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
+import com.yunjihai.rag.retrieval.domain.SectionLocator;
 import com.yunjihai.rag.solution.generation.SectionVersionRepository;
 import com.yunjihai.rag.solution.generation.GenerationEvidenceStore;
 import com.yunjihai.rag.solution.generation.GenerationEvidenceSource;
@@ -154,6 +155,9 @@ public final class SolutionWordExportService {
         } else if (locator instanceof TableLocator table) {
             location = "表格 " + table.tableName() + "｜行 " + table.startRow() + "-" + table.endRow()
                     + "｜列 " + table.startColumn() + "-" + table.endColumn();
+        } else if (locator instanceof SectionLocator section) {
+            location = "标题 " + String.join(" / ", section.headingPath())
+                    + (section.nodeId() == null ? "" : "｜节点 " + section.nodeId());
         } else if (locator instanceof MarkdownLocator markdown) {
             location = "标题 " + String.join(" / ", markdown.headingPath())
                     + (markdown.nodeId() == null ? "" : "｜节点 " + markdown.nodeId());

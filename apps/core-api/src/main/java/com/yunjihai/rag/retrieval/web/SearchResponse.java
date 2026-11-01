@@ -3,6 +3,7 @@ package com.yunjihai.rag.retrieval.web;
 import com.yunjihai.rag.retrieval.domain.DegradationReason;
 import com.yunjihai.rag.retrieval.domain.EvidencePack;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
+import com.yunjihai.rag.retrieval.domain.SectionLocator;
 import com.yunjihai.rag.retrieval.domain.NormalizedBoundingBox;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
 import com.yunjihai.rag.retrieval.domain.SlideLocator;
@@ -76,7 +77,7 @@ public record SearchResponse(
     }
 
     public sealed interface LocatorView
-            permits PageLocatorView, SlideLocatorView, TableLocatorView, MarkdownLocatorView {
+            permits PageLocatorView, SlideLocatorView, TableLocatorView, MarkdownLocatorView, SectionLocatorView {
         String type();
     }
 
@@ -111,7 +112,12 @@ public record SearchResponse(
             String nodeId) implements LocatorView {
     }
 
+    public record SectionLocatorView(String type, List<String> headingPath, String nodeId) implements LocatorView { }
+
     private static LocatorView locator(SourceLocator locator) {
+        if (locator instanceof SectionLocator section) {
+            return new SectionLocatorView("SECTION", section.headingPath(), section.nodeId());
+        }
         if (locator instanceof PageLocator page) {
             return new PageLocatorView(
                     "PAGE", page.pageNumber(), BoundingBoxView.from(page.boundingBox()));

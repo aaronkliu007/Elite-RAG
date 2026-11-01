@@ -187,6 +187,16 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
     }
 
     @Test
+    void indexesWordParagraphWithoutInventingPageNumber() {
+        var ids = publishedDocument(spaceId, false, true,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 4);
+        insertNode(ids.versionId(), "h1", "HEADING", "验收流程", null, null, null, null, 0);
+        insertNode(ids.versionId(), "p1", "PARAGRAPH", "验收须提交报告", "h1", null, null, null, 1);
+        var locator = source.load(spaceId, ids.documentId(), SEQUENCE).nodes().get(1).locator();
+        assertEquals("SectionLocator", locator.getClass().getSimpleName());
+    }
+
+    @Test
     void pagesSpaceAndAllDocumentsWithoutDuplicatesOrOmissions() {
         var expectedSpace = new HashSet<UUID>();
         for (int index = 0; index < 5; index++) {

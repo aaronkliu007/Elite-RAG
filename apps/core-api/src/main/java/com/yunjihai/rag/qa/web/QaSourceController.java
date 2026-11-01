@@ -48,6 +48,8 @@ public class QaSourceController {
                     "tableName",table.tableName(),"startRow",table.startRow(),
                     "endRow",table.endRow(),"startColumn",table.startColumn(),
                     "endColumn",table.endColumn()));
+            case SectionLocator section -> new QaDtos.SourceLocation("SECTION",map(
+                    "headingPath",section.headingPath(),"nodeId",section.nodeId()));
             case MarkdownLocator markdown -> new QaDtos.SourceLocation("MARKDOWN",map(
                     "headingPath",markdown.headingPath(),"nodeId",markdown.nodeId()));
         };

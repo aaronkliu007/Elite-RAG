@@ -16,6 +16,7 @@ final class QaLocatorJson {
             case SlideLocator ignored -> "SLIDE";
             case TableLocator ignored -> "TABLE";
             case MarkdownLocator ignored -> "MARKDOWN";
+            case SectionLocator ignored -> "SECTION";
         };
     }
 
@@ -37,6 +38,10 @@ final class QaLocatorJson {
                         node.path("tableName").asText(), node.path("startRow").asInt(),
                         node.path("endRow").asInt(), node.path("startColumn").asInt(),
                         node.path("endColumn").asInt());
+                case "SECTION" -> new SectionLocator(
+                        json.convertValue(node.path("headingPath"),
+                                json.getTypeFactory().constructCollectionType(List.class, String.class)),
+                        node.path("nodeId").isNull() ? null : node.path("nodeId").asText());
                 case "MARKDOWN" -> new MarkdownLocator(
                         json.convertValue(node.path("headingPath"),
                                 json.getTypeFactory().constructCollectionType(List.class, String.class)),

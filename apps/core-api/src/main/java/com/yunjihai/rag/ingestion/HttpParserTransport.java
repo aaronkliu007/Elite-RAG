@@ -50,6 +50,7 @@ public final class HttpParserTransport implements ParserTransport {
                     .getBytes(StandardCharsets.UTF_8);
             var ending = ("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8);
             var request = HttpRequest.newBuilder(endpoint)
+                    .version(HttpClient.Version.HTTP_1_1)
                     .timeout(Duration.ofSeconds(job.timeoutSeconds() + 5L))
                     .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                     .POST(HttpRequest.BodyPublishers.concat(

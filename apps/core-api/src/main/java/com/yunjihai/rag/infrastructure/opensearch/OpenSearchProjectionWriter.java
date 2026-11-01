@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
+import com.yunjihai.rag.retrieval.domain.SectionLocator;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
 import com.yunjihai.rag.retrieval.domain.SlideLocator;
 import com.yunjihai.rag.retrieval.domain.TableLocator;
@@ -276,6 +277,10 @@ public final class OpenSearchProjectionWriter implements SearchProjectionWriter 
                 document.put("endRow", table.endRow());
                 document.put("startColumn", table.startColumn());
                 document.put("endColumn", table.endColumn());
+            }
+            case SectionLocator section -> {
+                document.put("locatorType", "SECTION");
+                if (section.nodeId() != null) document.put("markdownNodeId", section.nodeId());
             }
             case MarkdownLocator markdown -> {
                 document.put("locatorType", "MARKDOWN");

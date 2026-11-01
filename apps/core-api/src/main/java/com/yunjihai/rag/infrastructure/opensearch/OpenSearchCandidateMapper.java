@@ -3,6 +3,7 @@ package com.yunjihai.rag.infrastructure.opensearch;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.yunjihai.rag.retrieval.domain.Candidate;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
+import com.yunjihai.rag.retrieval.domain.SectionLocator;
 import com.yunjihai.rag.retrieval.domain.NormalizedBoundingBox;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
 import com.yunjihai.rag.retrieval.domain.RecallSource;
@@ -46,6 +47,8 @@ public final class OpenSearchCandidateMapper {
                     required(source, "tableName"), source.path("startRow").asInt(),
                     source.path("endRow").asInt(), source.path("startColumn").asInt(),
                     source.path("endColumn").asInt());
+            case "SECTION" -> new SectionLocator(
+                    strings(source.path("headingPath")), required(source, "markdownNodeId"));
             case "MARKDOWN" -> new MarkdownLocator(
                     strings(source.path("headingPath")), required(source, "markdownNodeId"));
             default -> throw new IllegalArgumentException("unknown locator type");

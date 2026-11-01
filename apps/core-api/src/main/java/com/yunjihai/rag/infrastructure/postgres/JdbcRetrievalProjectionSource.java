@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yunjihai.rag.ingestion.CanonicalBoundingBox;
 import com.yunjihai.rag.ingestion.CanonicalTableCell;
 import com.yunjihai.rag.retrieval.domain.MarkdownLocator;
+import com.yunjihai.rag.retrieval.domain.SectionLocator;
 import com.yunjihai.rag.retrieval.domain.NormalizedBoundingBox;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
 import com.yunjihai.rag.retrieval.domain.SlideLocator;
@@ -264,6 +265,10 @@ public final class JdbcRetrievalProjectionSource implements RetrievalProjectionS
         }
         if (authority.mediaType().equals("text/markdown")) {
             return new MarkdownLocator(headingPath, node.nodeId());
+        }
+        if (node.page() == null && authority.mediaType().equals(
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document")) {
+            return new SectionLocator(headingPath, node.nodeId());
         }
         if (node.page() == null) throw invalid();
         if (authority.mediaType().contains("presentation")) return new SlideLocator(node.page());

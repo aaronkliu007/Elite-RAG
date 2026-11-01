@@ -163,6 +163,7 @@ function locatorFromSearch(locator: SourceLocator): SolutionLocator {
       : { type: 'PAGE', pageNumber: locator.pageNumber }
     case 'SLIDE': return { type: 'SLIDE', slideNumber: locator.slideNumber }
     case 'TABLE': return { ...locator }
+    case 'SECTION':
     case 'MARKDOWN': return { ...locator }
   }
 }

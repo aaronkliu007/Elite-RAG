@@ -19,7 +19,7 @@ export interface QaQuestionResponse {
 }
 
 export interface QaSourceLocation {
-  type: 'PAGE' | 'SLIDE' | 'TABLE' | 'MARKDOWN'
+  type: 'PAGE' | 'SLIDE' | 'TABLE' | 'MARKDOWN' | 'SECTION'
   coordinates: Record<string, unknown>
 }
 

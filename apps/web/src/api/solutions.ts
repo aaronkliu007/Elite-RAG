@@ -14,7 +14,7 @@ export type SolutionLocator =
   | { type: 'PAGE', pageNumber: number, box?: { left: number, top: number, right: number, bottom: number } }
   | { type: 'SLIDE', slideNumber: number }
   | { type: 'TABLE', tableName: string, startRow: number, endRow: number, startColumn: number, endColumn: number }
-  | { type: 'MARKDOWN', headingPath: string[], nodeId: string | null }
+  | { type: 'MARKDOWN' | 'SECTION', headingPath: string[], nodeId: string | null }
 
 export interface SolutionSource { documentId: string, versionId: string, locator: SolutionLocator, evidenceIds?: string[] }
 export interface RequirementItemInput { category: RequirementCategory, text: string, sources: SolutionSource[] }

@@ -76,6 +76,11 @@ final class SolutionRequestDigest {
                     case SlideLocator slide -> add("SLIDE").add(slide.slideNumber());
                     case TableLocator table -> add("TABLE").add(table.tableName()).add(table.startRow())
                             .add(table.endRow()).add(table.startColumn()).add(table.endColumn());
+                    case SectionLocator section -> {
+                        add("SECTION").add(section.headingPath().size());
+                        section.headingPath().forEach(this::add);
+                        add(section.nodeId());
+                    }
                     case MarkdownLocator markdown -> {
                         add("MARKDOWN").add(markdown.headingPath().size());
                         markdown.headingPath().forEach(this::add);

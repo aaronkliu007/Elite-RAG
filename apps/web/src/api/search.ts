@@ -4,7 +4,7 @@ export type SourceLocator =
   | { type: 'PAGE', pageNumber: number, boundingBox: null | { left: number, top: number, right: number, bottom: number } }
   | { type: 'SLIDE', slideNumber: number }
   | { type: 'TABLE', tableName: string, startRow: number, endRow: number, startColumn: number, endColumn: number }
-  | { type: 'MARKDOWN', headingPath: string[], nodeId: string }
+  | { type: 'MARKDOWN' | 'SECTION', headingPath: string[], nodeId: string }
 
 export interface SearchEvidence {
   evidenceId: string

@@ -36,6 +36,11 @@ public final class SolutionLocatorJson {
                 fields.put("startColumn", table.startColumn());
                 fields.put("endColumn", table.endColumn());
             }
+            case SectionLocator section -> {
+                fields.put("type", "SECTION");
+                fields.put("headingPath", section.headingPath());
+                fields.put("nodeId", section.nodeId());
+            }
             case MarkdownLocator markdown -> {
                 fields.put("type", "MARKDOWN");
                 fields.put("headingPath", markdown.headingPath());
@@ -63,7 +68,7 @@ public final class SolutionLocatorJson {
                 case "SLIDE" -> new SlideLocator(requiredInt(node, "slideNumber"));
                 case "TABLE" -> new TableLocator(requiredText(node, "tableName"), requiredInt(node, "startRow"),
                         requiredInt(node, "endRow"), requiredInt(node, "startColumn"), requiredInt(node, "endColumn"));
-                case "MARKDOWN" -> {
+                case "SECTION", "MARKDOWN" -> {
                     var headings = node.path("headingPath");
                     if (!headings.isArray()) throw new IllegalArgumentException("invalid headings");
                     List<String> values = new ArrayList<>();
@@ -72,7 +77,9 @@ public final class SolutionLocatorJson {
                         values.add(item.asText());
                     });
                     var id = node.path("nodeId");
-                    yield new MarkdownLocator(values, id.isNull() || id.isMissingNode() ? null : id.asText());
+                    String nodeId = id.isNull() || id.isMissingNode() ? null : id.asText();
+                    yield requiredText(node, "type").equals("SECTION")
+                            ? new SectionLocator(values, nodeId) : new MarkdownLocator(values, nodeId);
                 }
                 default -> throw new IllegalArgumentException("unsupported locator type");
             };
