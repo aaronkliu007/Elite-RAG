@@ -6,6 +6,7 @@ import DocumentDetailView from '../views/DocumentDetailView.vue'
 import KnowledgeHomeView from '../views/KnowledgeHomeView.vue'
 import LoginView from '../views/LoginView.vue'
 import QaView from '../views/QaView.vue'
+import QaEvaluationView from '../views/QaEvaluationView.vue'
 import SearchView from '../views/SearchView.vue'
 import SolutionListView from '../views/SolutionListView.vue'
 import SolutionDetailView from '../views/SolutionDetailView.vue'
@@ -67,6 +68,12 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
         path: '/spaces/:spaceId',
         name: 'space-detail',
         component: SpaceDetailView,
+      },
+      {
+        path: '/admin/evaluations',
+        name: 'qa-evaluations',
+        component: QaEvaluationView,
+        meta: { systemAdmin: true },
       },
       {
         path: '/admin/users',

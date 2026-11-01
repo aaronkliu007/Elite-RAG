@@ -49,11 +49,16 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
         String datasetDigest=EvaluationDatasetFingerprint.sha256(dataset);
         Instant started=clock.instant();
         Accumulator metrics=new Accumulator();
-        for(EvaluationCase item:dataset.cases())evaluate(item,metrics);
+        List<EvaluationCaseResult> caseResults=new ArrayList<>();
+        for(EvaluationCase item:dataset.cases()) {
+            Accumulator one=new Accumulator();
+            caseResults.add(evaluate(item,one));
+            metrics.add(one);
+        }
         EvaluationMetrics result=metrics.metrics();
         var run=new EvaluationRepository.EvaluationRun(UuidV7.generate(started),dataset.id(),dataset.version(),
                 codeVersion,policyVersion,dataset.promptVersion(),dataset.sanitizationVersion(),modelConfigVersion,
-                started,clock.instant(),result,gate.assess(result),datasetDigest,datasetDigest);
+                started,clock.instant(),result,gate.assess(result),datasetDigest,datasetDigest,caseResults);
         repository.save(run);
         return run;
     }
@@ -64,7 +69,7 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
                 repository.findDataset(run.datasetId()).map(EvaluationDatasetFingerprint::sha256).orElse(null)));
     }
 
-    private void evaluate(EvaluationCase item,Accumulator total) {
+    private EvaluationCaseResult evaluate(EvaluationCase item,Accumulator total) {
         UUID requestId=UuidV7.generate(clock.instant());
         traces.begin(requestId);
         final QaOutcome outcome;
@@ -100,6 +105,11 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
             }
         }
         total.leakages+=leakages(item,observation,outcome);
+        String reason=outcome instanceof QaOutcome.Refused refused?refused.reason().name()
+                :outcome instanceof QaOutcome.Failed failed?failed.code():null;
+        return new EvaluationCaseResult(item.id(),requestId,item.shouldRefuse(),outcome.status(),reason,
+                total.expected,Math.toIntExact(total.retrieved),outcome instanceof QaOutcome.Answered answered?answered.claims().size():0,Math.toIntExact(total.reviewedClaims),
+                Math.toIntExact(total.supportedClaims),total.leakages);
     }
 
     private static Optional<EvaluationCase.ReviewVerdict> reviewed(
@@ -139,6 +149,12 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
     private static final class Accumulator {
         int expected,citations,claims,generatedClaims,refusalCases,leakages;
         long retrieved,validCitations,supportedClaims,reviewedClaims,correctRefusals;
+        void add(Accumulator other) {
+            expected+=other.expected; citations+=other.citations; claims+=other.claims;
+            generatedClaims+=other.generatedClaims; refusalCases+=other.refusalCases; leakages+=other.leakages;
+            retrieved+=other.retrieved; validCitations+=other.validCitations; supportedClaims+=other.supportedClaims;
+            reviewedClaims+=other.reviewedClaims; correctRefusals+=other.correctRefusals;
+        }
         EvaluationMetrics metrics() { return new EvaluationMetrics(expected,Math.toIntExact(retrieved),citations,
                 Math.toIntExact(validCitations),claims,Math.toIntExact(supportedClaims),refusalCases,
                 Math.toIntExact(correctRefusals),leakages,Math.toIntExact(reviewedClaims),generatedClaims); }

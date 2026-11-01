@@ -46,12 +46,17 @@ class QaEvaluationAdminControllerTest {
         var json=new ObjectMapper().valueToTree(started);
         assertThat(json.path("assessment").path("passed").asBoolean()).isFalse();
         assertThat(json.path("historicalAssessment").path("passed").asBoolean()).isTrue();
+        assertThat(json.path("caseResults").size()).isEqualTo(1);
+        assertThat(json.path("caseResults").get(0).path("reason").asString()).isEqualTo("CONFLICTING_EVIDENCE");
+        assertThat(json.toString()).doesNotContain("question", "answer", "excerpt", "title");
     }
 
     private static QaEvaluationUseCase useCase() {
         var run=new EvaluationRepository.EvaluationRun(RUN,DATASET,"dataset","code","policy",
                 "prompt","sanitizer","model",Instant.EPOCH,Instant.EPOCH,
-                new EvaluationMetrics(0,0,0,0,0,0,0,0,0),new EvaluationGate.Assessment(true,List.of()));
+                new EvaluationMetrics(0,0,0,0,0,0,0,0,0),new EvaluationGate.Assessment(true,List.of()),
+                null,null,List.of(new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),false,
+                        com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"CONFLICTING_EVIDENCE",2,1,0,0,0,0)));
         return new QaEvaluationUseCase() {
             public EvaluationRepository.EvaluationRun run(UUID datasetId,String code,String policy,String model) { return run; }
             public Optional<EvaluationRepository.EvaluationRun> find(UUID runId) { return RUN.equals(runId)?Optional.of(run):Optional.empty(); }

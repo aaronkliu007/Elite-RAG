@@ -66,10 +66,10 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
             jdbc.sql("""
                     INSERT INTO qa_evaluation_run(
                         id,dataset_id,dataset_version,code_version,policy_version,prompt_version,
-                        sanitization_version,model_config_version,started_at,completed_at,passed,metrics,assessment,dataset_digest)
+                        sanitization_version,model_config_version,started_at,completed_at,passed,metrics,assessment,dataset_digest,case_results)
                     VALUES (:id,:datasetId,:datasetVersion,:codeVersion,:policyVersion,:promptVersion,
                         :sanitizationVersion,:modelConfigVersion,:startedAt,:completedAt,:passed,
-                        CAST(:metrics AS jsonb),CAST(:assessment AS jsonb),:datasetDigest)
+                        CAST(:metrics AS jsonb),CAST(:assessment AS jsonb),:datasetDigest,CAST(:caseResults AS jsonb))
                     """).param("id",run.runId()).param("datasetId",run.datasetId())
                     .param("datasetVersion",run.datasetVersion()).param("codeVersion",run.codeVersion())
                     .param("policyVersion",run.policyVersion()).param("promptVersion",run.promptVersion())
@@ -77,7 +77,8 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
                     .param("modelConfigVersion",run.modelConfigVersion()).param("startedAt",utc(run.startedAt()))
                     .param("completedAt",utc(run.completedAt())).param("passed",run.assessment().passed())
                     .param("metrics",write(run.metrics())).param("assessment",write(run.assessment()))
-                    .param("datasetDigest",run.recordedDatasetDigest(),java.sql.Types.VARCHAR).update();
+                    .param("datasetDigest",run.recordedDatasetDigest(),java.sql.Types.VARCHAR)
+                    .param("caseResults",write(run.caseResults())).update();
         } catch(DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }
@@ -88,7 +89,7 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
         try {
             return jdbc.sql("""
                     SELECT id,dataset_id,dataset_version,code_version,policy_version,prompt_version,
-                           sanitization_version,model_config_version,started_at,completed_at,metrics::text,assessment::text,dataset_digest
+                           sanitization_version,model_config_version,started_at,completed_at,metrics::text,assessment::text,dataset_digest,case_results::text
                     FROM qa_evaluation_run WHERE id=:id
                     """).param("id",runId).query((row,n)->new EvaluationRun(
                             row.getObject("id",UUID.class),row.getObject("dataset_id",UUID.class),
@@ -97,7 +98,8 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
                             row.getString("model_config_version"),row.getObject("started_at",OffsetDateTime.class).toInstant(),
                             row.getObject("completed_at",OffsetDateTime.class).toInstant(),
                             read(row.getString("metrics"),EvaluationMetrics.class),
-                            read(row.getString("assessment"),EvaluationGate.Assessment.class),row.getString("dataset_digest"),null)).optional();
+                            read(row.getString("assessment"),EvaluationGate.Assessment.class),row.getString("dataset_digest"),null,
+                            readCases(row.getString("case_results")))).optional();
         } catch(DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }
@@ -110,6 +112,10 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
     private <T>T read(String value,Class<T> type) {
         try{return json.readValue(value,type);}
         catch(JsonProcessingException failure){throw new IllegalStateException("evaluation data is invalid",failure);}
+    }
+    private List<EvaluationCaseResult> readCases(String value) {
+        try { return List.of(json.readValue(value,EvaluationCaseResult[].class)); }
+        catch(JsonProcessingException failure) { throw new IllegalStateException("evaluation case data is invalid",failure); }
     }
     private static OffsetDateTime utc(Instant value){return OffsetDateTime.ofInstant(value,ZoneOffset.UTC);}
     private static String sha256(String value) {

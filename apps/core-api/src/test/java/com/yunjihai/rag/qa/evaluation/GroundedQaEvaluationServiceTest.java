@@ -27,6 +27,12 @@ class GroundedQaEvaluationServiceTest {
 
         var run=service.run(dataset.id(),"code-abc","policy-v2","model-approved-v3");
 
+        assertThat(run.caseResults()).hasSize(50);
+        assertThat(run.caseResults()).allSatisfy(result -> {
+            assertThat(result.status()).isEqualTo(QaStatus.ANSWERED);
+            assertThat(result.reviewedClaims()).isZero();
+            assertThat(result.generatedClaims()).isEqualTo(1);
+        });
         assertThat(actors).containsExactly(actor);
         assertThat(run.datasetVersion()).isEqualTo("golden-v1");
         assertThat(run.codeVersion()).isEqualTo("code-abc");

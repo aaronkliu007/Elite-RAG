@@ -43,11 +43,11 @@ public class QaEvaluationAdminController {
                                     String policyVersion,String promptVersion,String sanitizationVersion,
                                     String modelConfigVersion,java.time.Instant startedAt,java.time.Instant completedAt,
                                     EvaluationMetrics metrics,EvaluationGate.Assessment assessment,
-                                    EvaluationGate.Assessment historicalAssessment,String datasetDigest) {
+                                    EvaluationGate.Assessment historicalAssessment,String datasetDigest,List<EvaluationCaseResult> caseResults) {
         static EvaluationRunView from(EvaluationRepository.EvaluationRun run) {
             return new EvaluationRunView(run.runId(),run.datasetId(),run.datasetVersion(),run.codeVersion(),
                     run.policyVersion(),run.promptVersion(),run.sanitizationVersion(),run.modelConfigVersion(),
-                    run.startedAt(),run.completedAt(),run.metrics(),run.currentAssessment(),run.assessment(),run.recordedDatasetDigest());
+                    run.startedAt(),run.completedAt(),run.metrics(),run.currentAssessment(),run.assessment(),run.recordedDatasetDigest(),run.caseResults());
         }
     }
 

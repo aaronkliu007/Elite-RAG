@@ -48,7 +48,15 @@ public interface EvaluationRepository {
             EvaluationMetrics metrics,
             EvaluationGate.Assessment assessment,
             String recordedDatasetDigest,
-            String currentDatasetDigest) {
+            String currentDatasetDigest,
+            List<EvaluationCaseResult> caseResults) {
+        public EvaluationRun(UUID runId,UUID datasetId,String datasetVersion,String codeVersion,String policyVersion,
+                             String promptVersion,String sanitizationVersion,String modelConfigVersion,Instant startedAt,
+                             Instant completedAt,EvaluationMetrics metrics,EvaluationGate.Assessment assessment,
+                             String recordedDatasetDigest,String currentDatasetDigest) {
+            this(runId,datasetId,datasetVersion,codeVersion,policyVersion,promptVersion,sanitizationVersion,
+                    modelConfigVersion,startedAt,completedAt,metrics,assessment,recordedDatasetDigest,currentDatasetDigest,List.of());
+        }
         public EvaluationRun(UUID runId,UUID datasetId,String datasetVersion,String codeVersion,String policyVersion,
                              String promptVersion,String sanitizationVersion,String modelConfigVersion,Instant startedAt,
                              Instant completedAt,EvaluationMetrics metrics,EvaluationGate.Assessment assessment) {
@@ -62,6 +70,9 @@ public interface EvaluationRepository {
             Objects.requireNonNull(sanitizationVersion); Objects.requireNonNull(modelConfigVersion);
             Objects.requireNonNull(startedAt); Objects.requireNonNull(completedAt);
             Objects.requireNonNull(metrics); Objects.requireNonNull(assessment);
+            caseResults=List.copyOf(Objects.requireNonNull(caseResults));
+            if(caseResults.stream().map(EvaluationCaseResult::caseId).distinct().count()!=caseResults.size())
+                throw new IllegalArgumentException("duplicate evaluation case result");
             if(recordedDatasetDigest!=null&&!recordedDatasetDigest.matches("[0-9a-f]{64}") ||
                     currentDatasetDigest!=null&&!currentDatasetDigest.matches("[0-9a-f]{64}"))
                 throw new IllegalArgumentException("invalid dataset digest");
@@ -76,7 +87,7 @@ public interface EvaluationRepository {
         }
         public EvaluationRun withCurrentDatasetDigest(String digest) {
             return new EvaluationRun(runId,datasetId,datasetVersion,codeVersion,policyVersion,promptVersion,
-                    sanitizationVersion,modelConfigVersion,startedAt,completedAt,metrics,assessment,recordedDatasetDigest,digest);
+                    sanitizationVersion,modelConfigVersion,startedAt,completedAt,metrics,assessment,recordedDatasetDigest,digest,caseResults);
         }
     }
 }

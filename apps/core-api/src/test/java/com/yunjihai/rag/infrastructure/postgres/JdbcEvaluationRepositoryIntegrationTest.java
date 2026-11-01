@@ -76,6 +76,21 @@ class JdbcEvaluationRepositoryIntegrationTest {
     }
 
     @Test
+    void persistsCaseDiagnosticsWithoutQuestionOrEvidenceText() {
+        String digest=EvaluationDatasetFingerprint.sha256(dataset);
+        var result=new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),false,
+                com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"CONFLICTING_EVIDENCE",2,1,0,0,0,0);
+        var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),dataset.id(),dataset.version(),"code","policy",
+                dataset.promptVersion(),dataset.sanitizationVersion(),"model",Instant.EPOCH,Instant.EPOCH,
+                new EvaluationMetrics(2,1,1,0,1,0,1,1,0),new EvaluationGate.Assessment(false,List.of()),digest,digest,List.of(result));
+        repository.save(run);
+        assertThat(repository.findRun(run.runId()).orElseThrow().caseResults()).containsExactly(result);
+        String stored=owner.sql("SELECT case_results::text FROM qa_evaluation_run WHERE id=:id")
+                .param("id",run.runId()).query(String.class).single();
+        assertThat(stored).doesNotContain("question","answer","excerpt","title");
+    }
+
+    @Test
     void persistsDatasetFingerprintForCurrentGateReassessment() {
         String digest=EvaluationDatasetFingerprint.sha256(dataset);
         var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),dataset.id(),dataset.version(),"code","policy",

@@ -118,6 +118,13 @@ onMounted(load)
         <RouterLink
           v-if="canManageUsers"
           class="button button-secondary"
+          to="/admin/evaluations"
+        >
+          问答评测
+        </RouterLink>
+        <RouterLink
+          v-if="canManageUsers"
+          class="button button-secondary"
           to="/admin/users"
         >
           用户管理

@@ -136,6 +136,8 @@ $env:RAG_QA_EVALUATION_FIXTURE_ENABLED = 'true'
 
 每条可回答案例可在黄金集的 `reviewedClaims` 中登记独立复核结果：填写完整声明原文 `text`、审阅记录标识 `reviewReference`、结论 `SUPPORTED` 或 `UNSUPPORTED`，以及完整的 `supportingEvidence` 集合。每项来源包含 `documentId`、`versionId`、`nodeId`、`contentDigest`、`titleDigest`、`locatorDigest`。案例的 `reviewQuestionDigest` 为实际送入问答处理的规范化、脱敏后问题的 UTF-8 SHA-256；来源内容摘要取证据快照的 `content_digest`，标题摘要取快照标题的 UTF-8 SHA-256，定位摘要取 PostgreSQL 中 `locator::text` 的 UTF-8 SHA-256。声明、实际引用来源集合、问题或任一来源摘要不一致时，该声明按未复核处理。标注必须由有权限的业务人员基于证据独立审核；`reviewReference` 只是记录标识，系统不会验证审阅人身份或证明审阅确实发生。当前没有标注界面，仓库内 50 条合成案例也没有这些标注，因此不能通过新门禁，不应自行编造标注。
 
+系统管理员可从知识空间首页进入“问答评测”，输入运行编号查看逐案例诊断，并筛选预期回答但拒答、有未审核声明或系统失败的案例。API 的 `caseResults` 仅包含案例和请求标识、预期与实际状态、原因及聚合计数，不包含问题、答案、来源标题或证据正文。旧运行没有这些记录；页面只能定位问题，尚不能查看或提交审核标注。不得仅因管理员身份绕过知识来源权限。
+
 结果中的 `assessment` 按当前规则重算，`historicalAssessment` 保留当时结果；`datasetDigest` 记录完整数据集内容指纹。历史记录没有指纹或当前数据集与记录不一致时，当前判断包含 `DATASET_PROVENANCE` 并失败，历史结果本身不变。修改数据集或标注后须重新评测，不得仅复用版本号或历史通过结果。
 
 Recall@10 统计经过最终权限复核和证据选择后的前 10 条，而非 OpenSearch 未鉴权原始召回。即使问答在保存证据快照前因冲突或证据不足而拒答，评测仍会在内存中记录这次已授权检索的文档和节点标识，以便计算召回；不记录问题或证据正文。
