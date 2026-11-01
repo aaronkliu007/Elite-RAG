@@ -35,6 +35,18 @@ public final class EvaluationTraceRegistry {
         if (trace != null) trace.setRetrieval(refs);
     }
 
+    public void recordSanitizedQuestion(UUID requestId, String question) {
+        var trace = active.get(requestId);
+        if (trace == null) return;
+        try {
+            String digest = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(question.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            trace.setQuestionDigest(digest);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
+    }
+
     public Trace consume(UUID requestId) {
         var trace = active.remove(requestId);
         return trace == null ? Trace.empty() : trace.snapshot();
@@ -44,13 +56,14 @@ public final class EvaluationTraceRegistry {
             boolean retrievalObserved,
             Set<EvaluationCase.EvidenceRef> retrievedTop10,
             Set<EvaluationCase.EvidenceRef> modelRequest,
-            Set<EvaluationCase.EvidenceRef> modelResponse) {
+            Set<EvaluationCase.EvidenceRef> modelResponse,
+            String sanitizedQuestionDigest) {
         public Trace {
             retrievedTop10 = Set.copyOf(retrievedTop10);
             modelRequest = Set.copyOf(modelRequest);
             modelResponse = Set.copyOf(modelResponse);
         }
-        static Trace empty() { return new Trace(false, Set.of(), Set.of(), Set.of()); }
+        static Trace empty() { return new Trace(false, Set.of(), Set.of(), Set.of(), null); }
     }
 
     private static final class MutableTrace {
@@ -58,11 +71,13 @@ public final class EvaluationTraceRegistry {
         private final Set<EvaluationCase.EvidenceRef> response = new LinkedHashSet<>();
         private final Set<EvaluationCase.EvidenceRef> retrieval = new LinkedHashSet<>();
         private boolean retrievalObserved;
+        private String questionDigest;
         synchronized void setRetrieval(Collection<EvaluationCase.EvidenceRef> refs) {
             retrieval.clear(); retrieval.addAll(refs); retrievalObserved = true;
         }
         synchronized void addRequest(Collection<EvaluationCase.EvidenceRef> refs) { request.addAll(refs); }
         synchronized void addResponse(Collection<EvaluationCase.EvidenceRef> refs) { response.addAll(refs); }
-        synchronized Trace snapshot() { return new Trace(retrievalObserved, retrieval, request, response); }
+        synchronized void setQuestionDigest(String digest) { questionDigest = digest; }
+        synchronized Trace snapshot() { return new Trace(retrievalObserved, retrieval, request, response, questionDigest); }
     }
 }

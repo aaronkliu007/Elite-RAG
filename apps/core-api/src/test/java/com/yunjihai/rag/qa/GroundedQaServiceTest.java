@@ -183,7 +183,7 @@ class GroundedQaServiceTest {
     }
 
     @Test
-    void recordsAuthorizedRetrievalIdentitiesForEvaluationBeforeConflictRefusal() {
+    void recordsAuthorizedRetrievalIdentitiesForEvaluationBeforeConflictRefusal() throws Exception {
         var harness = new Harness();
         harness.traces.begin(id(1));
         harness.conflictDetector = ignored -> true;
@@ -192,6 +192,9 @@ class GroundedQaServiceTest {
         var trace = harness.traces.consume(id(1));
         assertThat(trace.retrievalObserved()).isTrue();
         assertThat(trace.retrievedTop10()).hasSize(8);
+        assertThat(trace.sanitizedQuestionDigest()).isEqualTo(java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256")
+                        .digest("问题".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
         assertThat(harness.modelCalls).hasValue(0);
     }
 
@@ -244,10 +247,11 @@ class GroundedQaServiceTest {
     }
 
     @Test
-    void redactsQuestionBeforeRetrievalAndChatModel() {
+    void redactsQuestionBeforeRetrievalAndChatModel() throws Exception {
         var harness = new Harness();
         var metrics = new RecordingQaMetrics();
         harness.metrics = metrics;
+        harness.traces.begin(id(1));
 
         QaOutcome outcome = harness.service().ask(command("请联系 alice@example.com 查询制度"));
 
@@ -260,6 +264,10 @@ class GroundedQaServiceTest {
         assertThat(metrics.sanitizationHits).containsExactly(1);
         assertThat(harness.audits).singleElement()
                 .extracting(ModelCallAuditPort.ModelCallAudit::sanitizationHitCount).isEqualTo(1);
+        var trace=harness.traces.consume(id(1));
+        assertThat(trace.sanitizedQuestionDigest()).isEqualTo(java.util.HexFormat.of().formatHex(
+                java.security.MessageDigest.getInstance("SHA-256").digest(
+                        "请联系 [EMAIL] 查询制度".getBytes(java.nio.charset.StandardCharsets.UTF_8))));
     }
 
     @Test

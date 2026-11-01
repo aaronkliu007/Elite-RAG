@@ -43,6 +43,9 @@ class QaEvaluationAdminControllerTest {
                 DATASET,"code","policy","model"));
         assertThat(started.runId()).isEqualTo(RUN);
         assertThat(controller.get(auth(ADMIN),RUN)).isEqualTo(started);
+        var json=new ObjectMapper().valueToTree(started);
+        assertThat(json.path("assessment").path("passed").asBoolean()).isFalse();
+        assertThat(json.path("historicalAssessment").path("passed").asBoolean()).isTrue();
     }
 
     private static QaEvaluationUseCase useCase() {

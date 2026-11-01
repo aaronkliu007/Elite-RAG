@@ -25,7 +25,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PostgresMigrationIntegrationTest {
-    private static final int CURRENT_MIGRATION_COUNT = 18;
+    private static final int CURRENT_MIGRATION_COUNT = 19;
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
             .withDatabaseName("rag_test").withUsername("migration_owner").withPassword("migration_test_only");
     private static final String RUNTIME_USER = "rag_runtime_test";

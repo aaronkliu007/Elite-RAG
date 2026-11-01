@@ -195,6 +195,8 @@ public final class GroundedQaService {
                     command.requestId(), RefusalReason.UNSAFE_TO_SEND, false));
         }
 
+        evaluationTraces.recordSanitizedQuestion(command.requestId(), safeQuestion.value());
+
         Optional<QaPersistencePort.RequestState> retrieving = persistence.transition(
                 command.requestId(), state.revision(), QaStatus.RETRIEVING, clock.instant());
         if (retrieving.isEmpty()) return stale(command);

@@ -60,6 +60,12 @@ class JdbcEvaluationRepositoryIntegrationTest {
 
         assertThat(repository.findDataset(dataset.id())).contains(dataset);
         assertThat(repository.findRun(runId)).contains(run);
+        owner.sql("UPDATE qa_evaluation_run SET metrics=metrics-'reviewedClaimCount'-'generatedClaimCount' WHERE id=:id")
+                .param("id",runId).update();
+        var historical=repository.findRun(runId).orElseThrow();
+        assertThat(historical.assessment().passed()).isTrue();
+        assertThat(historical.currentAssessment().passed()).isFalse();
+        assertThat(historical.currentAssessment().failures()).contains(EvaluationGate.Failure.CLAIM_REVIEW_COVERAGE);
         assertThat(owner.sql("SELECT code_version FROM qa_evaluation_run WHERE id=:id")
                 .param("id",runId).query(String.class).single()).isEqualTo("code-1");
         assertThat(owner.sql("""
@@ -70,7 +76,20 @@ class JdbcEvaluationRepositoryIntegrationTest {
     }
 
     @Test
-    void observesTopTenEvidenceWithoutPersistingRawModelPayloads() {
+    void persistsDatasetFingerprintForCurrentGateReassessment() {
+        String digest=EvaluationDatasetFingerprint.sha256(dataset);
+        var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),dataset.id(),dataset.version(),"code","policy",
+                dataset.promptVersion(),dataset.sanitizationVersion(),"model",Instant.EPOCH,Instant.EPOCH,
+                new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1),new EvaluationGate.Assessment(true,List.of()),digest,digest);
+        repository.save(run);
+        var loaded=repository.findRun(run.runId()).orElseThrow();
+        assertThat(loaded.recordedDatasetDigest()).isEqualTo(digest);
+        assertThat(loaded.currentAssessment().failures()).contains(EvaluationGate.Failure.DATASET_PROVENANCE);
+        assertThat(loaded.withCurrentDatasetDigest(digest).currentAssessment().passed()).isTrue();
+    }
+
+    @Test
+    void observesTopTenEvidenceWithoutPersistingRawModelPayloads() throws Exception {
         UUID actor=UUID.randomUUID(),space=UUID.randomUUID(),document=UUID.randomUUID();
         UUID version=UUID.randomUUID(),request=UUID.randomUUID();
         owner.sql("INSERT INTO app_user(id,external_id,display_name) VALUES (:id,:ext,'Evaluation User')")
@@ -112,12 +131,20 @@ class JdbcEvaluationRepositoryIntegrationTest {
 
         var requestRef=new EvaluationCase.EvidenceRef(document,"fictional-node-10");
         var responseRef=new EvaluationCase.EvidenceRef(document,"fictional-node-1");
+        String locatorText=owner.sql("SELECT locator::text FROM qa_evidence_snapshot WHERE request_id=:request AND ordinal=0")
+                .param("request",request).query(String.class).single();
         traces.begin(request);
         traces.recordRequest(request,List.of(requestRef));
         traces.recordResponse(request,List.of(responseRef));
         var observation=repository.observe(request);
 
         assertThat(observation.evidenceIds()).containsExactlyInAnyOrderElementsOf(evidenceIds);
+        assertThat(observation.evidenceReferences().get(evidenceIds.getFirst()))
+                .isEqualTo(new EvaluationCase.ReviewedEvidence(document,version,"fictional-node-0","b".repeat(64),
+                        java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                                .digest("Fictional Source".getBytes(java.nio.charset.StandardCharsets.UTF_8))),
+                        java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                                .digest(locatorText.getBytes(java.nio.charset.StandardCharsets.UTF_8)))));
         assertThat(observation.retrievedTop10()).hasSize(10)
                 .doesNotContain(new EvaluationCase.EvidenceRef(document,"fictional-node-10"));
         assertThat(observation.modelRequestTrace()).containsExactly(requestRef);

@@ -26,16 +26,29 @@ public class QaEvaluationAdminController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public EvaluationRepository.EvaluationRun start(Authentication authentication,@RequestBody StartRequest request) {
+    public EvaluationRunView start(Authentication authentication,@RequestBody StartRequest request) {
         requireSystemAdmin(authentication);
         if(request==null)throw new IllegalArgumentException("request body is required");
-        return evaluations.run(request.datasetId(),request.codeVersion(),request.policyVersion(),request.modelConfigVersion());
+        return EvaluationRunView.from(evaluations.run(
+                request.datasetId(),request.codeVersion(),request.policyVersion(),request.modelConfigVersion()));
     }
 
     @GetMapping("/{runId}")
-    public EvaluationRepository.EvaluationRun get(Authentication authentication,@PathVariable UUID runId) {
+    public EvaluationRunView get(Authentication authentication,@PathVariable UUID runId) {
         requireSystemAdmin(authentication);
-        return evaluations.find(runId).orElseThrow(AccessDeniedAsNotFoundException::new);
+        return EvaluationRunView.from(evaluations.find(runId).orElseThrow(AccessDeniedAsNotFoundException::new));
+    }
+
+    public record EvaluationRunView(UUID runId,UUID datasetId,String datasetVersion,String codeVersion,
+                                    String policyVersion,String promptVersion,String sanitizationVersion,
+                                    String modelConfigVersion,java.time.Instant startedAt,java.time.Instant completedAt,
+                                    EvaluationMetrics metrics,EvaluationGate.Assessment assessment,
+                                    EvaluationGate.Assessment historicalAssessment,String datasetDigest) {
+        static EvaluationRunView from(EvaluationRepository.EvaluationRun run) {
+            return new EvaluationRunView(run.runId(),run.datasetId(),run.datasetVersion(),run.codeVersion(),
+                    run.policyVersion(),run.promptVersion(),run.sanitizationVersion(),run.modelConfigVersion(),
+                    run.startedAt(),run.completedAt(),run.metrics(),run.currentAssessment(),run.assessment(),run.recordedDatasetDigest());
+        }
     }
 
     private void requireSystemAdmin(Authentication authentication) {
