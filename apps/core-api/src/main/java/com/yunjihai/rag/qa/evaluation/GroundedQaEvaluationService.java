@@ -14,6 +14,7 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
     private final EvaluationGate gate;
     private final Clock clock;
     private final EvaluationTraceRegistry traces;
+    private final QuestionDigestPort reviewTokenHasher;
 
     public GroundedQaEvaluationService(
             GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock) {
@@ -23,17 +24,30 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
     public GroundedQaEvaluationService(
             GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock,
             EvaluationTraceRegistry traces) {
-        this(qa::ask,repository,gate,clock,traces);
+        this(qa::ask,repository,gate,clock,traces,null);
+    }
+
+    public GroundedQaEvaluationService(
+            GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock,
+            EvaluationTraceRegistry traces,QuestionDigestPort hasher) {
+        this(qa::ask,repository,gate,clock,traces,Objects.requireNonNull(hasher));
     }
 
     GroundedQaEvaluationService(
             QaExecution qa,EvaluationRepository repository,EvaluationGate gate,Clock clock) {
-        this(qa,repository,gate,clock,new EvaluationTraceRegistry());
+        this(qa,repository,gate,clock,new EvaluationTraceRegistry(),null);
     }
 
     GroundedQaEvaluationService(
             QaExecution qa,EvaluationRepository repository,EvaluationGate gate,Clock clock,
             EvaluationTraceRegistry traces) {
+        this(qa,repository,gate,clock,traces,null);
+    }
+
+    GroundedQaEvaluationService(
+            QaExecution qa,EvaluationRepository repository,EvaluationGate gate,Clock clock,
+            EvaluationTraceRegistry traces,QuestionDigestPort hasher) {
+        this.reviewTokenHasher=hasher;
         this.qa=Objects.requireNonNull(qa); this.repository=Objects.requireNonNull(repository);
         this.gate=Objects.requireNonNull(gate); this.clock=Objects.requireNonNull(clock);
         this.traces=Objects.requireNonNull(traces);
@@ -109,7 +123,9 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
                 :outcome instanceof QaOutcome.Failed failed?failed.code():null;
         return new EvaluationCaseResult(item.id(),requestId,item.shouldRefuse(),outcome.status(),reason,
                 total.expected,Math.toIntExact(total.retrieved),outcome instanceof QaOutcome.Answered answered?answered.claims().size():0,Math.toIntExact(total.reviewedClaims),
-                Math.toIntExact(total.supportedClaims),total.leakages);
+                Math.toIntExact(total.supportedClaims),total.leakages,
+                reviewTokenHasher==null||observation.sanitizedQuestionDigest()==null?null
+                        :EvaluationReviewBinding.create(reviewTokenHasher,observation.sanitizedQuestionDigest()));
     }
 
     private static Optional<EvaluationCase.ReviewVerdict> reviewed(

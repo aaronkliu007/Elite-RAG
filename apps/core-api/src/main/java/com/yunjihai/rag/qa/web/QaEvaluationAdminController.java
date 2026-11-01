@@ -6,7 +6,8 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.access.role.*;
 import com.yunjihai.rag.qa.evaluation.*;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -15,7 +16,8 @@ import java.util.*;
 
 @RestController
 @RequestMapping("/api/admin/qa/evaluation-runs")
-@ConditionalOnBean({QaEvaluationUseCase.class,RoleAssignmentService.class})
+@Profile("local")
+@ConditionalOnExpression("T(org.springframework.util.StringUtils).hasText('${rag.qa.hmac-key:}')")
 public class QaEvaluationAdminController {
     private final QaEvaluationUseCase evaluations;
     private final RoleAssignmentService roles;
@@ -43,11 +45,22 @@ public class QaEvaluationAdminController {
                                     String policyVersion,String promptVersion,String sanitizationVersion,
                                     String modelConfigVersion,java.time.Instant startedAt,java.time.Instant completedAt,
                                     EvaluationMetrics metrics,EvaluationGate.Assessment assessment,
-                                    EvaluationGate.Assessment historicalAssessment,String datasetDigest,List<EvaluationCaseResult> caseResults) {
+                                    EvaluationGate.Assessment historicalAssessment,String datasetDigest,List<CaseResultView> caseResults) {
         static EvaluationRunView from(EvaluationRepository.EvaluationRun run) {
             return new EvaluationRunView(run.runId(),run.datasetId(),run.datasetVersion(),run.codeVersion(),
                     run.policyVersion(),run.promptVersion(),run.sanitizationVersion(),run.modelConfigVersion(),
-                    run.startedAt(),run.completedAt(),run.metrics(),run.currentAssessment(),run.assessment(),run.recordedDatasetDigest(),run.caseResults());
+                    run.startedAt(),run.completedAt(),run.metrics(),run.currentAssessment(),run.assessment(),run.recordedDatasetDigest(),run.caseResults().stream().map(CaseResultView::from).toList());
+        }
+    }
+
+    public record CaseResultView(UUID caseId,UUID requestId,boolean expectedRefusal,
+                                 com.yunjihai.rag.qa.domain.QaStatus status,String reason,
+                                 int expectedEvidence,int retrievedEvidence,int generatedClaims,
+                                 int reviewedClaims,int supportedClaims,int leakageCount) {
+        static CaseResultView from(EvaluationCaseResult value) {
+            return new CaseResultView(value.caseId(),value.requestId(),value.expectedRefusal(),value.status(),value.reason(),
+                    value.expectedEvidence(),value.retrievedEvidence(),value.generatedClaims(),value.reviewedClaims(),
+                    value.supportedClaims(),value.leakageCount());
         }
     }
 

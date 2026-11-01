@@ -49,6 +49,47 @@ class QaEvaluationAdminControllerTest {
         assertThat(json.path("caseResults").size()).isEqualTo(1);
         assertThat(json.path("caseResults").get(0).path("reason").asString()).isEqualTo("CONFLICTING_EVIDENCE");
         assertThat(json.toString()).doesNotContain("question", "answer", "excerpt", "title");
+        assertThat(json.toString()).doesNotContain("reviewBinding");
+    }
+
+    @Test
+    void reviewContextRequiresAdminOwnershipAndCurrentSourceAuthorizationAndAuditsAccess() {
+        UUID caseId=UUID.randomUUID(),request=UUID.randomUUID(),doc=UUID.randomUUID(),version=UUID.randomUUID(),evidence=UUID.randomUUID();
+        var ref=new EvaluationCase.EvidenceRef(doc,"node");
+        var source=new EvaluationCase.ReviewedEvidence(doc,version,"node","a".repeat(64),"b".repeat(64),"c".repeat(64));
+        var item=new EvaluationCase(caseId,ADMIN,"虚构问题",Set.of(ref),Set.of(),Set.of(),false,Set.of("WORD"));
+        var dataset=new EvaluationDataset(DATASET,"v1","p1","s1",List.of(item),false);
+        var result=new EvaluationCaseResult(caseId,request,false,com.yunjihai.rag.qa.domain.QaStatus.ANSWERED,
+                null,1,1,1,0,0,0,"d".repeat(64));
+        var run=new EvaluationRepository.EvaluationRun(RUN,DATASET,"v1","c","p","p1","s1","m",
+                Instant.EPOCH,Instant.EPOCH,new EvaluationMetrics(1,1,1,1,1,0,0,0,0),
+                new EvaluationGate.Assessment(false,List.of()),EvaluationDatasetFingerprint.sha256(dataset),null,List.of(result));
+        EvaluationRepository repo=new EvaluationRepository() {
+            public Optional<EvaluationDataset> findDataset(UUID id) { return DATASET.equals(id)?Optional.of(dataset):Optional.empty(); }
+            public Observation observe(UUID id) { return new Observation(Set.of(ref),Set.of(evidence),Set.of(),Set.of(),Map.of(evidence,source),null); }
+            public void save(EvaluationRun r) { }
+            public Optional<EvaluationRun> findRun(UUID id) { return RUN.equals(id)?Optional.of(run):Optional.empty(); }
+        };
+        var persistence=(com.yunjihai.rag.qa.QaPersistencePort)java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(),new Class<?>[]{com.yunjihai.rag.qa.QaPersistencePort.class},(proxy,method,args)->{
+                    if(method.getName().equals("find"))return Optional.of(new com.yunjihai.rag.qa.domain.QaOutcome.Answered(request,"虚构声明",
+                            List.of(new com.yunjihai.rag.qa.domain.CitationClaim(UUID.randomUUID(),"虚构声明",List.of(evidence))),false));
+                    throw new UnsupportedOperationException();
+                });
+        boolean[] allowed={true};
+        var service=new EvaluationReviewService(repo,persistence,(id,actor,at)->allowed[0],
+                java.time.Clock.fixed(Instant.EPOCH,java.time.ZoneOffset.UTC),
+                new com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer(Set.of()),value->"d".repeat(64));
+        List<com.yunjihai.rag.audit.AuditCommand> events=new ArrayList<>();
+        var controller=new QaEvaluationReviewController(service,roles(true),command->{ events.add(command); return null; });
+        var response=controller.get(auth(ADMIN),RUN,caseId);
+        assertThat(response.getHeaders().getCacheControl()).contains("no-store");
+        assertThat(response.getBody().question()).isEqualTo("虚构问题");
+        assertThat(events).singleElement().satisfies(event->assertThat(event.action()).isEqualTo(com.yunjihai.rag.audit.AuditAction.VIEW));
+        assertThatThrownBy(()->controller.get(auth(ORDINARY),RUN,caseId)).isInstanceOf(AccessDeniedAsNotFoundException.class);
+        allowed[0]=false;
+        assertThatThrownBy(()->controller.get(auth(ADMIN),RUN,caseId)).isInstanceOf(AccessDeniedAsNotFoundException.class);
+        assertThat(events).hasSize(1);
     }
 
     private static QaEvaluationUseCase useCase() {

@@ -125,8 +125,17 @@ public class WorkerRuntimeConfiguration {
     @ConditionalOnBean({GroundedQaService.class,EvaluationRepository.class})
     QaEvaluationUseCase qaEvaluationUseCase(
             GroundedQaService qa,EvaluationRepository repository,EvaluationGate gate,Clock clock,
-            EvaluationTraceRegistry traces) {
-        return new GroundedQaEvaluationService(qa,repository,gate,clock,traces);
+            EvaluationTraceRegistry traces,com.yunjihai.rag.qa.QuestionDigestPort hasher) {
+        return new GroundedQaEvaluationService(qa,repository,gate,clock,traces,hasher);
+    }
+
+    @Bean
+    @ConditionalOnBean({GroundedQaService.class,EvaluationRepository.class,QuestionDigestPort.class})
+    com.yunjihai.rag.qa.evaluation.EvaluationReviewService evaluationReviewService(
+            EvaluationRepository repository,QaPersistencePort persistence,QaEvidenceAuthorizationPort authorization,
+            Clock clock,SensitiveContentSanitizer sanitizer,QuestionDigestPort hasher) {
+        return new com.yunjihai.rag.qa.evaluation.EvaluationReviewService(
+                repository,persistence,authorization,clock,sanitizer,hasher);
     }
 
     @Bean

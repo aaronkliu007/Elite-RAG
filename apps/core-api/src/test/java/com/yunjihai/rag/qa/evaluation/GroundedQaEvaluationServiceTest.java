@@ -49,6 +49,23 @@ class GroundedQaEvaluationServiceTest {
     }
 
     @Test
+    void storesKeyedReviewBindingWithoutPersistingPlainQuestionDigest() {
+        UUID actor=UUID.randomUUID(),document=UUID.randomUUID(),evidence=UUID.randomUUID();
+        var dataset=dataset(actor,document,false);
+        var repository=new MemoryRepository(dataset,new EvaluationRepository.Observation(
+                Set.of(new EvaluationCase.EvidenceRef(document,"node-1")),Set.of(evidence),Set.of(),Set.of(),
+                Map.of(),"f".repeat(64)));
+        var service=new GroundedQaEvaluationService(command->new QaOutcome.Answered(command.requestId(),"声明",
+                List.of(new CitationClaim(UUID.randomUUID(),"声明",List.of(evidence))),false),repository,
+                new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC),new EvaluationTraceRegistry(),value->"a".repeat(64));
+        var run=service.run(dataset.id(),"code","policy","model");
+        assertThat(run.caseResults()).allSatisfy(result->{
+            assertThat(result.reviewBinding()).isEqualTo("a".repeat(64));
+            assertThat(result.reviewBinding()).isNotEqualTo("f".repeat(64));
+        });
+    }
+
+    @Test
     void measuresReviewCoverageAgainstGeneratedClaimsWithoutHidingMissingAnswers() {
         UUID actor=UUID.randomUUID(),document=UUID.randomUUID(),evidence=UUID.randomUUID(),version=UUID.randomUUID();
         var ref=new EvaluationCase.EvidenceRef(document,"node-1");

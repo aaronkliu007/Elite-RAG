@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ApiRequestError, apiRequest } from '../api/http'
+import QaEvaluationReviewPanel from '../components/QaEvaluationReviewPanel.vue'
 
 interface CaseResult {
   caseId: string; requestId: string; expectedRefusal: boolean; status: string; reason: string | null
@@ -17,6 +18,7 @@ const result = ref<EvaluationRun | null>(null)
 const loading = ref(false)
 const error = ref('')
 const filter = ref('all')
+const reviewCaseId = ref('')
 const visibleCases = computed(() => (result.value?.caseResults ?? []).filter(item => {
   if (filter.value === 'unexpected-refusal') return !item.expectedRefusal && item.status === 'REFUSED'
   if (filter.value === 'review') return item.reviewedClaims < item.generatedClaims
@@ -38,6 +40,7 @@ async function load() {
   loading.value = true
   error.value = ''
   result.value = null
+  reviewCaseId.value = ''
   try {
     result.value = await apiRequest<EvaluationRun>(`/api/admin/qa/evaluation-runs/${encodeURIComponent(runId.value.trim())}`)
   } catch (failure) {
@@ -152,6 +155,21 @@ function resultText(item: CaseResult) {
             问答请求编号：{{ item.requestId }}
           </p>
           <p>期望证据召回 {{ item.retrievedEvidence }}/{{ item.expectedEvidence }} · 声明审核 {{ item.reviewedClaims }}/{{ item.generatedClaims }} · 已支持 {{ item.supportedClaims }} · 越权 {{ item.leakageCount }}</p>
+          <button
+            v-if="item.status === 'ANSWERED' && !item.expectedRefusal"
+            class="review-action"
+            type="button"
+            data-action="load-review"
+            @click="reviewCaseId = item.caseId"
+          >
+            审核声明
+          </button>
+          <QaEvaluationReviewPanel
+            v-if="reviewCaseId === item.caseId"
+            :key="item.caseId"
+            :run-id="result.runId"
+            :case-id="item.caseId"
+          />
         </article>
       </section>
     </template>
@@ -174,6 +192,7 @@ label { display: grid; gap: 8px; min-width: 0; font-weight: 700; } input, select
 .button-primary { color: white; background: var(--color-primary); -webkit-text-fill-color: white; opacity: 1; }
 .button-primary:hover { background: var(--color-primary-strong); }.button:focus-visible, input:focus-visible { outline: 3px solid #89b4f8; outline-offset: 2px; }.button:disabled { opacity: .5; cursor: not-allowed; }
 .summary p, .case-card p { color: var(--color-muted); overflow-wrap: anywhere; }.state { padding: 18px; color: var(--color-muted); }.error { color: #a11a1a; }
+.review-action { justify-self: start; min-height: 38px; padding: 0 14px; border: 1px solid var(--color-primary); border-radius: var(--radius-control); color: var(--color-primary); background: white; font-weight: 700; cursor: pointer; } .review-action:focus-visible { outline: 3px solid #89b4f8; outline-offset: 2px; }
 .case-card { display: grid; gap: 8px; min-width: 0; padding: 16px; border: 1px solid var(--color-border); border-radius: var(--radius-control); }
 .case-heading { display: flex; gap: 12px; flex-wrap: wrap; justify-content: space-between; }.identifier { font-size: .9rem; }
 @media (max-width: 600px) { .query-card { grid-template-columns: 1fr; } .button { width: 100%; } }

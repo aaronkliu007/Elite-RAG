@@ -88,6 +88,9 @@ class JdbcEvaluationRepositoryIntegrationTest {
         String stored=owner.sql("SELECT case_results::text FROM qa_evaluation_run WHERE id=:id")
                 .param("id",run.runId()).query(String.class).single();
         assertThat(stored).doesNotContain("question","answer","excerpt","title");
+        owner.sql("UPDATE qa_evaluation_run SET case_results=jsonb_build_array((case_results->0)-'reviewBinding') WHERE id=:id")
+                .param("id",run.runId()).update();
+        assertThat(repository.findRun(run.runId()).orElseThrow().caseResults()).containsExactly(result);
     }
 
     @Test

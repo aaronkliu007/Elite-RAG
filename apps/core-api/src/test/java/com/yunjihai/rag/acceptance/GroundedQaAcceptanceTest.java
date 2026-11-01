@@ -80,6 +80,13 @@ class GroundedQaAcceptanceTest {
     }
 
     @Test
+    void registersTheProtectedReviewEndpointInTheRealQaRuntime() {
+        assertThat(environment.context.getBean(com.yunjihai.rag.qa.evaluation.EvaluationReviewService.class)).isNotNull();
+        assertThat(environment.context.getBean(com.yunjihai.rag.qa.web.QaEvaluationReviewController.class)).isNotNull();
+        assertThat(environment.context.getBean(com.yunjihai.rag.qa.web.QaEvaluationAdminController.class)).isNotNull();
+    }
+
+    @Test
     void answersAcrossEveryAuthorizedSpaceWithoutSendingUnauthorizedEvidenceAndReauthorizesSources() {
         var scenario = environment.seed("happy");
         var response = environment.qa.ask(environment.authentication(scenario.reader()),
