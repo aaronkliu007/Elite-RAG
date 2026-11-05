@@ -98,7 +98,10 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
         total.retrieved+=item.expectedEvidence().stream().filter(observation.retrievedTop10()::contains).count();
         if(item.shouldRefuse()) {
             total.refusalCases++;
-            if(outcome instanceof QaOutcome.Refused)total.correctRefusals++;
+            if(outcome instanceof QaOutcome.Refused refused && refused.reason()!=RefusalReason.INVALID_MODEL_OUTPUT
+                    && !observation.conflictScreeningUnavailable()
+                    && (refused.reason()!=RefusalReason.CONFLICTING_EVIDENCE||observation.conflictScreeningCompleted()))
+                total.correctRefusals++;
         } else {
             int claims=outcome instanceof QaOutcome.Answered answered?answered.claims().size():0;
             int citations=outcome instanceof QaOutcome.Answered answered?answered.claims().stream()
@@ -119,13 +122,15 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
             }
         }
         total.leakages+=leakages(item,observation,outcome);
-        String reason=outcome instanceof QaOutcome.Refused refused?refused.reason().name()
+        String reason=observation.conflictScreeningUnavailable()?"CONFLICT_SCREENING_UNAVAILABLE"
+                :outcome instanceof QaOutcome.Refused refused?refused.reason().name()
                 :outcome instanceof QaOutcome.Failed failed?failed.code():null;
         return new EvaluationCaseResult(item.id(),requestId,item.shouldRefuse(),outcome.status(),reason,
                 total.expected,Math.toIntExact(total.retrieved),outcome instanceof QaOutcome.Answered answered?answered.claims().size():0,Math.toIntExact(total.reviewedClaims),
                 Math.toIntExact(total.supportedClaims),total.leakages,
                 reviewTokenHasher==null||observation.sanitizedQuestionDigest()==null?null
-                        :EvaluationReviewBinding.create(reviewTokenHasher,observation.sanitizedQuestionDigest()));
+                        :EvaluationReviewBinding.create(reviewTokenHasher,observation.sanitizedQuestionDigest()),
+                observation.conflictScreeningCompleted()&&!observation.conflictScreeningUnavailable());
     }
 
     private static Optional<EvaluationCase.ReviewVerdict> reviewed(

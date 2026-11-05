@@ -8,6 +8,9 @@ import com.yunjihai.rag.audit.AuditOutcome;
 import com.yunjihai.rag.audit.AuditSink;
 import com.yunjihai.rag.knowledge.DocumentVersionRef;
 import com.yunjihai.rag.retrieval.domain.Candidate;
+import com.yunjihai.rag.retrieval.domain.Evidence;
+import com.yunjihai.rag.retrieval.domain.EvidencePack;
+import com.yunjihai.rag.retrieval.domain.DegradationReason;
 import com.yunjihai.rag.retrieval.domain.PageLocator;
 import com.yunjihai.rag.retrieval.domain.RecallSource;
 import com.yunjihai.rag.retrieval.domain.RetrievalPolicy;
@@ -155,6 +158,40 @@ class TrustedRetrievalServiceTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    @Test
+    void optionalLocalFallbackNeverShrinksReauthorizedConflictScreening() {
+        var candidates = new ArrayList<Candidate>();
+        for (int index = 1; index <= 13; index++) {
+            candidates.add(candidate(index, 100 + index, RecallSource.LEXICAL, index,
+                    "第" + index + "个不同候选的正文与安全测试"));
+        }
+        var executor = Executors.newFixedThreadPool(2);
+        try {
+            var policy = RetrievalPolicy.defaults();
+            var ids = new AtomicInteger(6000);
+            var recall = new HybridRecallService((query, filter, limit) -> candidates,
+                    (query, filter, limit) -> List.of(), executor, policy);
+            var packs = new ArrayList<EvidencePack>();
+            for (boolean enabled : new boolean[]{false, true}) {
+                var service = new TrustedRetrievalService(
+                        (userId, at) -> Set.of(new PrincipalRef(PrincipalType.USER, userId)), recall,
+                        new RerankingService((query, values) -> { throw new IllegalStateException(); },
+                                executor, policy, enabled),
+                        (userId, requested, at) -> flatten(requested).stream()
+                                .filter(version -> !version.documentId().equals(uuid(113)))
+                                .collect(java.util.stream.Collectors.toUnmodifiableSet()),
+                        new EvidenceSelectionService(policy), at -> uuid(ids.incrementAndGet()), policy,
+                        Clock.fixed(NOW, ZoneOffset.UTC), command -> null);
+                packs.add(service.retrieve(new RetrievalQuery(REQUEST_ID, USER_ID, Set.of(SPACE_ID),
+                        "安全测试", Map.of(), 8)));
+            }
+            var baseline = packs.get(0).conflictScreeningEvidence().stream().map(Evidence::documentId).toList();
+            var reordered = packs.get(1).conflictScreeningEvidence().stream().map(Evidence::documentId).toList();
+            assertThat(reordered).containsExactlyInAnyOrderElementsOf(baseline).hasSize(12).doesNotContain(uuid(113));
+            assertThat(packs.get(1).degradationReasons()).contains(DegradationReason.RERANKER_UNAVAILABLE);
+        } finally { executor.shutdownNow(); }
     }
 
     @Test

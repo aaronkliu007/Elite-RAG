@@ -98,7 +98,9 @@ class JdbcEvaluationRepositoryIntegrationTest {
         String digest=EvaluationDatasetFingerprint.sha256(dataset);
         var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),dataset.id(),dataset.version(),"code","policy",
                 dataset.promptVersion(),dataset.sanitizationVersion(),"model",Instant.EPOCH,Instant.EPOCH,
-                new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1),new EvaluationGate.Assessment(true,List.of()),digest,digest);
+                new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1),new EvaluationGate.Assessment(true,List.of()),digest,digest,List.of(
+                        new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),true,
+                                com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"INSUFFICIENT_EVIDENCE",0,0,0,0,0,0)));
         repository.save(run);
         var loaded=repository.findRun(run.runId()).orElseThrow();
         assertThat(loaded.recordedDatasetDigest()).isEqualTo(digest);
@@ -106,6 +108,52 @@ class JdbcEvaluationRepositoryIntegrationTest {
         assertThat(loaded.withCurrentDatasetDigest(digest).currentAssessment().passed()).isTrue();
     }
 
+    @Test
+    void historicalInvalidModelOutputFailsCurrentGateAfterDatabaseRoundTrip() {
+        String digest=EvaluationDatasetFingerprint.sha256(dataset);
+        var metrics=new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1);
+        var caseResult=new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),true,
+                com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"INVALID_MODEL_OUTPUT",0,0,0,0,0,0);
+        var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),dataset.id(),dataset.version(),"code","policy",
+                dataset.promptVersion(),dataset.sanitizationVersion(),"model",Instant.EPOCH,Instant.EPOCH,
+                metrics,new EvaluationGate.Assessment(true,List.of()),digest,digest,List.of(caseResult));
+        repository.save(run);
+        var loaded=repository.findRun(run.runId()).orElseThrow().withCurrentDatasetDigest(digest);
+        assertThat(loaded.assessment().passed()).isTrue();
+        assertThat(loaded.currentAssessment().failures()).contains(EvaluationGate.Failure.CORRECT_REFUSAL);
+        assertThat(loaded.currentAssessment().passed()).isFalse();
+    }
+    @Test
+    void persistsCompletedConflictMarkerAndTreatsLegacyMissingMarkerAsUnverified() {
+        String digest=EvaluationDatasetFingerprint.sha256(dataset);
+        var metrics=new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1);
+        var result=new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),true,
+                com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"CONFLICTING_EVIDENCE",0,0,0,0,0,0,null,true);
+        var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),dataset.id(),dataset.version(),"code","policy",
+                dataset.promptVersion(),dataset.sanitizationVersion(),"model",Instant.EPOCH,Instant.EPOCH,
+                metrics,new EvaluationGate.Assessment(true,List.of()),digest,digest,List.of(result));
+        repository.save(run);
+        var loaded=repository.findRun(run.runId()).orElseThrow().withCurrentDatasetDigest(digest);
+        assertThat(loaded.caseResults().getFirst().conflictScreeningCompleted()).isTrue();
+        assertThat(loaded.currentAssessment().passed()).isTrue();
+
+        owner.sql("UPDATE qa_evaluation_run SET case_results=jsonb_build_array((case_results->0)-'conflictScreeningCompleted') WHERE id=:id")
+                .param("id",run.runId()).update();
+        var legacy=repository.findRun(run.runId()).orElseThrow().withCurrentDatasetDigest(digest);
+        assertThat(legacy.assessment().passed()).isTrue();
+        assertThat(legacy.caseResults().getFirst().conflictScreeningCompleted()).isFalse();
+        assertThat(legacy.currentAssessment().failures()).contains(EvaluationGate.Failure.REFUSAL_DIAGNOSTICS_INCOMPLETE);
+    }
+    @Test
+    void observationCarriesExplicitCompletedConflictScreeningTrace() {
+        UUID request=UUID.randomUUID();
+        traces.begin(request);
+        traces.recordConflictScreeningCompleted(request);
+        var observation=repository.observe(request);
+        assertThat(observation.conflictScreeningCompleted()).isTrue();
+        assertThat(observation.conflictScreeningUnavailable()).isFalse();
+        assertThat(repository.observe(UUID.randomUUID()).conflictScreeningCompleted()).isFalse();
+    }
     @Test
     void observesTopTenEvidenceWithoutPersistingRawModelPayloads() throws Exception {
         UUID actor=UUID.randomUUID(),space=UUID.randomUUID(),document=UUID.randomUUID();
@@ -179,6 +227,17 @@ class JdbcEvaluationRepositoryIntegrationTest {
         var observation = repository.observe(request);
         assertThat(observation.retrievedTop10()).containsExactly(reference);
         assertThat(observation.evidenceIds()).isEmpty();
+    }
+
+    @Test
+    void observesConflictScreeningFailureWithoutEvidenceOrSensitiveContent() {
+        UUID request = UUID.randomUUID();
+        traces.begin(request);
+        traces.recordConflictScreeningUnavailable(request);
+        var observation = repository.observe(request);
+        assertThat(observation.conflictScreeningUnavailable()).isTrue();
+        assertThat(observation.evidenceIds()).isEmpty();
+        assertThat(traces.consume(request).conflictScreeningUnavailable()).isFalse();
     }
 
     private static EvaluationDataset dataset() {

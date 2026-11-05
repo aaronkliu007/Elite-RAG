@@ -19,6 +19,12 @@ public final class ExactQuoteCitationSupportVerifier implements CitationSupportV
                     + "(?:\\s*(?:正式|已经|予以|被|获得|进行|及时|完成|能够|可以|能|可|再|得|予|会|获)){0,4})\\s*$");
     private static final Pattern NUMERIC_QUALIFIER_BEFORE_EXTRACT = Pattern.compile(
             "(?:不低于|不少于|不超过|不高于|大于|小于|超过|至少|至多|(?<!预)约为|(?<!预)约|预计|最低|最高|不足)\\s*$");
+    private static final Pattern NUMERIC_UNIT_AT_END = Pattern.compile(
+            "(?:万元|元|天|日|周|年|个月|月|人|名|台|%|GB|MB|TPS|QPS)$",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
+    private static final Pattern NUMERIC_QUALIFIER_AFTER_EXTRACT = Pattern.compile(
+            "^\\s*(?:(?:及)?(?:以上|以下)|以内|以外|左右|上下|"
+                    + "(?:至|到|[-~–—])\\s*[+\\-负]?[\\p{Nd}" + CHINESE_NUMERALS + "])");
     private static final Pattern CHINESE_AMOUNT_IN_EXTRACT = Pattern.compile(
             "[零〇一二三四五六七八九十百千万亿两壹贰叁肆伍陆柒捌玖拾佰仟]+\\s*(?:元|天|日|周|年|个月|月|人|台|%)");
 
@@ -63,12 +69,19 @@ public final class ExactQuoteCitationSupportVerifier implements CitationSupportV
             String prefix = whole.substring(prefixStart, occurrence);
             if (NEGATION_BEFORE_EXTRACT.matcher(prefix).find()
                     || (containsAmount && NUMERIC_QUALIFIER_BEFORE_EXTRACT.matcher(prefix).find())
+                    || (containsAmount && cutsNumericQualifier(whole, fragment, occurrence))
                     || cutsNumber(whole, fragment, occurrence)) return false;
             occurrence = whole.indexOf(fragment, occurrence + 1);
         }
         return true;
     }
 
+    private static boolean cutsNumericQualifier(String whole, String fragment, int occurrence) {
+        int last=fragment.codePointBefore(fragment.length());
+        if (!isNumeral(last) && !NUMERIC_UNIT_AT_END.matcher(fragment).find()) return false;
+        int after=occurrence+fragment.length();
+        return after<whole.length() && NUMERIC_QUALIFIER_AFTER_EXTRACT.matcher(whole.substring(after)).find();
+    }
     private static boolean cutsNumber(String whole, String fragment, int occurrence) {
         int last = fragment.codePointBefore(fragment.length());
         if (startsNumeric(fragment)) {

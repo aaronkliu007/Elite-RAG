@@ -181,8 +181,9 @@ public class OpenSearchAdapterConfiguration {
 
     @Bean
     RerankingService rerankingService(
-            RerankerPort reranker, ExecutorService executor, RetrievalPolicy policy) {
-        return new RerankingService(reranker, executor, policy);
+            RerankerPort reranker, ExecutorService executor, RetrievalPolicy policy,
+            @Value("${rag.retrieval.local-rerank.enabled:false}") boolean localFallbackEnabled) {
+        return new RerankingService(reranker, executor, policy, localFallbackEnabled);
     }
 
     @Bean

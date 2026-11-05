@@ -35,6 +35,15 @@ public final class EvaluationTraceRegistry {
         if (trace != null) trace.setRetrieval(refs);
     }
 
+    public void recordConflictScreeningCompleted(UUID requestId) {
+        var trace = active.get(requestId);
+        if (trace != null) trace.markConflictScreeningCompleted();
+    }
+    public void recordConflictScreeningUnavailable(UUID requestId) {
+        var trace = active.get(requestId);
+        if (trace != null) trace.markConflictScreeningUnavailable();
+    }
+
     public void recordSanitizedQuestion(UUID requestId, String question) {
         var trace = active.get(requestId);
         if (trace == null) return;
@@ -57,13 +66,14 @@ public final class EvaluationTraceRegistry {
             Set<EvaluationCase.EvidenceRef> retrievedTop10,
             Set<EvaluationCase.EvidenceRef> modelRequest,
             Set<EvaluationCase.EvidenceRef> modelResponse,
-            String sanitizedQuestionDigest) {
+            String sanitizedQuestionDigest,
+            boolean conflictScreeningUnavailable, boolean conflictScreeningCompleted) {
         public Trace {
             retrievedTop10 = Set.copyOf(retrievedTop10);
             modelRequest = Set.copyOf(modelRequest);
             modelResponse = Set.copyOf(modelResponse);
         }
-        static Trace empty() { return new Trace(false, Set.of(), Set.of(), Set.of(), null); }
+        static Trace empty() { return new Trace(false, Set.of(), Set.of(), Set.of(), null, false, false); }
     }
 
     private static final class MutableTrace {
@@ -72,12 +82,18 @@ public final class EvaluationTraceRegistry {
         private final Set<EvaluationCase.EvidenceRef> retrieval = new LinkedHashSet<>();
         private boolean retrievalObserved;
         private String questionDigest;
+        private boolean conflictScreeningUnavailable;
+        private boolean conflictScreeningCompleted;
         synchronized void setRetrieval(Collection<EvaluationCase.EvidenceRef> refs) {
             retrieval.clear(); retrieval.addAll(refs); retrievalObserved = true;
         }
         synchronized void addRequest(Collection<EvaluationCase.EvidenceRef> refs) { request.addAll(refs); }
         synchronized void addResponse(Collection<EvaluationCase.EvidenceRef> refs) { response.addAll(refs); }
         synchronized void setQuestionDigest(String digest) { questionDigest = digest; }
-        synchronized Trace snapshot() { return new Trace(retrievalObserved, retrieval, request, response, questionDigest); }
+        synchronized void markConflictScreeningUnavailable() { conflictScreeningUnavailable = true; }
+        synchronized void markConflictScreeningCompleted() { conflictScreeningCompleted = true; }
+        synchronized Trace snapshot() {
+            return new Trace(retrievalObserved, retrieval, request, response, questionDigest, conflictScreeningUnavailable, conflictScreeningCompleted);
+        }
     }
 }

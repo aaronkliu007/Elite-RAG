@@ -39,7 +39,9 @@ class EvaluationDatasetFingerprintTest {
                 Instant.EPOCH,Instant.EPOCH,metrics,old);
         assertThat(missing.currentAssessment().failures()).contains(EvaluationGate.Failure.DATASET_PROVENANCE);
         var same=new EvaluationRepository.EvaluationRun(run,dataset,"v1","c1","p1","p1","s1","m1",
-                Instant.EPOCH,Instant.EPOCH,metrics,old,"a".repeat(64),"a".repeat(64));
+                Instant.EPOCH,Instant.EPOCH,metrics,old,"a".repeat(64),"a".repeat(64),List.of(
+                        new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),true,
+                                com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"INSUFFICIENT_EVIDENCE",0,0,0,0,0,0)));
         assertThat(same.currentAssessment().passed()).isTrue();
     }
 }

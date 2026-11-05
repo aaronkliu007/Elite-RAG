@@ -22,18 +22,19 @@ const reviewCaseId = ref('')
 const visibleCases = computed(() => (result.value?.caseResults ?? []).filter(item => {
   if (filter.value === 'unexpected-refusal') return !item.expectedRefusal && item.status === 'REFUSED'
   if (filter.value === 'review') return item.reviewedClaims < item.generatedClaims
-  if (filter.value === 'failed') return item.status === 'FAILED'
+  if (filter.value === 'failed') return item.status === 'FAILED' || item.reason === 'CONFLICT_SCREENING_UNAVAILABLE' || item.reason === 'INVALID_MODEL_OUTPUT'
   return true
 }))
 const reasons: Record<string, string> = {
-  CONFLICTING_EVIDENCE: '证据冲突', INSUFFICIENT_EVIDENCE: '证据不足',
+  CONFLICTING_EVIDENCE: '证据冲突', CONFLICT_SCREENING_UNAVAILABLE: '冲突检查暂不可用',
+  INSUFFICIENT_EVIDENCE: '证据不足',
   NO_AUTHORIZED_SPACE: '没有已授权空间', UNSAFE_TO_SEND: '内容未通过安全检查',
   INVALID_MODEL_OUTPUT: '模型输出无效', UNSUPPORTED_CLAIM: '声明缺少支持',
 }
 const failures: Record<string, string> = {
   LEAKAGE: '越权泄漏', CITATION_VALIDITY: '引用有效率', RECALL_AT_10: '证据召回率',
   CLAIM_SUPPORT: '声明支持率', CLAIM_REVIEW_COVERAGE: '声明审核覆盖率',
-  CORRECT_REFUSAL: '正确拒答率', DATASET_PROVENANCE: '数据集内容未匹配',
+  CORRECT_REFUSAL: '正确拒答率', REFUSAL_DIAGNOSTICS_INCOMPLETE: '拒答诊断不完整', DATASET_PROVENANCE: '数据集内容未匹配',
 }
 async function load() {
   if (!runId.value.trim() || loading.value) return

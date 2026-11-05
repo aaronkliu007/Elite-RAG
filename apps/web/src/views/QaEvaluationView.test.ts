@@ -5,7 +5,7 @@ import QaEvaluationView from './QaEvaluationView.vue'
 describe('问答评测结果', () => {
   it('显示逐案例拒答原因、审核计数和当前门禁', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      runId: 'run-1', datasetVersion: 'v1', assessment: { passed: false, failures: ['CLAIM_REVIEW_COVERAGE'] },
+      runId: 'run-1', datasetVersion: 'v1', assessment: { passed: false, failures: ['CLAIM_REVIEW_COVERAGE', 'REFUSAL_DIAGNOSTICS_INCOMPLETE'] },
       historicalAssessment: { passed: true, failures: [] },
       caseResults: [{ caseId: 'case-1', requestId: 'request-1', expectedRefusal: false, status: 'REFUSED',
         reason: 'CONFLICTING_EVIDENCE', expectedEvidence: 2, retrievedEvidence: 1,
@@ -16,6 +16,7 @@ describe('问答评测结果', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(wrapper.text()).toContain('当前门禁未通过')
+    expect(wrapper.text()).toContain('拒答诊断不完整')
     expect(wrapper.text()).toContain('证据冲突')
     expect(wrapper.text()).toContain('case-1')
     expect(wrapper.text()).toContain('历史判断')
@@ -27,6 +28,43 @@ describe('问答评测结果', () => {
     expect(wrapper.text()).toContain('case-1')
   })
 
+  it('将冲突检查异常显示为系统故障并纳入失败筛选', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      runId: 'run-1', datasetVersion: 'v1', assessment: { passed: false, failures: ['CORRECT_REFUSAL'] },
+      historicalAssessment: { passed: false, failures: ['CORRECT_REFUSAL'] },
+      caseResults: [{ caseId: 'case-failure', requestId: 'request-1', expectedRefusal: true, status: 'REFUSED',
+        reason: 'CONFLICT_SCREENING_UNAVAILABLE', expectedEvidence: 0, retrievedEvidence: 0,
+        generatedClaims: 0, reviewedClaims: 0, supportedClaims: 0, leakageCount: 0 }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    const wrapper = mount(QaEvaluationView)
+    await wrapper.get('input[name="runId"]').setValue('run-1')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('冲突检查暂不可用')
+    await wrapper.get('select[name="filter"]').setValue('failed')
+    expect(wrapper.text()).toContain('case-failure')
+  })
+
+  it('失败筛选包含模型输出无效，同时保留正常证据不足的分类', async () => {
+    const base = { expectedRefusal: true, status: 'REFUSED', expectedEvidence: 0, retrievedEvidence: 0,
+      generatedClaims: 0, reviewedClaims: 0, supportedClaims: 0, leakageCount: 0 }
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      runId: 'run-1', datasetVersion: 'v1', assessment: { passed: false, failures: ['CORRECT_REFUSAL'] },
+      historicalAssessment: { passed: false, failures: ['CORRECT_REFUSAL'] },
+      caseResults: [
+        { ...base, caseId: 'model-fault', requestId: 'request-1', reason: 'INVALID_MODEL_OUTPUT' },
+        { ...base, caseId: 'normal-refusal', requestId: 'request-2', reason: 'INSUFFICIENT_EVIDENCE' },
+      ],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    const wrapper = mount(QaEvaluationView)
+    await wrapper.get('input[name="runId"]').setValue('run-1')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await wrapper.get('select[name="filter"]').setValue('failed')
+    expect(wrapper.text()).toContain('model-fault')
+    expect(wrapper.text()).toContain('模型输出无效')
+    expect(wrapper.text()).not.toContain('normal-refusal')
+  })
   it('加载受权审核上下文，生成需人工维护的标注片段', async () => {
     const source = { documentId: 'document-1', versionId: 'version-1', nodeId: 'node',
       contentDigest: 'a'.repeat(64), titleDigest: 'b'.repeat(64), locatorDigest: 'c'.repeat(64) }

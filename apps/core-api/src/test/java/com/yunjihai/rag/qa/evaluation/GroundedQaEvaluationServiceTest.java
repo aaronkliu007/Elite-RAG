@@ -49,6 +49,69 @@ class GroundedQaEvaluationServiceTest {
     }
 
     @Test
+    void conflictScreeningFailureIsNotCountedAsACorrectRefusal() {
+        UUID actor=UUID.randomUUID(), document=UUID.randomUUID();
+        var dataset=dataset(actor,document,true);
+        var observation=new EvaluationRepository.Observation(Set.of(),Set.of(),Set.of(),Set.of(),
+                Map.of(),null,true);
+        var repository=new MemoryRepository(dataset,observation);
+        var service=new GroundedQaEvaluationService(command->new QaOutcome.Refused(command.requestId(),
+                RefusalReason.CONFLICTING_EVIDENCE,false),repository,new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC));
+        var run=service.run(dataset.id(),"code","policy","model");
+        assertThat(run.metrics().refusalCaseCount()).isEqualTo(50);
+        assertThat(run.metrics().correctlyRefusedCount()).isZero();
+        assertThat(run.assessment().failures()).contains(EvaluationGate.Failure.CORRECT_REFUSAL);
+        assertThat(run.caseResults()).allSatisfy(result -> {
+            assertThat(result.status()).isEqualTo(QaStatus.REFUSED);
+            assertThat(result.reason()).isEqualTo("CONFLICT_SCREENING_UNAVAILABLE");
+        });
+    }
+
+    @Test
+    void invalidModelOutputDoesNotCountAsCorrectRefusal() {
+        UUID actor=UUID.randomUUID(), document=UUID.randomUUID();
+        var dataset=dataset(actor,document,true);
+        var repository=new MemoryRepository(dataset,new EvaluationRepository.Observation(Set.of(),Set.of(),Set.of(),Set.of()));
+        var service=new GroundedQaEvaluationService(command->new QaOutcome.Refused(command.requestId(),
+                RefusalReason.INVALID_MODEL_OUTPUT,false),repository,new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC));
+        var run=service.run(dataset.id(),"code","policy","model");
+        assertThat(run.metrics().refusalCaseCount()).isEqualTo(50);
+        assertThat(run.metrics().correctlyRefusedCount()).isZero();
+        assertThat(run.assessment().failures()).contains(EvaluationGate.Failure.CORRECT_REFUSAL);
+        assertThat(run.caseResults()).allSatisfy(result -> assertThat(result.reason()).isEqualTo("INVALID_MODEL_OUTPUT"));
+    }
+    @Test
+    void insufficientEvidenceStillCountsAsCorrectRefusal() {
+        UUID actor=UUID.randomUUID(), document=UUID.randomUUID();
+        var dataset=dataset(actor,document,true);
+        var repository=new MemoryRepository(dataset,new EvaluationRepository.Observation(Set.of(),Set.of(),Set.of(),Set.of()));
+        var service=new GroundedQaEvaluationService(command->new QaOutcome.Refused(command.requestId(),
+                RefusalReason.INSUFFICIENT_EVIDENCE,false),repository,new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC));
+        var run=service.run(dataset.id(),"code","policy","model");
+        assertThat(run.metrics().correctlyRefusedCount()).isEqualTo(50);
+        assertThat(run.assessment().failures()).doesNotContain(EvaluationGate.Failure.CORRECT_REFUSAL);
+    }
+    @Test
+    void conflictRefusalCountsOnlyWhenScreeningCompletionWasObserved() {
+        UUID actor=UUID.randomUUID(), document=UUID.randomUUID();
+        var dataset=dataset(actor,document,true);
+        for (boolean completed : List.of(false,true)) {
+            var observation=new EvaluationRepository.Observation(Set.of(),Set.of(),Set.of(),Set.of(),
+                    Map.of(),null,false,completed);
+            var repository=new MemoryRepository(dataset,observation);
+            var service=new GroundedQaEvaluationService(command->new QaOutcome.Refused(command.requestId(),
+                    RefusalReason.CONFLICTING_EVIDENCE,false),repository,new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC));
+            var run=service.run(dataset.id(),"code","policy","model");
+            assertThat(run.metrics().correctlyRefusedCount()).isEqualTo(completed ? 50 : 0);
+            assertThat(run.caseResults()).allSatisfy(result ->
+                    assertThat(result.conflictScreeningCompleted()).isEqualTo(completed));
+            if (completed) assertThat(run.currentAssessment().failures())
+                    .doesNotContain(EvaluationGate.Failure.REFUSAL_DIAGNOSTICS_INCOMPLETE);
+            else assertThat(run.currentAssessment().failures())
+                    .contains(EvaluationGate.Failure.REFUSAL_DIAGNOSTICS_INCOMPLETE);
+        }
+    }
+    @Test
     void storesKeyedReviewBindingWithoutPersistingPlainQuestionDigest() {
         UUID actor=UUID.randomUUID(),document=UUID.randomUUID(),evidence=UUID.randomUUID();
         var dataset=dataset(actor,document,false);

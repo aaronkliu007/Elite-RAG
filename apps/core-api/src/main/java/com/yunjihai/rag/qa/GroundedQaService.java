@@ -230,11 +230,17 @@ public final class GroundedQaService {
                     command.requestId(), RefusalReason.INSUFFICIENT_EVIDENCE, pack.degraded()));
         }
         try {
-            if (conflictDetector.hasConflict(pack.conflictScreeningEvidence())) {
+            var conflictKind = Objects.requireNonNull(conflictDetector.conflictKind(pack.conflictScreeningEvidence()));
+            evaluationTraces.recordConflictScreeningCompleted(command.requestId());
+            if (conflictKind != EvidenceConflictDetector.ConflictKind.NONE) {
+                LOGGER.info("qa_conflict_screening_detected requestId={} kind={}", command.requestId(), conflictKind);
                 return complete(state, command.actorId(), new QaOutcome.Refused(
                         command.requestId(), RefusalReason.CONFLICTING_EVIDENCE, pack.degraded()));
             }
         } catch (RuntimeException detectorFailure) {
+            evaluationTraces.recordConflictScreeningUnavailable(command.requestId());
+            LOGGER.warn("qa_conflict_screening_unavailable requestId={} code=CONFLICT_SCREENING_UNAVAILABLE",
+                    command.requestId());
             return complete(state, command.actorId(), new QaOutcome.Refused(
                     command.requestId(), RefusalReason.CONFLICTING_EVIDENCE, pack.degraded()));
         }

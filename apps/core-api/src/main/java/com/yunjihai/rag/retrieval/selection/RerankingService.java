@@ -24,14 +24,21 @@ public final class RerankingService {
     private final RerankerPort reranker;
     private final ExecutorService executor;
     private final RetrievalPolicy policy;
+    private final boolean localFallbackEnabled;
 
     public RerankingService(
             RerankerPort reranker,
             ExecutorService executor,
             RetrievalPolicy policy) {
+        this(reranker, executor, policy, false);
+    }
+
+    public RerankingService(RerankerPort reranker, ExecutorService executor,
+                            RetrievalPolicy policy, boolean localFallbackEnabled) {
         this.reranker = Objects.requireNonNull(reranker);
         this.executor = Objects.requireNonNull(executor);
         this.policy = Objects.requireNonNull(policy);
+        this.localFallbackEnabled = localFallbackEnabled;
     }
 
     public RerankResult rerank(String queryText, List<ScoredCandidate> candidates) {
@@ -45,7 +52,7 @@ public final class RerankingService {
         try {
             future = executor.submit(() -> reranker.rerank(queryText, limited));
         } catch (RejectedExecutionException exception) {
-            return fallback(limited);
+            return fallback(queryText, limited);
         }
         final List<RerankScore> scores;
         try {
@@ -53,10 +60,10 @@ public final class RerankingService {
         } catch (InterruptedException exception) {
             future.cancel(true);
             Thread.currentThread().interrupt();
-            return fallback(limited);
+            return fallback(queryText, limited);
         } catch (ExecutionException | TimeoutException exception) {
             future.cancel(true);
-            return fallback(limited);
+            return fallback(queryText, limited);
         }
 
         Map<java.util.UUID, ScoredCandidate> byId = new HashMap<>();
@@ -67,7 +74,7 @@ public final class RerankingService {
             originalIndex.put(candidate.candidate().candidateId(), index);
         }
         if (!valid(scores, byId)) {
-            return fallback(limited);
+            return fallback(queryText, limited);
         }
         var reranked = new ArrayList<ScoredCandidate>();
         for (var score : scores) {
@@ -102,9 +109,8 @@ public final class RerankingService {
         return true;
     }
 
-    private static RerankResult fallback(List<ScoredCandidate> candidates) {
-        return new RerankResult(
-                candidates,
-                Set.of(DegradationReason.RERANKER_UNAVAILABLE));
+    private RerankResult fallback(String queryText, List<ScoredCandidate> candidates) {
+        var ordered = localFallbackEnabled ? LocalLexicalFallback.rank(queryText, candidates) : candidates;
+        return new RerankResult(ordered, Set.of(DegradationReason.RERANKER_UNAVAILABLE));
     }
 }

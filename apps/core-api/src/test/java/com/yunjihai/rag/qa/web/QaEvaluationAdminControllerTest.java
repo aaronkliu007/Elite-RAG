@@ -53,6 +53,26 @@ class QaEvaluationAdminControllerTest {
     }
 
     @Test
+    void currentGateIsNotConfusedWithHistoricalPassForIncompleteRefusalDiagnostics() {
+        var metrics=new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1);
+        var run=new EvaluationRepository.EvaluationRun(RUN,DATASET,"dataset","code","policy",
+                "prompt","sanitizer","model",Instant.EPOCH,Instant.EPOCH,metrics,
+                new EvaluationGate.Assessment(true,List.of()),"a".repeat(64),"a".repeat(64),List.of());
+        QaEvaluationUseCase execution=new QaEvaluationUseCase() {
+            public EvaluationRepository.EvaluationRun run(UUID datasetId,String code,String policy,String model) { return run; }
+            public Optional<EvaluationRepository.EvaluationRun> find(UUID runId) { return Optional.of(run); }
+        };
+        var controller=new QaEvaluationAdminController(execution,roles(true));
+        var json=new ObjectMapper().valueToTree(controller.get(auth(ADMIN),RUN));
+        assertThat(json.path("assessment").path("passed").asBoolean()).isFalse();
+        assertThat(json.path("assessment").path("failures").toString())
+                .contains("REFUSAL_DIAGNOSTICS_INCOMPLETE");
+        assertThat(json.path("historicalAssessment").path("passed").asBoolean()).isTrue();
+        assertThat(json.path("metrics").path("correctlyRefusedCount").asInt()).isEqualTo(1);
+        assertThat(json.path("caseResults").isArray()).isTrue();
+        assertThat(json.path("caseResults").size()).isZero();
+    }
+    @Test
     void reviewContextRequiresAdminOwnershipAndCurrentSourceAuthorizationAndAuditsAccess() {
         UUID caseId=UUID.randomUUID(),request=UUID.randomUUID(),doc=UUID.randomUUID(),version=UUID.randomUUID(),evidence=UUID.randomUUID();
         var ref=new EvaluationCase.EvidenceRef(doc,"node");

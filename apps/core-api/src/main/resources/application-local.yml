@@ -107,6 +107,8 @@ rag:
       page-size: ${RAG_OPENSEARCH_REBUILD_PAGE_SIZE:100}
       replay-batch-size: ${RAG_OPENSEARCH_REPLAY_BATCH_SIZE:500}
   retrieval:
+    local-rerank:
+      enabled: ${RAG_LOCAL_LEXICAL_RERANK_ENABLED:false}
     vector:
       enabled: ${RAG_VECTOR_ENABLED:false}
       dimension: ${RAG_VECTOR_DIMENSION:1536}

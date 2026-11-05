@@ -128,6 +128,11 @@ import tools.jackson.databind.ObjectMapper;
 public class PostgresAdapterConfiguration {
 
     @Bean
+    com.yunjihai.rag.qa.conflict.EvidenceConflictDetector postgresEvidenceConflictDetector(JdbcClient jdbc) {
+        return new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector(new JdbcTableEvidenceSource(jdbc));
+    }
+
+    @Bean
     JdbcSolutionProposalAttemptStore jdbcSolutionProposalAttemptStore(JdbcClient jdbc,
             PlatformTransactionManager transactions) {
         return new JdbcSolutionProposalAttemptStore(jdbc, transactions);

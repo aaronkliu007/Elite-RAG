@@ -3,7 +3,7 @@ package com.yunjihai.rag.qa.evaluation;
 import java.util.*;
 
 public final class EvaluationGate {
-    public enum Failure { LEAKAGE,CITATION_VALIDITY,RECALL_AT_10,CLAIM_SUPPORT,CLAIM_REVIEW_COVERAGE,CORRECT_REFUSAL,DATASET_PROVENANCE }
+    public enum Failure { LEAKAGE,CITATION_VALIDITY,RECALL_AT_10,CLAIM_SUPPORT,CLAIM_REVIEW_COVERAGE,CORRECT_REFUSAL,DATASET_PROVENANCE,REFUSAL_DIAGNOSTICS_INCOMPLETE }
     public record Assessment(boolean passed,List<Failure> failures) {
         public Assessment { failures=List.copyOf(Objects.requireNonNull(failures)); }
     }

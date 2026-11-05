@@ -54,7 +54,8 @@ public final class JdbcEvaluationRepository implements EvaluationRepository {
             });
             EvaluationTraceRegistry.Trace trace=traces.consume(requestId);
             return new Observation(trace.retrievalObserved() ? trace.retrievedTop10() : top10,
-                    evidenceIds,trace.modelRequest(),trace.modelResponse(),references,trace.sanitizedQuestionDigest());
+                    evidenceIds,trace.modelRequest(),trace.modelResponse(),references,trace.sanitizedQuestionDigest(),
+                    trace.conflictScreeningUnavailable(),trace.conflictScreeningCompleted());
         } catch(DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);
         }

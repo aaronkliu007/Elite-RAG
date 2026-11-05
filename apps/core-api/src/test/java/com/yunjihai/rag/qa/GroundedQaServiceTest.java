@@ -191,6 +191,8 @@ class GroundedQaServiceTest {
                 .isInstanceOf(QaOutcome.Refused.class);
         var trace = harness.traces.consume(id(1));
         assertThat(trace.retrievalObserved()).isTrue();
+        assertThat(trace.conflictScreeningCompleted()).isTrue();
+        assertThat(trace.conflictScreeningUnavailable()).isFalse();
         assertThat(trace.retrievedTop10()).hasSize(8);
         assertThat(trace.sanitizedQuestionDigest()).isEqualTo(java.util.HexFormat.of().formatHex(
                 java.security.MessageDigest.getInstance("SHA-256")
@@ -210,6 +212,54 @@ class GroundedQaServiceTest {
         assertThat(outcome).isEqualTo(new QaOutcome.Refused(
                 id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
         assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void multilineNumericMergedTablesRefuseBeforeModelAndRecordScreeningFailure() {
+        var harness=new Harness();
+        var items=new ArrayList<>(evidence(8,0.9));
+        for (int i=0; i<2; i++) {
+            var item=items.get(i);
+            items.set(i,new Evidence(item.spaceId(),item.evidenceId(),item.documentId(),item.versionId(),
+                    item.nodeId(),item.title(),item.excerpt(),item.score(),
+                    new com.yunjihai.rag.retrieval.domain.TableLocator("预算",1,2,1,2)));
+        }
+        harness.pack=pack(items);
+        harness.conflictDetector=new DeterministicEvidenceConflictDetector(item -> List.of(
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,0,1,2,"预算\n100万元\n")));
+        harness.traces.begin(id(1));
+
+        assertThat(harness.service().ask(command("预算是多少？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+        assertThat(harness.modelCalls).hasValue(0);
+        var trace=harness.traces.consume(id(1));
+        assertThat(trace.conflictScreeningUnavailable()).isTrue();
+        assertThat(trace.conflictScreeningCompleted()).isFalse();
+    }
+    @Test
+    void conflictDetectionLogsOnlyCategoryAndRequestId(CapturedOutput output) {
+        var harness = new Harness();
+        harness.conflictDetector = ignored -> true;
+        assertThat(harness.service().ask(command("私人问题")))
+                .isEqualTo(new QaOutcome.Refused(id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
+        assertThat(harness.modelCalls).hasValue(0);
+        assertThat(output).contains("qa_conflict_screening_detected", "requestId=" + id(1), "kind=OTHER");
+        assertThat(output).doesNotContain("私人问题");
+    }
+
+    @Test
+    void conflictDetectorFailureLogsOnlyASafeDiagnosticWithoutChangingStrictRefusal(CapturedOutput output) {
+        var harness = new Harness();
+        harness.conflictDetector = ignored -> { throw new IllegalStateException("PRIVATE_DOCUMENT_CONTENT"); };
+        harness.traces.begin(id(1));
+        assertThat(harness.service().ask(command("私人问题")))
+                .isEqualTo(new QaOutcome.Refused(id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
+        assertThat(harness.modelCalls).hasValue(0);
+        assertThat(output).contains("qa_conflict_screening_unavailable", "requestId=" + id(1));
+        assertThat(output).doesNotContain("PRIVATE_DOCUMENT_CONTENT", "私人问题");
+        var trace=harness.traces.consume(id(1));
+        assertThat(trace.conflictScreeningUnavailable()).isTrue();
+        assertThat(trace.conflictScreeningCompleted()).isFalse();
     }
 
     @Test
@@ -366,6 +416,20 @@ class GroundedQaServiceTest {
         assertThat(harness.modelCalls).hasValue(1);
     }
 
+    @Test
+    void refusesAnswerThatDropsFollowingBudgetRangeQualifier() {
+        var harness = new Harness();
+        var values = new ArrayList<>(evidence(8, 0.9));
+        var first = values.getFirst();
+        values.set(0, new Evidence(first.spaceId(), first.evidenceId(), first.documentId(), first.versionId(),
+                first.nodeId(), first.title(), "该项目预算为100万元以上。", first.score(), first.locator()));
+        harness.pack = pack(values);
+        harness.answer = answer(first.evidenceId(), "100万元");
+
+        assertThat(harness.service().ask(command("项目预算是多少？")))
+                .isEqualTo(new QaOutcome.Refused(id(1), RefusalReason.UNSUPPORTED_CLAIM, false));
+        assertThat(harness.modelCalls).hasValue(1);
+    }
     @Test
     void rejectsInvalidModelResponseUnknownEvidenceAndForgedQuote() {
         var invalid = new Harness();

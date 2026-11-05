@@ -1,0 +1,126 @@
+{
+  "version": "deepseek-flash-shadow-second-2026-11-01",
+  "datasetVersion": "synthetic-relevance-v2",
+  "cases": [
+    {
+      "caseId": "same-project-other-topic",
+      "labels": {
+        "d1": "RELEVANT",
+        "d2": "RELEVANT",
+        "d3": "IRRELEVANT",
+        "d4": "IRRELEVANT",
+        "d5": "IRRELEVANT",
+        "d6": "UNCERTAIN",
+        "d7": "IRRELEVANT",
+        "d8": "IRRELEVANT",
+        "d9": "IRRELEVANT",
+        "d10": "IRRELEVANT"
+      }
+    },
+    {
+      "caseId": "budget-conflict",
+      "labels": {
+        "d1": "RELEVANT",
+        "d2": "RELEVANT",
+        "d3": "IRRELEVANT",
+        "d4": "IRRELEVANT",
+        "d5": "UNCERTAIN",
+        "d6": "RELEVANT",
+        "d7": "RELEVANT",
+        "d8": "RELEVANT",
+        "d9": "IRRELEVANT",
+        "d10": "IRRELEVANT"
+      }
+    },
+    {
+      "caseId": "ambiguous-referent",
+      "labels": {
+        "d1": "RELEVANT",
+        "d2": "RELEVANT",
+        "d3": "UNCERTAIN",
+        "d4": "UNCERTAIN",
+        "d5": "IRRELEVANT",
+        "d6": "IRRELEVANT",
+        "d7": "UNCERTAIN",
+        "d8": "UNCERTAIN",
+        "d9": "IRRELEVANT",
+        "d10": "IRRELEVANT"
+      }
+    },
+    {
+      "caseId": "declared-alias",
+      "labels": {
+        "d1": "RELEVANT",
+        "d2": "RELEVANT",
+        "d3": "IRRELEVANT",
+        "d4": "IRRELEVANT",
+        "d5": "UNCERTAIN",
+        "d6": "UNCERTAIN",
+        "d7": "RELEVANT",
+        "d8": "RELEVANT",
+        "d9": "IRRELEVANT",
+        "d10": "IRRELEVANT"
+      }
+    },
+    {
+      "caseId": "name-substring",
+      "labels": {
+        "d1": "RELEVANT",
+        "d2": "RELEVANT",
+        "d3": "IRRELEVANT",
+        "d4": "IRRELEVANT",
+        "d5": "UNCERTAIN",
+        "d6": "UNCERTAIN",
+        "d7": "RELEVANT",
+        "d8": "RELEVANT",
+        "d9": "IRRELEVANT",
+        "d10": "IRRELEVANT"
+      }
+    },
+    {
+      "caseId": "cross-entity",
+      "labels": {
+        "d1": "RELEVANT",
+        "d2": "RELEVANT",
+        "d3": "IRRELEVANT",
+        "d4": "IRRELEVANT",
+        "d5": "UNCERTAIN",
+        "d6": "UNCERTAIN",
+        "d7": "UNCERTAIN",
+        "d8": "UNCERTAIN",
+        "d9": "IRRELEVANT",
+        "d10": "IRRELEVANT"
+      }
+    },
+    {
+      "caseId": "version-context",
+      "labels": {
+        "d1": "RELEVANT",
+        "d2": "RELEVANT",
+        "d3": "IRRELEVANT",
+        "d4": "IRRELEVANT",
+        "d5": "UNCERTAIN",
+        "d6": "RELEVANT",
+        "d7": "RELEVANT",
+        "d8": "UNCERTAIN",
+        "d9": "IRRELEVANT",
+        "d10": "IRRELEVANT"
+      }
+    },
+    {
+      "caseId": "scope-conflict",
+      "labels": {
+        "d1": "RELEVANT",
+        "d2": "RELEVANT",
+        "d3": "IRRELEVANT",
+        "d4": "IRRELEVANT",
+        "d5": "UNCERTAIN",
+        "d6": "IRRELEVANT",
+        "d7": "IRRELEVANT",
+        "d8": "IRRELEVANT",
+        "d9": "IRRELEVANT",
+        "d10": "IRRELEVANT"
+      }
+    }
+  ]
+}

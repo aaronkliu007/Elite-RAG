@@ -124,6 +124,15 @@ class DeterministicEvidenceConflictDetectorTest {
     }
 
     @Test
+    void doesNotEraseSmallNumericDifferencesWhenComparingFacts() {
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"配额数值：0.0000000000001元"),
+                evidence(2,"配额数值：0.0000000000002元")))).isTrue();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"配额数值：0.0000000000001万元"),
+                evidence(2,"配额数值：0.000000001元")))).isFalse();
+    }
+    @Test
     void matchesAQualifiedFactKeyToItsMeaningfulSuffix(){
         assertThat(detector.hasConflict(List.of(
                 evidence(1,"公司差旅报销期限：30天"),
@@ -155,6 +164,196 @@ class DeterministicEvidenceConflictDetectorTest {
 
         assertThat(detector.hasConflict(List.of(canonical,equivalent))).isFalse();
         assertThat(detector.hasConflict(List.of(canonical,divergent))).isTrue();
+    }
+
+    @Test
+    void detectsConflictingExplicitBackupRetentionWithoutCopula() {
+        assertThat(detector.hasConflict(List.of(
+                evidence(1, "北辰平台生产环境备份保留30天。"),
+                evidence(2, "北辰平台生产环境备份保留90天。")))).isTrue();
+    }
+
+    @Test
+    void reportsOnlyConflictCategoryWithoutExposingFacts() {
+        assertThat(detector.conflictKind(List.of(evidence(1,"项目预算：1万元"), evidence(2,"项目预算：2万元"))))
+                .isEqualTo(EvidenceConflictDetector.ConflictKind.TYPED_FACT);
+        assertThat(detector.conflictKind(List.of(evidence(1,"项目预算：1万元"), evidence(2,"项目预算：1万元"))))
+                .isEqualTo(EvidenceConflictDetector.ConflictKind.NONE);
+        assertThat(detector.conflictKind(List.of(evidence(1,"该方案已批准。"), evidence(2,"该方案未批准。"))))
+                .isEqualTo(EvidenceConflictDetector.ConflictKind.APPROVAL);
+        EvidenceConflictDetector custom = ignored -> true;
+        assertThat(custom.conflictKind(List.of())).isEqualTo(EvidenceConflictDetector.ConflictKind.OTHER);
+    }
+
+    @Test
+    void backupRetentionKeepsEquivalentUnitsAndDifferentEnvironmentsSeparate() {
+        assertThat(detector.hasConflict(List.of(
+                evidence(1, "北辰平台生产环境备份保留30天。"),
+                evidence(2, "北辰平台生产环境备份保留30日。")))).isFalse();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1, "北辰平台生产环境备份保留30天。"),
+                evidence(2, "北辰平台测试环境备份保留90天。")))).isFalse();
+    }
+
+    @Test
+    void detectsConflictingBudgetValuesInFlattenedSpreadsheetEvidence() {
+        var left = new Evidence(id(100), id(1), id(201), id(301), "table-1", "预算甲",
+                "项目\n预算类别\n金额（万元）\n星河项目\n研发预算\n100", 0.9,
+                new com.yunjihai.rag.retrieval.domain.TableLocator("预算甲", 1, 2, 1, 3));
+        var right = new Evidence(id(100), id(2), id(202), id(302), "table-2", "预算乙",
+                "项目\n预算类别\n金额（万元）\n星河项目\n研发预算\n120", 0.9,
+                new com.yunjihai.rag.retrieval.domain.TableLocator("预算乙", 1, 2, 1, 3));
+        var structured = new DeterministicEvidenceConflictDetector(item -> List.of(
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,0,1,1,"项目"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,1,1,1,"预算类别"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,2,1,1,"金额（万元）"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,0,1,1,"星河项目"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,1,1,1,"研发预算"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,2,1,1,item.evidenceId().equals(id(1)) ? "100" : "120")));
+        assertThat(structured.hasConflict(List.of(left, right))).isTrue();
+    }
+
+    @Test
+    void comparesEveryTableFactAcrossEvidenceEvenWhenOneEvidenceHasDuplicateKeys() {
+        var left=tableEvidence(1); var right=tableEvidence(2);
+        var structured=new DeterministicEvidenceConflictDetector(item -> {
+            var cells=new java.util.ArrayList<>(budgetCells("星河项目","金额（万元）","100"));
+            if (item.evidenceId().equals(id(1))) {
+                cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(2,0,1,1,"星河项目"));
+                cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(2,1,1,1,"研发预算"));
+                cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(2,2,1,1,"120"));
+            }
+            return cells;
+        });
+        assertThat(structured.conflictKind(List.of(left,right)))
+                .isEqualTo(EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
+        assertThat(structured.conflictKind(List.of(right,left)))
+                .isEqualTo(EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
+    }
+    @Test
+    void duplicateValuesWithinOneTableDoNotByThemselvesCreateACrossEvidenceConflict() {
+        var detector=new DeterministicEvidenceConflictDetector(item -> {
+            var cells=new java.util.ArrayList<>(budgetCells(item.evidenceId().equals(id(1))
+                    ? "星河项目" : "云舟项目","金额（万元）","100"));
+            if (item.evidenceId().equals(id(1))) {
+                cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(2,0,1,1,"星河项目"));
+                cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(2,1,1,1,"研发预算"));
+                cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(2,2,1,1,"120"));
+            }
+            return cells;
+        });
+        assertThat(detector.hasConflict(List.of(tableEvidence(1),tableEvidence(2)))).isFalse();
+    }
+
+    @Test
+    void repeatedTableFactsAreCountedTowardTheScreeningLimit() {
+        var detector=new DeterministicEvidenceConflictDetector(item -> {
+            var cells=new java.util.ArrayList<>(budgetCells("星河项目","金额（万元）","100"));
+            if (item.evidenceId().equals(id(1))) {
+                for (int row=2; row<=1025; row++) {
+                    cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(row,0,1,1,"星河项目"));
+                    cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(row,1,1,1,"研发预算"));
+                    cells.add(new com.yunjihai.rag.ingestion.CanonicalTableCell(row,2,1,1,"100"));
+                }
+            }
+            return cells;
+        });
+        assertThatThrownBy(() -> detector.hasConflict(List.of(tableEvidence(1),tableEvidence(2))))
+                .isInstanceOf(IllegalStateException.class).hasMessage("CONFLICT_SCREENING_LIMIT_EXCEEDED");
+    }
+    @Test
+    void structuredTableFactsRetainFullNumericPrecision() {
+        var structured=new DeterministicEvidenceConflictDetector(item -> budgetCells(
+                "星河项目","金额（元）",item.evidenceId().equals(id(1))
+                        ? "0.0000000000001" : "0.0000000000002"));
+        assertThat(structured.conflictKind(List.of(tableEvidence(1),tableEvidence(2))))
+                .isEqualTo(EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
+    }
+    @Test
+    void detectsSameDimensionConflictRegardlessOfColumnOrder() {
+        var left=tableEvidence(1); var right=tableEvidence(2);
+        var structured=new DeterministicEvidenceConflictDetector(item -> {
+            var cells=budgetCells("星河项目","金额（万元）",item.evidenceId().equals(id(1)) ? "100" : "120");
+            if (item.evidenceId().equals(id(1))) return cells;
+            return cells.stream().map(cell -> new com.yunjihai.rag.ingestion.CanonicalTableCell(
+                    cell.row(),cell.column()==0 ? 1 : cell.column()==1 ? 0 : cell.column(),
+                    cell.rowSpan(),cell.columnSpan(),cell.text())).toList();
+        });
+        assertThat(structured.conflictKind(List.of(left,right)))
+                .isEqualTo(EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
+        assertThat(structured.conflictKind(List.of(right,left)))
+                .isEqualTo(EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
+    }
+    @Test
+    void reorderedColumnsPreserveEquivalentValuesAndDifferentDimensions() {
+        for (boolean differentProject : List.of(false,true)) {
+            var structured=new DeterministicEvidenceConflictDetector(item -> {
+                boolean second=item.evidenceId().equals(id(2));
+                var cells=budgetCells(second && differentProject ? "云舟项目" : "星河项目",
+                        second ? "金额（元）" : "金额（万元）", second ? (differentProject ? "1200000" : "1000000") : "100");
+                if (!second) return cells;
+                return cells.stream().map(cell -> new com.yunjihai.rag.ingestion.CanonicalTableCell(
+                        cell.row(),cell.column()==0 ? 1 : cell.column()==1 ? 0 : cell.column(),
+                        cell.rowSpan(),cell.columnSpan(),cell.text())).toList();
+            });
+            assertThat(structured.hasConflict(List.of(tableEvidence(1),tableEvidence(2)))).isFalse();
+        }
+    }
+    @Test
+    void tableFactsRespectDimensionsAndEquivalentCurrencyUnits() {
+        var left = tableEvidence(1); var right = tableEvidence(2);
+        var same = new DeterministicEvidenceConflictDetector(item -> budgetCells(
+                "星河项目", item.evidenceId().equals(id(1)) ? "金额（万元）" : "金额（元）",
+                item.evidenceId().equals(id(1)) ? "100" : "1000000"));
+        assertThat(same.hasConflict(List.of(left, right))).isFalse();
+        var differentProject = new DeterministicEvidenceConflictDetector(item -> budgetCells(
+                item.evidenceId().equals(id(1)) ? "星河项目" : "云舟项目", "金额（万元）",
+                item.evidenceId().equals(id(1)) ? "100" : "120"));
+        assertThat(differentProject.hasConflict(List.of(left, right))).isFalse();
+    }
+
+    @Test
+    void unavailableOrAmbiguousNumericTableMustFailClosed() {
+        var left = tableEvidence(1); var right = tableEvidence(2);
+        var unavailable = new DeterministicEvidenceConflictDetector(item -> { throw new IllegalStateException("unavailable"); });
+        assertThatThrownBy(() -> unavailable.hasConflict(List.of(left, right))).isInstanceOf(IllegalStateException.class);
+        var merged = new DeterministicEvidenceConflictDetector(item -> List.of(
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,0,1,2,"预算100万元")));
+        assertThatThrownBy(() -> merged.hasConflict(List.of(left, right))).isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void mergedTableWithMultilineNumericTextMustFailClosed() {
+        for (String text : List.of("预算\n100万元\n", "预算\n１００万元\n")) {
+            var merged=new DeterministicEvidenceConflictDetector(item -> List.of(
+                    new com.yunjihai.rag.ingestion.CanonicalTableCell(0,0,1,2,text)));
+            assertThatThrownBy(() -> merged.hasConflict(List.of(tableEvidence(1),tableEvidence(2))))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("AMBIGUOUS_TABLE_EVIDENCE");
+        }
+    }
+    @Test
+    void inconsistentUnitsOrNonNumericValuesDoNotSilentlyPassScreening() {
+        var left = tableEvidence(1); var right = tableEvidence(2);
+        var inconsistentUnits = new DeterministicEvidenceConflictDetector(item -> budgetCells("星河项目",
+                item.evidenceId().equals(id(1)) ? "金额（元）" : "金额（天）", "100"));
+        assertThatThrownBy(() -> inconsistentUnits.hasConflict(List.of(left, right)))
+                .isInstanceOf(IllegalStateException.class);
+        var missing = new DeterministicEvidenceConflictDetector(item -> budgetCells("星河项目", "金额（万元）", "未注明"));
+        assertThatThrownBy(() -> missing.hasConflict(List.of(left, right)))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    private static Evidence tableEvidence(int n) {
+        return new Evidence(id(100),id(n),id(200+n),id(300+n),"table-"+n,"表格",
+                "虚构预算信息",0.9,new com.yunjihai.rag.retrieval.domain.TableLocator("表",1,2,1,3));
+    }
+    private static List<com.yunjihai.rag.ingestion.CanonicalTableCell> budgetCells(String project,String header,String amount) {
+        return List.of(new com.yunjihai.rag.ingestion.CanonicalTableCell(0,0,1,1,"项目"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,1,1,1,"预算类别"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,2,1,1,header),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,0,1,1,project),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,1,1,1,"研发预算"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,2,1,1,amount));
     }
 
     private static Evidence evidence(int suffix,String excerpt){

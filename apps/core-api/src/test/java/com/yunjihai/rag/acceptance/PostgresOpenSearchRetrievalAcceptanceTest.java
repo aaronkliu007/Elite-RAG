@@ -84,13 +84,26 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
     @Test
     @EnabledIfEnvironmentVariable(named = "RAG_RELEVANCE_DIAGNOSTIC", matches = "true")
     void measuresAnnotatedRelevanceThroughTrustedRetrieval() throws Exception {
+        measureRelevanceThroughTrustedRetrieval(RelevanceBenchmark.load());
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_RELEVANCE_V2_DIAGNOSTIC", matches = "true")
+    void measuresExpandedRelevanceThroughTrustedRetrieval() throws Exception {
+        try (var input = RelevanceBenchmark.class.getResourceAsStream("/relevance-benchmark-v2.json")) {
+            if (input == null) throw new IllegalStateException("expanded relevance benchmark missing");
+            var dataset = new com.fasterxml.jackson.databind.ObjectMapper().readValue(input, RelevanceBenchmark.Dataset.class);
+            measureRelevanceThroughTrustedRetrieval(dataset);
+        }
+    }
+
+    private void measureRelevanceThroughTrustedRetrieval(RelevanceBenchmark.Dataset dataset) throws Exception {
         try (var context = startContext(Map.of(
                 "rag.test.counting-embedding", "false",
                 "rag.test.relevance-chat", "true",
                 "rag.ai.enabled", "false",
                 "rag.qa.hmac-key", "synthetic-relevance-test-hmac-key-32-bytes"))) {
             RELEVANCE_MODEL_CALLS.set(0);
-            var dataset = RelevanceBenchmark.load();
             var jdbc = context.getBean(JdbcClient.class);
             var publisher = context.getBean(ProjectionChangePublisher.class);
             var transactions = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
@@ -162,6 +175,8 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                 assertThat(audits).isEqualTo(calls);
                 var screenedIds = pack.conflictScreeningEvidence().stream()
                         .map(e -> scenario.ids().get(e.documentId())).collect(java.util.stream.Collectors.toSet());
+                var screeningResult = RelevanceBenchmark.measure(scenario.sample(), screenedIds.stream().toList());
+                System.out.println("RELEVANCE_SCREENING id=" + scenario.sample().id() + " result=" + screeningResult);
                 for (var pair : scenario.sample().conflicts()) {
                     if (pair.scope() != RelevanceBenchmark.Judgment.IRRELEVANT) {
                         assertThat(screenedIds).contains(pair.first(), pair.second());
@@ -216,6 +231,56 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                     + " belowQaEvidenceMinimum=" + belowMinimum + " qaConflictRefusals=" + qaConflictRefusals
                     + " qaAnswered=" + qaAnswered + " cautionCasesAnswered=" + cautionCasesAnswered
                     + " answersUsingIrrelevant=" + answersUsingIrrelevant);
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_RELEVANCE_V2_DIAGNOSTIC", matches = "true")
+    void conflictScreeningFailureIsPreservedInTheActualEvaluationObservation() throws Exception {
+        try (var context = startContext(Map.of("rag.test.counting-embedding", "false",
+                "rag.test.relevance-chat", "true", "rag.test.failing-conflict", "true",
+                "rag.ai.enabled", "false", "rag.qa.hmac-key", "synthetic-test-only-hmac-key-32-bytes"))) {
+            RELEVANCE_MODEL_CALLS.set(0);
+            var jdbc = context.getBean(JdbcClient.class);
+            UUID user=UUID.randomUUID(), space=UUID.randomUUID(), first=UUID.randomUUID(), version=UUID.randomUUID();
+            seedPublishedDocument(jdbc,user,space,first,version,UUID.randomUUID());
+            jdbc.sql("UPDATE canonical_node SET body_text=:text WHERE version_id=:version")
+                    .param("text","Kubernetes 灰度部署方案先部署测试版本，再验证并在异常时回滚。")
+                    .param("version",version).update();
+            var documents = new java.util.ArrayList<UUID>(); documents.add(first);
+            for (var text : java.util.List.of("Kubernetes 灰度部署使用隔离环境验证服务启动状态。",
+                    "Kubernetes 灰度部署应由运维人员检查资源使用情况。",
+                    "Kubernetes 灰度部署安排专人记录灰度观察结果。",
+                    "Kubernetes 灰度部署完成验证后才扩大服务流量。",
+                    "Kubernetes 灰度部署发现错误时应及时停止流量切换。",
+                    "Kubernetes 灰度部署保留原镜像用于故障恢复。",
+                    "Kubernetes 灰度部署需要在变更窗口通知项目团队。")) {
+                UUID document=UUID.randomUUID();
+                seedAdditionalPublishedDocument(jdbc,user,space,document,UUID.randomUUID(),text);
+                documents.add(document);
+            }
+            var transactions = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+            var publisher = context.getBean(ProjectionChangePublisher.class);
+            for (var document : documents) transactions.executeWithoutResult(status ->
+                    publisher.withDocumentChangeLock(document, () -> { publisher.documentAclChanged(space,document,Instant.now()); return null; }));
+            var worker=context.getBean(ProjectionWorker.class);
+            assertThat(worker.runOnce("failure-trace-worker",OpenSearchIndexManager.WRITE_ALIAS)).isEqualTo(8);
+            context.getBean(com.yunjihai.rag.access.role.RoleAssignmentStore.class).grantSpaceRole(space,user,
+                    com.yunjihai.rag.access.role.SpaceRole.SPACE_ADMIN,user,Instant.now());
+            var hits=context.getBean(TrustedRetrievalService.class).retrieve(new RetrievalQuery(
+                    UUID.randomUUID(),user,Set.of(space),"Kubernetes 灰度部署方案",Map.of(),10));
+            assertThat(hits.evidence()).hasSizeGreaterThanOrEqualTo(8);
+            UUID request=UUID.randomUUID();
+            var traces=context.getBean(com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry.class);
+            traces.begin(request);
+            var outcome=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class).ask(
+                    new com.yunjihai.rag.qa.AskQuestionCommand(request,user,"Kubernetes 灰度部署方案是什么？"));
+            assertThat(outcome).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                    refused -> assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            var observation=context.getBean(com.yunjihai.rag.qa.evaluation.EvaluationRepository.class).observe(request);
+            assertThat(observation.conflictScreeningUnavailable()).isTrue();
+            assertThat(observation.conflictScreeningCompleted()).isFalse();
+            assertThat(RELEVANCE_MODEL_CALLS).hasValue(0);
         }
     }
 
@@ -357,10 +422,14 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             assertThat(new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector()
                     .hasConflict(pack.evidence())).isTrue();
             UUID requestId = UUID.randomUUID();
+            context.getBean(com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry.class).begin(requestId);
             var outcome = context.getBean(com.yunjihai.rag.qa.GroundedQaService.class).ask(
                     new com.yunjihai.rag.qa.AskQuestionCommand(requestId, item.evaluationActorId(), item.question()));
             assertThat(outcome).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
                     refused -> assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            var observed=context.getBean(com.yunjihai.rag.qa.evaluation.EvaluationRepository.class).observe(requestId);
+            assertThat(observed.conflictScreeningCompleted()).isTrue();
+            assertThat(observed.conflictScreeningUnavailable()).isFalse();
             assertThat(context.getBean(JdbcClient.class).sql("SELECT count(*) FROM qa_model_call_audit WHERE request_id = :id")
                     .param("id", requestId).query(Long.class).single()).isZero();
         }
@@ -714,11 +783,20 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                 Map.entry("logging.level.root", "ERROR")));
         properties.putAll(overrides);
         return new SpringApplicationBuilder(RagApplication.class, CountingEmbeddingConfiguration.class,
-                RelevanceChatConfiguration.class)
+                RelevanceChatConfiguration.class, FailingConflictConfiguration.class)
                 .profiles("local")
                 .initializers(application -> application.getEnvironment().getPropertySources()
                         .addFirst(new MapPropertySource("retrieval-acceptance-test", properties)))
                 .run();
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(name = "rag.test.failing-conflict", havingValue = "true")
+    static class FailingConflictConfiguration {
+        @Bean @Primary
+        com.yunjihai.rag.qa.conflict.EvidenceConflictDetector failingConflictDetector() {
+            return ignored -> { throw new IllegalStateException("synthetic failure"); };
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

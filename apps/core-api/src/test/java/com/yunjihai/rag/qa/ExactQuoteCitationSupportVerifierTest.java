@@ -118,6 +118,32 @@ class ExactQuoteCitationSupportVerifierTest {
                 .isTrue();
     }
 
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "预算为100万元以上。|100万元",
+            "预算为100万元以下。|100万元",
+            "项目预算为100万元左右。|100万元",
+            "完成期限为30天以内。|30天",
+            "预算为100万元至200万元。|100万元",
+            "预算为100万元-200万元。|100万元"
+    })
+    void rejectsAmountsWhoseFollowingQualifierOrRangeIsOmitted(String source,String quote) {
+        assertThat(new ExactQuoteCitationSupportVerifier().isSupported(answer(id(1),quote),bundle(id(1),source)))
+                .isFalse();
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "预算为100万元以上。|100万元以上",
+            "完成期限为30天以内。|30天以内",
+            "预算为100万元至200万元。|100万元至200万元",
+            "预算为100万元，已批准。|100万元",
+            "项目负责人以上岗位参加评审。|项目负责人"
+    })
+    void acceptsAmountsWithCompleteFollowingContext(String source,String quote) {
+        assertThat(new ExactQuoteCitationSupportVerifier().isSupported(answer(id(1),quote),bundle(id(1),source)))
+                .isTrue();
+    }
     @Test
     void conservativelyRejectsDoubleNegationThatRequiresSemanticInterpretation() {
         assertThat(new ExactQuoteCitationSupportVerifier().isSupported(

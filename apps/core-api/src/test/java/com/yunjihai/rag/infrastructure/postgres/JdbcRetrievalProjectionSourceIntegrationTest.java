@@ -197,6 +197,25 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
     }
 
     @Test
+    void readsCanonicalCellsOnlyForTheMatchingCurrentPublishedDocumentAndSpace() {
+        var ids = publishedDocument(spaceId, false, true,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 4);
+        insertNode(ids.versionId(), "table", "TABLE", "项目\n金额\n星河\n100", null, 1, null,
+                "[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"项目\"},"
+                + "{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"星河\"}]", 0);
+        var ev = new com.yunjihai.rag.retrieval.domain.Evidence(spaceId, UUID.randomUUID(), ids.documentId(),
+                ids.versionId(), "table", "预算", "项目\n星河", 1.0, new TableLocator("预算", 1, 2, 1, 1));
+        var tableSource = new JdbcTableEvidenceSource(jdbc);
+        assertEquals("星河", tableSource.load(ev).get(1).text());
+        var wrongSpace = new com.yunjihai.rag.retrieval.domain.Evidence(UUID.randomUUID(), ev.evidenceId(),
+                ev.documentId(), ev.versionId(), ev.nodeId(), ev.title(), ev.excerpt(), ev.score(), ev.locator());
+        assertThrows(IllegalStateException.class, () -> tableSource.load(wrongSpace));
+        jdbc.sql("UPDATE document SET current_published_version_id=NULL WHERE id=:id")
+                .param("id", ids.documentId()).update();
+        assertThrows(IllegalStateException.class, () -> tableSource.load(ev));
+    }
+
+    @Test
     void pagesSpaceAndAllDocumentsWithoutDuplicatesOrOmissions() {
         var expectedSpace = new HashSet<UUID>();
         for (int index = 0; index < 5; index++) {

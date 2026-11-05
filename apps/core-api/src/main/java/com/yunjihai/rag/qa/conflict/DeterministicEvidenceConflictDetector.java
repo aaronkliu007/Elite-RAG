@@ -1,9 +1,14 @@
 package com.yunjihai.rag.qa.conflict;
 
 import com.yunjihai.rag.retrieval.domain.Evidence;
+import com.yunjihai.rag.retrieval.domain.TableLocator;
+import com.yunjihai.rag.ingestion.CanonicalTableCell;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.Objects;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
+
 import java.text.Normalizer;
 import java.time.DateTimeException;
 import java.time.LocalDate;
@@ -21,6 +26,9 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
             "([\\p{IsHan}A-Za-z0-9_（）()·\\-/ ]{2,40})\\s*"
                     + "(?:设置为|设为|定为|[:：]|(?<!设置)(?<!设)(?<!定)为|是)"
                     + "\\s*([^\\n。；;，,]{1,40})");
+    private static final Pattern BACKUP_RETENTION = Pattern.compile(
+            "([\\p{IsHan}A-Za-z0-9_（）()·\\-/ ]{2,40}备份保留)\\s*"
+                    + "(\\d+(?:\\.\\d+)?\\s*(?:个月|月|年|天|日))");
     private static final Pattern DATE=Pattern.compile(
             "^(\\d{4})\\s*(?:年|[-/.])\\s*(\\d{1,2})\\s*(?:月|[-/.])\\s*(\\d{1,2})\\s*日?");
     private static final Pattern QUANTITY=Pattern.compile(
@@ -34,11 +42,26 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
                     + "(未获得批准|未获批准|未被批准|未正式批准|尚未批准|没有批准|不予批准|未批准|未获批|"
                     + "未通过审核|予以批准|被批准|获得批准|获批准|获批|批准|通过审核)");
 
+    private final TableEvidenceSource tableSource;
+
+    public DeterministicEvidenceConflictDetector() {
+        this(evidence -> { throw new IllegalStateException("TABLE_EVIDENCE_UNAVAILABLE"); });
+    }
+    public DeterministicEvidenceConflictDetector(TableEvidenceSource tableSource) {
+        this.tableSource = Objects.requireNonNull(tableSource);
+    }
+
     @Override
-    public boolean hasConflict(List<Evidence> evidence){
+    public boolean hasConflict(List<Evidence> evidence) {
+        return conflictKind(evidence) != ConflictKind.NONE;
+    }
+
+    @Override
+    public ConflictKind conflictKind(List<Evidence> evidence) {
         var items=List.copyOf(evidence);
-        if(hasIdentityConflict(items))return true;
-        if(hasApprovalConflict(items))return true;
+        if(hasIdentityConflict(items))return ConflictKind.IDENTITY;
+        if(hasApprovalConflict(items))return ConflictKind.APPROVAL;
+        if(hasTableConflict(items))return ConflictKind.STRUCTURED_TABLE;
         var facts=new ArrayList<Fact>();
         for (var item : items) {
             facts.addAll(extract(item));
@@ -50,11 +73,82 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
                 Fact second=facts.get(right);
                 if(!first.evidenceId().equals(second.evidenceId())
                         && keysMatch(first.key(),second.key())
-                        && !first.value().equals(second.value()))return true;
+                        && !first.value().equals(second.value()))return ConflictKind.TYPED_FACT;
+            }
+        }
+        return ConflictKind.NONE;
+    }
+
+    private boolean hasTableConflict(List<Evidence> items) {
+        var tables = items.stream().filter(item -> item.locator() instanceof TableLocator).toList();
+        if (tables.size() < 2) return false;
+        var facts = new HashMap<String, List<TableFact>>();
+        int factCount = 0;
+        for (var item : tables) {
+            for (var fact : tableFacts(item, tableSource.load(item))) {
+                requireBounded(++factCount);
+                var matching = facts.computeIfAbsent(fact.key(), ignored -> new ArrayList<>());
+                for (var existing : matching) {
+                    if (existing.evidenceId().equals(fact.evidenceId())) continue;
+                    if (!existing.value().substring(0, existing.value().indexOf(':'))
+                            .equals(fact.value().substring(0, fact.value().indexOf(':'))))
+                        throw new IllegalStateException("AMBIGUOUS_TABLE_UNITS");
+                    if (!existing.value().equals(fact.value())) return true;
+                }
+                matching.add(fact);
             }
         }
         return false;
     }
+
+    private static List<TableFact> tableFacts(Evidence item, List<CanonicalTableCell> cells) {
+        if (cells == null || cells.isEmpty() || cells.size() > 4096) throw new IllegalStateException("INVALID_TABLE_EVIDENCE");
+        var rows = new TreeMap<Integer, Map<Integer, String>>();
+        boolean merged = false;
+        for (var cell : cells) {
+            if (cell == null || cell.row() < 0 || cell.column() < 0 || cell.text() == null
+                    || cell.rowSpan() < 1 || cell.columnSpan() < 1) throw new IllegalStateException("INVALID_TABLE_EVIDENCE");
+            merged |= cell.rowSpan() != 1 || cell.columnSpan() != 1;
+            var row = rows.computeIfAbsent(cell.row(), ignored -> new TreeMap<>());
+            if (row.put(cell.column(), cell.text().strip()) != null) throw new IllegalStateException("INVALID_TABLE_EVIDENCE");
+        }
+        // A title-only merged region contains no fact and is safely ignored.
+        if (merged) {
+            if (cells.stream().anyMatch(c -> c.text().codePoints().anyMatch(Character::isDigit)))
+                throw new IllegalStateException("AMBIGUOUS_TABLE_EVIDENCE");
+            return List.of();
+        }
+        if (rows.size() < 2) return List.of();
+        var headers = rows.firstEntry().getValue();
+        var result = new ArrayList<TableFact>();
+        for (var entry : rows.tailMap(rows.firstKey(), false).entrySet()) {
+            var row = entry.getValue();
+            if (!row.keySet().equals(headers.keySet())) throw new IllegalStateException("AMBIGUOUS_TABLE_EVIDENCE");
+            for (var header : headers.entrySet()) {
+                String label = Normalizer.normalize(header.getValue(), Normalizer.Form.NFKC).strip();
+                var unit = Pattern.compile("^(.*?)\\s*\\((万元|元|个月|月|年|天|日|GB|MB|TPS|QPS|%|名|人|台)\\)$", Pattern.CASE_INSENSITIVE).matcher(label);
+                if (!unit.matches()) continue;
+                String raw = Normalizer.normalize(row.get(header.getKey()), Normalizer.Form.NFKC).strip();
+                if (!raw.matches("\\d+(?:\\.\\d+)?")) throw new IllegalStateException("AMBIGUOUS_TABLE_EVIDENCE");
+                var value = canonicalValue(raw + unit.group(2));
+                if (value.isEmpty()) throw new IllegalStateException("AMBIGUOUS_TABLE_EVIDENCE");
+                var key = new StringBuilder(normalizeKey(unit.group(1)));
+                var dimensions = new ArrayList<String>();
+                for (var dim : headers.entrySet()) {
+                    if (dim.getKey().equals(header.getKey())) continue;
+                    String dimValue = row.get(dim.getKey()).strip();
+                    if (dimValue.isEmpty()) throw new IllegalStateException("AMBIGUOUS_TABLE_EVIDENCE");
+                    dimensions.add(normalizeKey(dim.getValue()) + '=' + normalizeKey(dimValue));
+                }
+                dimensions.sort(String::compareTo);
+                dimensions.forEach(dimension -> key.append('|').append(dimension));
+                if (!dimensions.isEmpty()) result.add(new TableFact(item.evidenceId(), key.toString(), value.orElseThrow()));
+                requireBounded(result.size());
+            }
+        }
+        return result;
+    }
+    private record TableFact(UUID evidenceId, String key, String value) { }
 
     private static boolean hasApprovalConflict(List<Evidence> evidence) {
         var facts = new ArrayList<ApprovalFact>();
@@ -103,6 +197,12 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
             canonicalValue(matcher.group(2)).ifPresent(value->
                     facts.add(new Fact(evidence.evidenceId(),key,value)));
         }
+        var retention = BACKUP_RETENTION.matcher(normalizeFactText(evidence.excerpt()));
+        while (retention.find()) {
+            String key = normalizeKey(retention.group(1));
+            canonicalValue(retention.group(2)).ifPresent(value ->
+                    facts.add(new Fact(evidence.evidenceId(), key, value)));
+        }
         return List.copyOf(facts);
     }
 
@@ -147,7 +247,7 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
     }
 
     private static String canonical(String kind,BigDecimal value){
-        return kind+':'+value.setScale(12,RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+        return kind+':'+value.stripTrailingZeros().toPlainString();
     }
 
     private static boolean keysMatch(String left,String right){

@@ -104,6 +104,58 @@ class EvaluationGateTest {
     }
 
     @Test
+    void currentAssessmentRejectsHistoricalInvalidModelOutputEvenIfOldMetricsPassed() {
+        var metrics=new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1);
+        var historical=new EvaluationGate().assess(metrics);
+        var now=java.time.Instant.parse("2026-11-04T00:00:00Z");
+        var result=new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),true,
+                com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"INVALID_MODEL_OUTPUT",0,0,0,0,0,0);
+        var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),UUID.randomUUID(),"dataset","code","policy",
+                "prompt","sanitizer","model",now,now,metrics,historical,"a".repeat(64),"a".repeat(64),List.of(result));
+        assertThat(run.assessment().passed()).isTrue();
+        assertThat(run.currentAssessment().passed()).isFalse();
+        assertThat(run.currentAssessment().failures()).contains(EvaluationGate.Failure.CORRECT_REFUSAL);
+    }
+    @Test
+    void currentAssessmentRejectsHistoricalRunMissingRefusalDiagnostics() {
+        var metrics=new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1);
+        var now=java.time.Instant.parse("2026-11-04T00:00:00Z");
+        var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),UUID.randomUUID(),"dataset","code","policy",
+                "prompt","sanitizer","model",now,now,metrics,new EvaluationGate().assess(metrics),
+                "a".repeat(64),"a".repeat(64),List.of());
+        assertThat(run.assessment().passed()).isTrue();
+        assertThat(run.currentAssessment().passed()).isFalse();
+        assertThat(run.currentAssessment().failures()).contains(EvaluationGate.Failure.REFUSAL_DIAGNOSTICS_INCOMPLETE);
+    }
+    @Test
+    void currentGateSeparatesMissingReasonFromAnsweredOrFailedRefusalCases() {
+        var metrics=new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1);
+        var now=java.time.Instant.parse("2026-11-04T00:00:00Z");
+        for (var status : List.of(com.yunjihai.rag.qa.domain.QaStatus.REFUSED,
+                com.yunjihai.rag.qa.domain.QaStatus.ANSWERED,com.yunjihai.rag.qa.domain.QaStatus.FAILED)) {
+            var result=new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),true,status,null,0,0,0,0,0,0);
+            var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),UUID.randomUUID(),"dataset","code","policy",
+                    "prompt","sanitizer","model",now,now,metrics,new EvaluationGate().assess(metrics),
+                    "a".repeat(64),"a".repeat(64),List.of(result));
+            if (status==com.yunjihai.rag.qa.domain.QaStatus.REFUSED)
+                assertThat(run.currentAssessment().failures()).contains(EvaluationGate.Failure.REFUSAL_DIAGNOSTICS_INCOMPLETE);
+            else assertThat(run.currentAssessment().failures()).contains(EvaluationGate.Failure.CORRECT_REFUSAL);
+        }
+    }
+    @Test
+    void historicalConflictWithoutCompletedScreeningMarkerCannotPassCurrentGate() {
+        var metrics=new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1);
+        var now=java.time.Instant.parse("2026-11-05T00:00:00Z");
+        var result=new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),true,
+                com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"CONFLICTING_EVIDENCE",0,0,0,0,0,0);
+        var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),UUID.randomUUID(),"dataset","code","policy",
+                "prompt","sanitizer","model",now,now,metrics,new EvaluationGate().assess(metrics),
+                "a".repeat(64),"a".repeat(64),List.of(result));
+        assertThat(run.assessment().passed()).isTrue();
+        assertThat(run.currentAssessment().passed()).isFalse();
+        assertThat(run.currentAssessment().failures()).contains(EvaluationGate.Failure.REFUSAL_DIAGNOSTICS_INCOMPLETE);
+    }
+    @Test
     void datasetCannotActivateBelowFiftyCasesAndCasesRequireEvaluationScope() {
         UUID datasetId=UUID.randomUUID(),actor=UUID.randomUUID(),document=UUID.randomUUID();
         var validCase=new EvaluationCase(UUID.randomUUID(),actor,"虚构制度何时生效？",

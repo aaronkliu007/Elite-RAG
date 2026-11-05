@@ -40,11 +40,6 @@ final class RelevanceBenchmark {
                 if (!ids.contains(conflict.first()) || !ids.contains(conflict.second())
                         || !pairs.add(Set.of(conflict.first(), conflict.second())))
                     throw new IllegalArgumentException("invalid conflict pair");
-                for (var doc : documents) {
-                    if ((doc.id().equals(conflict.first()) || doc.id().equals(conflict.second()))
-                            && doc.judgment() != conflict.scope())
-                        throw new IllegalArgumentException("conflict scope and document judgments differ");
-                }
             }
         }
     }
@@ -97,6 +92,49 @@ final class RelevanceBenchmark {
             }
         }
         return new Result(relevantTotal, relevant, irrelevant, uncertain, unjudged, rt, rc, rp, it, ic, ip, ut, uc, up);
+    }
+
+    /** Measures only screening-induced loss, not overall retrieval or answer quality. */
+    record ScreeningAssessment(int removedRelevant, int removedIrrelevant, int removedUncertain,
+                               int removedUnjudged, int harmedRelevantPairs, int harmedUncertainPairs,
+                               int preexistingIncompletePairs, boolean preservesAvailableSafetyEvidence) { }
+
+    static ScreeningAssessment assessScreening(Sample sample, List<String> candidates, List<String> retained) {
+        Objects.requireNonNull(sample);
+        candidates = List.copyOf(candidates);
+        retained = List.copyOf(retained);
+        Set<String> before = Set.copyOf(candidates);
+        Set<String> after = Set.copyOf(retained);
+        if (before.size() != candidates.size() || after.size() != retained.size())
+            throw new IllegalArgumentException("duplicate candidate id");
+        if (!before.containsAll(after)) throw new IllegalArgumentException("retained id not in candidates");
+        Map<String, Judgment> labels = sample.documents().stream()
+                .collect(Collectors.toUnmodifiableMap(Document::id, Document::judgment));
+        int relevant = 0, irrelevant = 0, uncertain = 0, unjudged = 0;
+        for (String id : before) {
+            if (after.contains(id)) continue;
+            var label = labels.get(id);
+            if (label == null) unjudged++;
+            else switch (label) {
+                case RELEVANT -> relevant++;
+                case IRRELEVANT -> irrelevant++;
+                case UNCERTAIN -> uncertain++;
+            }
+        }
+        int harmedRelevant = 0, harmedUncertain = 0, incomplete = 0;
+        for (var pair : sample.conflicts()) {
+            if (pair.scope() == Judgment.IRRELEVANT) continue;
+            boolean completeBefore = before.contains(pair.first()) && before.contains(pair.second());
+            if (!completeBefore) { incomplete++; continue; }
+            if (!after.contains(pair.first()) || !after.contains(pair.second())) {
+                if (pair.scope() == Judgment.RELEVANT) harmedRelevant++;
+                else harmedUncertain++;
+            }
+        }
+        return new ScreeningAssessment(relevant, irrelevant, uncertain, unjudged,
+                harmedRelevant, harmedUncertain, incomplete,
+                !before.isEmpty() && relevant == 0 && uncertain == 0 && unjudged == 0
+                        && harmedRelevant == 0 && harmedUncertain == 0);
     }
 
     private static void requireText(String value) {

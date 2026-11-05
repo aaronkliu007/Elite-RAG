@@ -7,12 +7,19 @@ import java.util.UUID;
 /** Aggregate case diagnostics only: no question, answer, source text or model payload. */
 public record EvaluationCaseResult(UUID caseId, UUID requestId, boolean expectedRefusal,
         QaStatus status, String reason, int expectedEvidence, int retrievedEvidence,
-        int generatedClaims, int reviewedClaims, int supportedClaims, int leakageCount, String reviewBinding) {
+        int generatedClaims, int reviewedClaims, int supportedClaims, int leakageCount, String reviewBinding,
+        boolean conflictScreeningCompleted) {
     public EvaluationCaseResult(UUID caseId,UUID requestId,boolean expectedRefusal,QaStatus status,String reason,
                                 int expectedEvidence,int retrievedEvidence,int generatedClaims,int reviewedClaims,
                                 int supportedClaims,int leakageCount) {
         this(caseId,requestId,expectedRefusal,status,reason,expectedEvidence,retrievedEvidence,generatedClaims,
-                reviewedClaims,supportedClaims,leakageCount,null);
+                reviewedClaims,supportedClaims,leakageCount,null,false);
+    }
+    public EvaluationCaseResult(UUID caseId,UUID requestId,boolean expectedRefusal,QaStatus status,String reason,
+                                int expectedEvidence,int retrievedEvidence,int generatedClaims,int reviewedClaims,
+                                int supportedClaims,int leakageCount,String reviewBinding) {
+        this(caseId,requestId,expectedRefusal,status,reason,expectedEvidence,retrievedEvidence,generatedClaims,
+                reviewedClaims,supportedClaims,leakageCount,reviewBinding,false);
     }
     public EvaluationCaseResult {
         Objects.requireNonNull(caseId); Objects.requireNonNull(requestId); Objects.requireNonNull(status);

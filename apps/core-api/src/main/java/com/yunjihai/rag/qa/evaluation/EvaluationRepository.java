@@ -15,7 +15,23 @@ public interface EvaluationRepository {
             Set<EvaluationCase.EvidenceRef> modelRequestTrace,
             Set<EvaluationCase.EvidenceRef> responseTrace,
             Map<UUID,EvaluationCase.ReviewedEvidence> evidenceReferences,
-            String sanitizedQuestionDigest) {
+            String sanitizedQuestionDigest,
+            boolean conflictScreeningUnavailable, boolean conflictScreeningCompleted) {
+        public Observation(Set<EvaluationCase.EvidenceRef> retrievedTop10,Set<UUID> evidenceIds,
+                           Set<EvaluationCase.EvidenceRef> modelRequestTrace,
+                           Set<EvaluationCase.EvidenceRef> responseTrace,
+                           Map<UUID,EvaluationCase.ReviewedEvidence> evidenceReferences,
+                           String sanitizedQuestionDigest,boolean conflictScreeningUnavailable) {
+            this(retrievedTop10,evidenceIds,modelRequestTrace,responseTrace,evidenceReferences,
+                    sanitizedQuestionDigest,conflictScreeningUnavailable,false);
+        }
+        public Observation(Set<EvaluationCase.EvidenceRef> retrievedTop10,Set<UUID> evidenceIds,
+                           Set<EvaluationCase.EvidenceRef> modelRequestTrace,
+                           Set<EvaluationCase.EvidenceRef> responseTrace,
+                           Map<UUID,EvaluationCase.ReviewedEvidence> evidenceReferences,
+                           String sanitizedQuestionDigest) {
+            this(retrievedTop10,evidenceIds,modelRequestTrace,responseTrace,evidenceReferences,sanitizedQuestionDigest,false,false);
+        }
         public Observation(Set<EvaluationCase.EvidenceRef> retrievedTop10,Set<UUID> evidenceIds,
                            Set<EvaluationCase.EvidenceRef> modelRequestTrace,
                            Set<EvaluationCase.EvidenceRef> responseTrace) {
@@ -80,10 +96,23 @@ public interface EvaluationRepository {
         }
         public EvaluationGate.Assessment currentAssessment() {
             var result=new EvaluationGate().assess(metrics);
-            if(recordedDatasetDigest!=null&&recordedDatasetDigest.equals(currentDatasetDigest))return result;
             var failures=new ArrayList<>(result.failures());
-            failures.add(EvaluationGate.Failure.DATASET_PROVENANCE);
-            return new EvaluationGate.Assessment(false,failures);
+            boolean invalidRefusal=caseResults.stream().anyMatch(item->item.expectedRefusal()
+                    && (item.status()!=com.yunjihai.rag.qa.domain.QaStatus.REFUSED
+                        || "INVALID_MODEL_OUTPUT".equals(item.reason())
+                        || "CONFLICT_SCREENING_UNAVAILABLE".equals(item.reason())));
+            if(invalidRefusal&&!failures.contains(EvaluationGate.Failure.CORRECT_REFUSAL))
+                failures.add(EvaluationGate.Failure.CORRECT_REFUSAL);
+            long refusalCases=caseResults.stream().filter(EvaluationCaseResult::expectedRefusal).count();
+            boolean missingRefusalReason=caseResults.stream().anyMatch(item->item.expectedRefusal()
+                    && item.status()==com.yunjihai.rag.qa.domain.QaStatus.REFUSED && item.reason()==null);
+            boolean unverifiedConflict=caseResults.stream().anyMatch(item->item.expectedRefusal()
+                    && "CONFLICTING_EVIDENCE".equals(item.reason())&&!item.conflictScreeningCompleted());
+            if(refusalCases!=metrics.refusalCaseCount()||missingRefusalReason||unverifiedConflict)
+                failures.add(EvaluationGate.Failure.REFUSAL_DIAGNOSTICS_INCOMPLETE);
+            if(recordedDatasetDigest==null||!recordedDatasetDigest.equals(currentDatasetDigest))
+                failures.add(EvaluationGate.Failure.DATASET_PROVENANCE);
+            return new EvaluationGate.Assessment(failures.isEmpty(),failures);
         }
         public EvaluationRun withCurrentDatasetDigest(String digest) {
             return new EvaluationRun(runId,datasetId,datasetVersion,codeVersion,policyVersion,promptVersion,

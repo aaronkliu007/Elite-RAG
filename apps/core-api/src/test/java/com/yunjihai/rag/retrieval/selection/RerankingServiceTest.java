@@ -145,6 +145,38 @@ class RerankingServiceTest {
         assertFallback(result, input);
     }
 
+    @Test
+    void optionalLocalFallbackPrioritizesQuestionTermsWithoutDroppingCandidates() {
+        var input = new ArrayList<>(scoredCandidates(2));
+        var first = input.get(0); var second = input.get(1);
+        input.set(0, withText(first, "北辰平台运维手册", "北辰平台的服务运行说明"));
+        input.set(1, withText(second, "北辰权限管理说明", "北辰平台分为管理员、编辑者和浏览者三类角色"));
+        var executor = Executors.newSingleThreadExecutor();
+        try {
+            var result = new RerankingService((query, candidates) -> { throw new IllegalStateException(); },
+                    executor, RetrievalPolicy.defaults(), true).rerank("北辰平台有哪些角色？", input);
+            assertThat(result.candidates()).containsExactly(input.get(1), input.get(0));
+            assertThat(result.degradationReasons()).containsExactly(DegradationReason.RERANKER_UNAVAILABLE);
+        } finally { executor.shutdownNow(); }
+    }
+
+    @Test
+    void localFallbackPreservesOriginalOrderWhenNoMeaningfulOverlap() {
+        var input = scoredCandidates(3); var executor = Executors.newSingleThreadExecutor();
+        try {
+            var result = new RerankingService((query, candidates) -> { throw new IllegalStateException(); },
+                    executor, RetrievalPolicy.defaults(), true).rerank("不存在的词汇", input);
+            assertThat(result.candidates()).containsExactlyElementsOf(input);
+        } finally { executor.shutdownNow(); }
+    }
+
+    private static ScoredCandidate withText(ScoredCandidate original, String title, String text) {
+        var c = original.candidate();
+        return new ScoredCandidate(new Candidate(c.spaceId(),c.candidateId(),c.documentId(),c.versionId(),
+                c.nodeId(),title,text,c.locator(),c.source(),c.sourceRank(),c.sourceScore()),
+                original.score(),original.bestSourceRank(),original.sources());
+    }
+
     private static void assertFallback(RerankResult result, List<ScoredCandidate> expected) {
         assertThat(result.candidates()).containsExactlyElementsOf(expected);
         assertThat(result.degradationReasons())
