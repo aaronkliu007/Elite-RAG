@@ -285,6 +285,50 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
     }
 
     @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_RELEVANCE_V2_DIAGNOSTIC", matches = "true")
+    void oppositeSignedAmountsAreRetainedAndRefusedThroughRealRetrieval() throws Exception {
+        try (var context = startContext(Map.of("rag.test.counting-embedding","false",
+                "rag.test.relevance-chat","true","rag.ai.enabled","false",
+                "rag.qa.hmac-key","synthetic-test-only-hmac-key-32-bytes"))) {
+            RELEVANCE_MODEL_CALLS.set(0);
+            var jdbc=context.getBean(JdbcClient.class);
+            UUID user=UUID.randomUUID(),space=UUID.randomUUID(),first=UUID.randomUUID(),version=UUID.randomUUID();
+            seedPublishedDocument(jdbc,user,space,first,version,UUID.randomUUID());
+            jdbc.sql("UPDATE canonical_node SET body_text=:text WHERE version_id=:version")
+                    .param("text","星河项目收益：-5万元。").param("version",version).update();
+            var docs=new java.util.ArrayList<UUID>(); docs.add(first);
+            var texts=java.util.List.of("星河项目收益：5万元。","星河项目收益应记录核算依据。",
+                    "星河项目收益数据由财务部门复核。","星河项目收益报告应经过负责人确认。",
+                    "星河项目收益评估材料应归档。","星河项目收益统计需保留原始数据。",
+                    "星河项目收益结果按审计要求登记。");
+            for (String text : texts) {
+                UUID document=UUID.randomUUID();
+                seedAdditionalPublishedDocument(jdbc,user,space,document,UUID.randomUUID(),text);
+                docs.add(document);
+            }
+            var transactions=new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+            var publisher=context.getBean(ProjectionChangePublisher.class);
+            for (UUID document : docs) transactions.executeWithoutResult(status ->
+                    publisher.withDocumentChangeLock(document,()->{
+                        publisher.documentAclChanged(space,document,Instant.now()); return null;
+                    }));
+            assertThat(context.getBean(ProjectionWorker.class)
+                    .runOnce("signed-amount-worker",OpenSearchIndexManager.WRITE_ALIAS)).isEqualTo(8);
+            context.getBean(com.yunjihai.rag.access.role.RoleAssignmentStore.class).grantSpaceRole(space,user,
+                    com.yunjihai.rag.access.role.SpaceRole.SPACE_ADMIN,user,Instant.now());
+            var pack=context.getBean(TrustedRetrievalService.class).retrieve(new RetrievalQuery(
+                    UUID.randomUUID(),user,Set.of(space),"星河项目收益",Map.of(),10));
+            assertThat(pack.conflictScreeningEvidence()).extracting(e -> e.excerpt())
+                    .contains("星河项目收益：-5万元。","星河项目收益：5万元。");
+            var outcome=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class).ask(
+                    new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),user,"星河项目收益是多少？"));
+            assertThat(outcome).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                    refused -> assertThat(refused.reason()).isEqualTo(
+                            com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            assertThat(RELEVANCE_MODEL_CALLS).hasValue(0);
+        }
+    }
+    @Test
     @EnabledIfEnvironmentVariable(named = "RAG_GOLDEN_DIAGNOSTIC", matches = "true")
     void strictLexicalAndCanMissBothSidesOfARealConflict() throws Exception {
         try (OpenSearchConnection connection = new OpenSearchClientFactory().create(

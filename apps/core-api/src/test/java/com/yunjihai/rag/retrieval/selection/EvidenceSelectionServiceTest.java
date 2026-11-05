@@ -73,6 +73,13 @@ class EvidenceSelectionServiceTest {
     }
 
     @Test
+    void preservesPositiveAndNegativeAmountsAdjacentToChineseText() {
+        var loss = scored(30, 130, "项目收益为-5万元");
+        var profit = scored(31, 131, "项目收益为5万元");
+        var selected = new EvidenceSelectionService(RetrievalPolicy.defaults()).select(List.of(loss,profit),8);
+        assertThat(selected).containsExactly(loss,profit);
+    }
+    @Test
     void enforcesPerDocumentCapBeforeMovingToTheNextCandidate() {
         var sameDocument = uuid(500);
         var first = scored(10, sameDocument, "甲甲甲甲");

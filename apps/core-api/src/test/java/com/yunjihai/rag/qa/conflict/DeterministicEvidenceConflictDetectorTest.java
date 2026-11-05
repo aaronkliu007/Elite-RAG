@@ -81,6 +81,15 @@ class DeterministicEvidenceConflictDetectorTest {
     }
 
     @Test
+    void comparesSignedAmountsWithoutConfusingLossAndProfit() {
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目收益：-5万元"),evidence(2,"项目收益：5万元")))).isTrue();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目收益：−5万元"),evidence(2,"项目收益：5万元")))).isTrue();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"项目收益：-1万元"),evidence(2,"项目收益：-10000元")))).isFalse();
+    }
+    @Test
     void preservesLineBoundariesWhenExtractingMultipleFacts(){
         assertThat(detector.hasConflict(List.of(
                 evidence(1,"项目预算：1万元\n服务期限：12个月"),
@@ -298,6 +307,16 @@ class DeterministicEvidenceConflictDetectorTest {
             });
             assertThat(structured.hasConflict(List.of(tableEvidence(1),tableEvidence(2)))).isFalse();
         }
+    }
+    @Test
+    void comparesSignedTableAmountsAndPreservesEquivalentUnits() {
+        var conflicting = new DeterministicEvidenceConflictDetector(item -> budgetCells("星河项目","金额（万元）",
+                item.evidenceId().equals(id(1)) ? "-5" : "5"));
+        assertThat(conflicting.hasConflict(List.of(tableEvidence(1),tableEvidence(2)))).isTrue();
+        var equivalent = new DeterministicEvidenceConflictDetector(item -> budgetCells("星河项目",
+                item.evidenceId().equals(id(1)) ? "金额（万元）" : "金额（元）",
+                item.evidenceId().equals(id(1)) ? "−1" : "-10000"));
+        assertThat(equivalent.hasConflict(List.of(tableEvidence(1),tableEvidence(2)))).isFalse();
     }
     @Test
     void tableFactsRespectDimensionsAndEquivalentCurrencyUnits() {

@@ -32,7 +32,7 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
     private static final Pattern DATE=Pattern.compile(
             "^(\\d{4})\\s*(?:年|[-/.])\\s*(\\d{1,2})\\s*(?:月|[-/.])\\s*(\\d{1,2})\\s*日?");
     private static final Pattern QUANTITY=Pattern.compile(
-            "^(\\d+(?:\\.\\d+)?)\\s*(万元|元|个月|月|年|天|日|GB|MB|TPS|QPS|%|名|人|台)",
+            "^([+\\-−]?\\d+(?:\\.\\d+)?)\\s*(万元|元|个月|月|年|天|日|GB|MB|TPS|QPS|%|名|人|台)",
             Pattern.CASE_INSENSITIVE|Pattern.UNICODE_CASE);
     private static final Pattern STATE=Pattern.compile(
             "^(启用|开启|生效|有效|允许|停用|关闭|失效|无效|禁止|是|否)$");
@@ -129,7 +129,7 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
                 var unit = Pattern.compile("^(.*?)\\s*\\((万元|元|个月|月|年|天|日|GB|MB|TPS|QPS|%|名|人|台)\\)$", Pattern.CASE_INSENSITIVE).matcher(label);
                 if (!unit.matches()) continue;
                 String raw = Normalizer.normalize(row.get(header.getKey()), Normalizer.Form.NFKC).strip();
-                if (!raw.matches("\\d+(?:\\.\\d+)?")) throw new IllegalStateException("AMBIGUOUS_TABLE_EVIDENCE");
+                if (!raw.matches("[+\\-−]?\\d+(?:\\.\\d+)?")) throw new IllegalStateException("AMBIGUOUS_TABLE_EVIDENCE");
                 var value = canonicalValue(raw + unit.group(2));
                 if (value.isEmpty()) throw new IllegalStateException("AMBIGUOUS_TABLE_EVIDENCE");
                 var key = new StringBuilder(normalizeKey(unit.group(1)));
@@ -219,7 +219,7 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
         }
         var quantity=QUANTITY.matcher(value);
         if(quantity.find())return Optional.of(canonicalQuantity(
-                new BigDecimal(quantity.group(1)),quantity.group(2).toUpperCase(Locale.ROOT)));
+                new BigDecimal(quantity.group(1).replace('−','-')),quantity.group(2).toUpperCase(Locale.ROOT)));
         var state=STATE.matcher(value);
         if(state.find())return Optional.of(switch(state.group(1)){
             case "启用","开启","生效","有效","允许","是"->"STATE:ENABLED";

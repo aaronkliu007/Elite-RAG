@@ -149,6 +149,21 @@ class GroundedQaServiceTest {
     }
 
     @Test
+    void refusesOppositeSignedAmountsBeforeCallingModel() {
+        var harness=new Harness();
+        var items=new ArrayList<>(evidence(8,0.9));
+        for (int index=0; index<2; index++) {
+            var item=items.get(index);
+            items.set(index,new Evidence(item.spaceId(),item.evidenceId(),item.documentId(),item.versionId(),
+                    item.nodeId(),item.title(),index==0 ? "项目收益：-5万元" : "项目收益：5万元",
+                    item.score(),item.locator()));
+        }
+        harness.pack=pack(items);
+        assertThat(harness.service().ask(command("项目收益是多少？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+    @Test
     void refusesConflictInAuthorizedCandidatesBeyondSelectedEvidence() {
         var harness = new Harness();
         var selected = evidence(8, 0.9);

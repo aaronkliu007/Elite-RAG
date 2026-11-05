@@ -93,11 +93,7 @@ public final class EvidenceSelectionService {
         int codePoint = codePoints[index];
         boolean numericSign = codePoint == '-' || codePoint == '\u2010'
                 || codePoint == '\u2011' || codePoint == '\u2212';
-        boolean startsNumericToken = index == 0
-                || Character.isWhitespace(codePoints[index - 1])
-                || Character.isSpaceChar(codePoints[index - 1])
-                || isPunctuation(codePoints[index - 1]);
-        return numericSign && nextIsDigit && startsNumericToken;
+        return numericSign && nextIsDigit;
     }
 
     private static boolean isPunctuation(int codePoint) {
