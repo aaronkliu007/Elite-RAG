@@ -52,6 +52,16 @@ const refusalMessages: Record<string, string> = {
     >
       <strong>本次未生成回答</strong>
       <span>{{ refusalMessages[result.refusal ?? ''] ?? '当前依据无法支持可靠回答，系统已严格拒答。' }}</span>
+      <template v-if="result.refusal === 'CONFLICTING_EVIDENCE'">
+        <span>可以选择知识空间检索原始资料，核对后再判断。</span>
+        <RouterLink
+          class="source-link"
+          data-action="search-sources"
+          to="/search"
+        >
+          检索原始资料
+        </RouterLink>
+      </template>
     </section>
     <section
       v-else
@@ -75,4 +85,7 @@ const refusalMessages: Record<string, string> = {
 .state-warning { border-color: #ead18c; color: #744700; background: #fff9e8; }
 .state-refused { border-color: #adc7d2; color: #214b5c; background: #f3fafc; }
 .state-error { border-color: #edb8c0; color: #8d2633; background: #fff8f8; }
+.source-link { justify-self: start; margin-top: 7px; padding: 8px 12px; border: 1px solid #327084; border-radius: var(--radius-control); color: #174d5d; background: #fff; font-weight: 750; text-decoration: none; }
+.source-link:hover { background: #e4f2f5; }
+.source-link:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
 </style>

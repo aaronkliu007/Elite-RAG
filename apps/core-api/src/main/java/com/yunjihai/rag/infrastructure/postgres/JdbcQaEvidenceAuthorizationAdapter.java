@@ -37,7 +37,12 @@ public final class JdbcQaEvidenceAuthorizationAdapter implements QaEvidenceAutho
                         SELECT 'USER'::text,user_id FROM enabled_reader
                         UNION SELECT 'DEPARTMENT'::text,department_id FROM department_tree
                     ), requested_evidence AS (
-                        SELECT snapshot.* FROM qa_evidence_snapshot snapshot
+                        SELECT snapshot.space_id,snapshot.document_id,snapshot.version_id,snapshot.node_id FROM qa_evidence_snapshot snapshot
+                        JOIN qa_request request ON request.id=snapshot.request_id
+                            AND request.actor_id=:actorId
+                        WHERE snapshot.request_id=:requestId
+                        UNION
+                        SELECT snapshot.space_id,snapshot.document_id,snapshot.version_id,snapshot.node_id FROM qa_conflict_screening_snapshot snapshot
                         JOIN qa_request request ON request.id=snapshot.request_id
                             AND request.actor_id=:actorId
                         WHERE snapshot.request_id=:requestId

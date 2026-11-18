@@ -39,7 +39,7 @@ class GroundedQaMigrationIntegrationTest {
                 WHERE table_schema = 'public' AND table_name LIKE 'qa_%'
                 """).query(String.class).list());
         assertThat(tables).containsExactlyInAnyOrder(
-                "qa_request", "qa_evidence_snapshot", "qa_answer", "qa_model_call_audit",
+                "qa_request", "qa_evidence_snapshot", "qa_conflict_screening_snapshot", "qa_answer", "qa_model_call_audit",
                 "qa_evaluation_run", "qa_actor_rate_limit");
         var columns = jdbc.sql("""
                 SELECT table_name || '.' || column_name FROM information_schema.columns
@@ -62,6 +62,7 @@ class GroundedQaMigrationIntegrationTest {
 
         assertThat(privileges("qa_request")).containsExactlyInAnyOrder("INSERT","SELECT","UPDATE");
         assertThat(privileges("qa_evidence_snapshot")).containsExactlyInAnyOrder("INSERT","SELECT");
+        assertThat(privileges("qa_conflict_screening_snapshot")).containsExactlyInAnyOrder("INSERT","SELECT");
         assertThat(privileges("qa_answer")).containsExactlyInAnyOrder("INSERT","SELECT");
         assertThat(privileges("qa_model_call_audit")).containsExactlyInAnyOrder("INSERT","SELECT");
         assertThat(privileges("qa_evaluation_run")).containsExactlyInAnyOrder("INSERT","SELECT");

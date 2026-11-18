@@ -27,9 +27,9 @@ export interface SearchResponse {
 }
 
 export const searchApi = {
-  search: (spaceId: string, queryText: string, requestedEvidenceCount = 10) =>
+  search: (spaceId: string, queryText: string, requestedEvidenceCount = 10, documentId?: string) =>
     apiRequest<SearchResponse>('/api/v1/search', {
       method: 'POST',
-      body: JSON.stringify({ spaceId, queryText, metadataFilter: {}, requestedEvidenceCount }),
+      body: JSON.stringify({ spaceId, queryText, metadataFilter: documentId ? { documentId } : {}, requestedEvidenceCount }),
     }),
 }

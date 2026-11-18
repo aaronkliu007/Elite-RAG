@@ -124,19 +124,73 @@ class JdbcQaPersistenceIntegrationTest {
         audits.record(new ModelCallAuditPort.ModelCallAudit(request,
                 "approved-openai-compatible","chat-completions","chat-model","model-config-v1",
                 "c".repeat(64),"d".repeat(64),
-                new ModelUsage(100,20,Duration.ofMillis(50)),2,1,"SUCCESS",NOW));
+                new ModelUsage(100,20,Duration.ofMillis(50)),2,1,"SUCCESS",NOW,"qa-scoped-test-v1"));
         var stored=jdbc.sql("""
                 SELECT provider,endpoint_identifier,model_name,model_config_version,
                        request_digest,response_digest,input_tokens,output_tokens,latency_ms,
-                       sanitization_hit_count,retry_count,result_code
+                       sanitization_hit_count,retry_count,result_code,qa_policy_version
                 FROM qa_model_call_audit WHERE request_id=:id
                 """).param("id",request).query((row,n)->List.of(
                         row.getString(1),row.getString(2),row.getString(3),row.getString(4),
                         row.getString(5),row.getString(6),row.getInt(7),row.getInt(8),row.getLong(9),
-                        row.getInt(10),row.getInt(11),row.getString(12))).single();
+                        row.getInt(10),row.getInt(11),row.getString(12),row.getString(13))).single();
         assertThat(stored).containsExactly(
                 "approved-openai-compatible","chat-completions","chat-model","model-config-v1",
-                "c".repeat(64),"d".repeat(64),100,20,50L,2,1,"SUCCESS");
+                "c".repeat(64),"d".repeat(64),100,20,50L,2,1,"SUCCESS","qa-scoped-test-v1");
+    }
+
+    @Test
+    void rechecksNonSelectedScreeningDocumentsBeforeReturningScopedAnswer() {
+        UUID secondDocument=UUID.randomUUID(),secondVersion=UUID.randomUUID();
+        jdbc.sql("INSERT INTO document(id,space_id,title) VALUES (:id,:space,'冲突来源')")
+                .param("id",secondDocument).param("space",space).update();
+        jdbc.sql("""
+                INSERT INTO document_version(id,document_id,version_number,source_blob_id,status,parse_status,created_by)
+                VALUES (:id,:document,1,'second-blob','PUBLISHED','SUCCEEDED',:actor)
+                """).param("id",secondVersion).param("document",secondDocument).param("actor",actor).update();
+        jdbc.sql("UPDATE document SET current_published_version_id=:version WHERE id=:document")
+                .param("version",secondVersion).param("document",secondDocument).update();
+        jdbc.sql("INSERT INTO canonical_document(version_id,source_filename,media_type,page_count,parsed_at) VALUES (:version,'other.md','text/markdown',1,:at)")
+                .param("version",secondVersion).param("at",OffsetDateTime.ofInstant(NOW,ZoneOffset.UTC)).update();
+        jdbc.sql("INSERT INTO canonical_node(version_id,node_id,kind,body_text,stable_order) VALUES (:version,'node-2','PARAGRAPH','冲突资料',0)")
+                .param("version",secondVersion).update();
+        jdbc.sql("INSERT INTO acl_entry(id,space_id,scope,principal_type,principal_id) VALUES (:id,:space,'SPACE','USER',:actor)")
+                .param("id",UUID.randomUUID()).param("space",space).param("actor",actor).update();
+        var locator=new MarkdownLocator(List.of("章节"),"node-1");
+        UUID selectedId=UUID.randomUUID();
+        var selected=new QaEvidence(selectedId,space,document,version,"node-1","制度","绝不能入库的证据正文",0.9,locator);
+        var first=new com.yunjihai.rag.retrieval.domain.Evidence(space,selectedId,document,version,"node-1","制度",selected.excerpt(),0.9,locator);
+        var second=new com.yunjihai.rag.retrieval.domain.Evidence(space,UUID.randomUUID(),secondDocument,secondVersion,"node-2","冲突来源","冲突资料",0.1,
+                new MarkdownLocator(List.of("章节"),"node-2"));
+        persistence.create(request,actor,"a".repeat(64),NOW);
+        var retrieving=persistence.transition(request,0,QaStatus.RETRIEVING,NOW).orElseThrow();
+        var saved=persistence.saveEvidence(request,retrieving.revision(),new EvidenceBundle(List.of(selected),selected.excerpt().length()),false,NOW).orElseThrow();
+        assertThat(persistence.saveConflictScreening(request,saved.revision(),List.of(first,second))).isTrue();
+        var auth=new JdbcQaEvidenceAuthorizationAdapter(jdbc);
+        assertThat(auth.allAuthorized(request,actor,NOW)).isTrue();
+        UUID priorRequest=UUID.randomUUID();
+        persistence.create(priorRequest,actor,"b".repeat(64),NOW);
+        var priorRetrieving=persistence.transition(priorRequest,0,QaStatus.RETRIEVING,NOW).orElseThrow();
+        var priorSaved=persistence.saveEvidence(priorRequest,priorRetrieving.revision(),
+                new EvidenceBundle(List.of(selected),selected.excerpt().length()),false,NOW).orElseThrow();
+        assertThat(persistence.saveConflictScreening(priorRequest,priorSaved.revision(),List.of(first,second))).isTrue();
+        var priorGenerating=persistence.transition(priorRequest,priorSaved.revision(),QaStatus.GENERATING,NOW).orElseThrow();
+        var priorVerifying=persistence.transition(priorRequest,priorGenerating.revision(),QaStatus.VERIFYING,NOW).orElseThrow();
+        var priorAnswer=new QaOutcome.Answered(priorRequest,"制度",List.of(new CitationClaim(UUID.randomUUID(),"制度",List.of(selectedId))),false);
+        assertThat(persistence.completeAuthorized(priorRequest,priorVerifying.revision(),priorAnswer,NOW,
+                ()->auth.allAuthorized(priorRequest,actor,NOW)).authorized()).isTrue();
+        assertThat(persistence.findAuthorized(priorRequest,actor,()->auth.allAuthorized(priorRequest,actor,NOW))).isPresent();
+        jdbc.sql("INSERT INTO acl_entry(id,space_id,document_id,scope,principal_type,principal_id,revoked_at) VALUES (:id,:space,:document,'DOCUMENT','USER',:actor,:at)")
+                .param("id",UUID.randomUUID()).param("space",space).param("document",secondDocument).param("actor",actor)
+                .param("at",OffsetDateTime.ofInstant(NOW,ZoneOffset.UTC)).update();
+        assertThat(auth.allAuthorized(request,actor,NOW)).isFalse();
+        assertThat(persistence.findAuthorized(priorRequest,actor,()->auth.allAuthorized(priorRequest,actor,NOW))).isEmpty();
+        var generating=persistence.transition(request,saved.revision(),QaStatus.GENERATING,NOW).orElseThrow();
+        var verifying=persistence.transition(request,generating.revision(),QaStatus.VERIFYING,NOW).orElseThrow();
+        var answer=new QaOutcome.Answered(request,"制度",List.of(new CitationClaim(UUID.randomUUID(),"制度",List.of(selectedId))),false);
+        var completion=persistence.completeAuthorized(request,verifying.revision(),answer,NOW,()->auth.allAuthorized(request,actor,NOW));
+        assertThat(completion.authorized()).isFalse();
+        assertThat(jdbc.sql("SELECT count(*) FROM qa_answer WHERE request_id=:id").param("id",request).query(Long.class).single()).isZero();
     }
 
     @Test

@@ -27,6 +27,22 @@ class EvaluationDatasetFingerprintTest {
     }
 
     @Test
+    void questionRelevanceChangesTheDatasetFingerprint() {
+        UUID actor=UUID.randomUUID(),doc=UUID.randomUUID();
+        var source=new EvaluationCase.ReviewedEvidence(doc,UUID.randomUUID(),"node","a".repeat(64),"b".repeat(64),"c".repeat(64));
+        var original=new EvaluationCase.ReviewedClaim("声明",Set.of(source),"review",EvaluationCase.ReviewVerdict.SUPPORTED);
+        var revised=new EvaluationCase.ReviewedClaim("声明",Set.of(source),"review",EvaluationCase.ReviewVerdict.SUPPORTED,
+                EvaluationCase.QuestionRelevance.RELEVANT);
+        var one=new EvaluationCase(UUID.randomUUID(),actor,"问题",Set.of(new EvaluationCase.EvidenceRef(doc,"node")),
+                Set.of(),Set.of(),false,Set.of("WORD"),Set.of(original),"d".repeat(64));
+        var two=new EvaluationCase(one.id(),actor,one.question(),one.expectedEvidence(),Set.of(),Set.of(),false,
+                one.coverageTags(),Set.of(revised),one.reviewQuestionDigest());
+        UUID id=UUID.randomUUID();
+        assertThat(EvaluationDatasetFingerprint.sha256(new EvaluationDataset(id,"v1","p1","s1",List.of(one),false)))
+                .isNotEqualTo(EvaluationDatasetFingerprint.sha256(new EvaluationDataset(id,"v1","p1","s1",List.of(two),false)));
+    }
+
+    @Test
     void currentAssessmentRejectsMissingOrChangedCatalogEvenWhenHistoricalResultPassed() {
         var metrics=new EvaluationMetrics(1,1,1,1,1,1,1,1,0,1);
         var old=new EvaluationGate.Assessment(true,List.of());

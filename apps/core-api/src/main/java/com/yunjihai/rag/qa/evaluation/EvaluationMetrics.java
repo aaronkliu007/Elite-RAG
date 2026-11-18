@@ -11,7 +11,14 @@ public record EvaluationMetrics(
         int correctlyRefusedCount,
         int leakageCount,
         Integer reviewedClaimCount,
-        Integer generatedClaimCount) {
+        Integer generatedClaimCount,
+        Integer irrelevantClaimCount) {
+    public EvaluationMetrics(int expectedEvidenceCount,int retrievedExpectedEvidenceCount,int citationCount,
+                             int validCitationCount,int claimCount,int supportedClaimCount,int refusalCaseCount,
+                             int correctlyRefusedCount,int leakageCount,Integer reviewedClaimCount,Integer generatedClaimCount) {
+        this(expectedEvidenceCount,retrievedExpectedEvidenceCount,citationCount,validCitationCount,claimCount,
+                supportedClaimCount,refusalCaseCount,correctlyRefusedCount,leakageCount,reviewedClaimCount,generatedClaimCount,0);
+    }
     public EvaluationMetrics(int expectedEvidenceCount,int retrievedExpectedEvidenceCount,int citationCount,
                              int validCitationCount,int claimCount,int supportedClaimCount,
                              int refusalCaseCount,int correctlyRefusedCount,int leakageCount) {
@@ -28,13 +35,15 @@ public record EvaluationMetrics(
     public EvaluationMetrics {
         reviewedClaimCount=reviewedClaimCount==null?0:reviewedClaimCount;
         generatedClaimCount=generatedClaimCount==null?0:generatedClaimCount;
+        irrelevantClaimCount=irrelevantClaimCount==null?0:irrelevantClaimCount;
         int[] values={expectedEvidenceCount,retrievedExpectedEvidenceCount,citationCount,validCitationCount,
                 claimCount,supportedClaimCount,refusalCaseCount,correctlyRefusedCount,leakageCount,
-                reviewedClaimCount,generatedClaimCount};
+                reviewedClaimCount,generatedClaimCount,irrelevantClaimCount};
         for(int value:values)if(value<0)throw new IllegalArgumentException("evaluation metric count must not be negative");
         if(retrievedExpectedEvidenceCount>expectedEvidenceCount||validCitationCount>citationCount
                 ||supportedClaimCount>claimCount||generatedClaimCount>claimCount
-                ||reviewedClaimCount>generatedClaimCount||correctlyRefusedCount>refusalCaseCount)
+                ||reviewedClaimCount>generatedClaimCount||irrelevantClaimCount>reviewedClaimCount
+                ||correctlyRefusedCount>refusalCaseCount)
             throw new IllegalArgumentException("evaluation metric numerator exceeds denominator");
     }
 

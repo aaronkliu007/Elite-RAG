@@ -11,6 +11,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class QaIdempotencyIntegrationTest {
     @Test
+    void revokedEvidenceIsNotReturnedByGetOrIdempotentReplay() {
+        var fixture=new QaTestHarness(Mode.ANSWERED);
+        var request=new QaDtos.AskQuestionRequest("制度何时生效？");
+        var first=fixture.controller.ask(auth(ACTOR),"revoke-key",request);
+        fixture.authorized.set(false);
+        assertThatThrownBy(()->fixture.controller.get(auth(ACTOR),first.requestId()))
+                .isInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
+        assertThatThrownBy(()->fixture.controller.ask(auth(ACTOR),"revoke-key",request))
+                .isInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
+        assertThat(fixture.modelCalls).hasValue(1);
+    }
+
+    @Test
     void sameKeyAndPayloadExecutesQaOnceAndPayloadMismatchConflicts() {
         var fixture=new QaTestHarness(Mode.ANSWERED);
         var request=new QaDtos.AskQuestionRequest("制度何时生效？");

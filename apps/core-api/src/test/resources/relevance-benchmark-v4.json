@@ -1,0 +1,605 @@
+{
+  "version": "synthetic-relevance-v4",
+  "cases": [
+    {
+      "id": "same-project-other-topic",
+      "question": "星河项目的备份保留多久？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "备份制度规定星河项目备份保留30天。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "星河项目备份保留期限为30日。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "星河项目研发预算为100万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d4",
+          "text": "星河项目研发预算为120万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d5",
+          "text": "星河项目备份应每日检查。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d6",
+          "text": "备份保留90天，未注明项目。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d7",
+          "text": "星河项目的备份工作由运维组负责。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "星河项目备份记录每周归档。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "星河项目上线版本为2.1。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "远山项目备份保留60天。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": [
+        {
+          "first": "d3",
+          "second": "d4",
+          "scope": "IRRELEVANT"
+        },
+        {
+          "first": "d1",
+          "second": "d6",
+          "scope": "UNCERTAIN"
+        },
+        {
+          "first": "d2",
+          "second": "d6",
+          "scope": "UNCERTAIN"
+        },
+        {
+          "first": "d10",
+          "second": "d6",
+          "scope": "UNCERTAIN"
+        }
+      ]
+    },
+    {
+      "id": "budget-conflict",
+      "question": "星河项目的研发预算是多少？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "星河项目研发预算为100万元。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "星河项目研发预算为120万元。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "远山项目研发预算为80万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d4",
+          "text": "远山项目研发预算为90万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d5",
+          "text": "研发预算为150万元，未说明项目。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d6",
+          "text": "星河项目预算审批流程由财务负责。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d7",
+          "text": "星河项目的研发预算审批由财务负责。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "星河项目的预算版本未填写。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "星河项目备份保留30天。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "北辰项目研发预算为60万元。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": [
+        {
+          "first": "d1",
+          "second": "d2",
+          "scope": "RELEVANT"
+        },
+        {
+          "first": "d3",
+          "second": "d4",
+          "scope": "IRRELEVANT"
+        },
+        {
+          "first": "d1",
+          "second": "d5",
+          "scope": "UNCERTAIN"
+        },
+        {
+          "first": "d2",
+          "second": "d5",
+          "scope": "UNCERTAIN"
+        },
+        {
+          "first": "d3",
+          "second": "d5",
+          "scope": "UNCERTAIN"
+        },
+        {
+          "first": "d4",
+          "second": "d5",
+          "scope": "UNCERTAIN"
+        },
+        {
+          "first": "d10",
+          "second": "d5",
+          "scope": "UNCERTAIN"
+        }
+      ]
+    },
+    {
+      "id": "ambiguous-referent",
+      "question": "北辰项目方案是否批准？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "北辰项目方案已经批准。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "北辰项目的方案已获得批准。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "该方案已经批准，未说明所属项目。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d4",
+          "text": "该方案未批准，未说明所属项目。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d5",
+          "text": "远山项目预算为80万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d6",
+          "text": "星河项目的备份频率为每日。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d7",
+          "text": "北辰项目方案的审批意见存档在项目办公室。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "某方案已经批准，但未说明所属项目。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "北辰项目备份保留30天。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "星河系统预算为50万元。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": [
+        {
+          "first": "d3",
+          "second": "d4",
+          "scope": "UNCERTAIN"
+        }
+      ]
+    },
+    {
+      "id": "declared-alias",
+      "question": "天河项目（内部代号云舟）的验收需要什么？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "天河项目又名云舟项目，验收须准备测试报告。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "云舟项目验收须准备部署清单。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "远山项目交付预算为20万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d4",
+          "text": "北辰系统备份保留30天。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d5",
+          "text": "云舟系统版本发布须登记。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d6",
+          "text": "该项目验收需要整改记录，未注明项目。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d7",
+          "text": "云舟项目的验收会议由项目经理主持。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "天河项目归档材料需检查完整性。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "星河系统研发预算为50万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "北辰项目备份保留30天。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": []
+    },
+    {
+      "id": "name-substring",
+      "question": "新云舟项目的预算是多少？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "新云舟项目预算为50万元。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "新云舟项目财务记录载明预算50万元。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "远山项目备份保留30天。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d4",
+          "text": "北辰系统计划在周五发布。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d5",
+          "text": "云舟项目预算为60万元，未说明与新云舟的关系。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d6",
+          "text": "星河项目预算为70万元，未说明项目别名。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d7",
+          "text": "新云舟项目预算需经财务审核。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "新云舟项目的研发费用另行登记。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "新云舟项目备份按日进行。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "北辰项目验收由项目经理负责。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": [
+        {
+          "first": "d1",
+          "second": "d5",
+          "scope": "UNCERTAIN"
+        }
+      ]
+    },
+    {
+      "id": "cross-entity",
+      "question": "云舟项目和北辰平台的负责人分别是谁？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "云舟项目负责人是林晓。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "北辰平台负责人是王宁。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "星河项目预算为80万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d4",
+          "text": "远山系统备份保留30天。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d5",
+          "text": "北辰项目负责人是赵明，与北辰平台关系未说明。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d6",
+          "text": "该平台负责人是王宁，未写平台名称。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d7",
+          "text": "云舟项目经理参与变更评审。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "北辰平台负责人参与运维交接。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "云舟项目预算为80万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "北辰平台的备份保留30天。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": []
+    },
+    {
+      "id": "version-context",
+      "question": "星河项目2026版预算是多少？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "星河项目2026版预算为100万元。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "星河项目2026版预算为120万元。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "星河项目2025版预算为80万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d4",
+          "text": "星河项目2024版预算为90万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d5",
+          "text": "星河项目预算为130万元，未注明年份。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d6",
+          "text": "星河项目2026版预算审批记录未写金额。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d7",
+          "text": "星河项目2026版预算需经财务审核。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "星河项目预算修订记录未说明年度。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "星河项目2026版备份保留30天。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "远山项目2026版预算为70万元。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": [
+        {
+          "first": "d1",
+          "second": "d2",
+          "scope": "RELEVANT"
+        }
+      ]
+    },
+    {
+      "id": "scope-conflict",
+      "question": "北辰平台生产环境备份保留多久？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "北辰平台生产环境备份保留30天。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "北辰平台生产环境备份保留90天。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "北辰平台测试环境备份保留7天。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d4",
+          "text": "远山平台生产环境备份保留14天。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d5",
+          "text": "北辰平台备份保留60天，未指明环境。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d6",
+          "text": "北辰平台备份由运维团队负责。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d7",
+          "text": "北辰平台生产环境备份由运维组检查。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "北辰平台备份介质应定期检查。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "北辰平台生产环境发布安排在周五。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "星河平台测试环境备份保留7天。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": [
+        {
+          "first": "d1",
+          "second": "d2",
+          "scope": "RELEVANT"
+        }
+      ]
+    },
+    {
+      "id": "same-project-other-topic-clear",
+      "question": "星河项目的备份保留多久？",
+      "documents": [
+        {
+          "id": "d1",
+          "text": "备份制度规定星河项目备份保留30天。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d2",
+          "text": "星河项目备份保留期限为30日。",
+          "judgment": "RELEVANT"
+        },
+        {
+          "id": "d3",
+          "text": "星河项目研发预算为100万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d4",
+          "text": "星河项目研发预算为120万元。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d5",
+          "text": "星河项目备份应每日检查。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d6",
+          "text": "星河项目备份记录按月核查。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d7",
+          "text": "星河项目的备份工作由运维组负责。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d8",
+          "text": "星河项目备份记录每周归档。",
+          "judgment": "UNCERTAIN"
+        },
+        {
+          "id": "d9",
+          "text": "星河项目上线版本为2.1。",
+          "judgment": "IRRELEVANT"
+        },
+        {
+          "id": "d10",
+          "text": "远山项目备份保留60天。",
+          "judgment": "IRRELEVANT"
+        }
+      ],
+      "conflicts": [
+        {
+          "first": "d3",
+          "second": "d4",
+          "scope": "IRRELEVANT"
+        }
+      ]
+    }
+  ]
+}

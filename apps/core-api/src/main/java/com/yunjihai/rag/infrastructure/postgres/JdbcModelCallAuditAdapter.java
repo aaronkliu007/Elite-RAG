@@ -21,16 +21,17 @@ public final class JdbcModelCallAuditAdapter implements ModelCallAuditPort {
                     INSERT INTO qa_model_call_audit(
                         request_id,provider,endpoint_identifier,model_name,model_config_version,
                         request_digest,response_digest,input_tokens,output_tokens,
-                        latency_ms,sanitization_hit_count,retry_count,result_code,occurred_at)
+                        latency_ms,sanitization_hit_count,retry_count,result_code,occurred_at,qa_policy_version)
                     VALUES (:requestId,:provider,:endpointIdentifier,:modelName,:modelConfigVersion,
                         :requestDigest,:responseDigest,:inputTokens,:outputTokens,
-                        :latencyMs,:hits,:retries,:resultCode,:occurredAt)
+                        :latencyMs,:hits,:retries,:resultCode,:occurredAt,:qaPolicyVersion)
                     """)
                     .param("requestId", audit.requestId())
                     .param("provider", audit.provider())
                     .param("endpointIdentifier", audit.endpointIdentifier())
                     .param("modelName", audit.model())
                     .param("modelConfigVersion", audit.modelConfigVersion())
+                    .param("qaPolicyVersion", audit.qaPolicyVersion())
                     .param("requestDigest", audit.requestDigest())
                     .param("responseDigest", audit.responseDigest())
                     .param("inputTokens", audit.usage().inputTokens())

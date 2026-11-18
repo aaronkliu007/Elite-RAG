@@ -25,7 +25,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PostgresMigrationIntegrationTest {
-    private static final int CURRENT_MIGRATION_COUNT = 21;
+    private static final int CURRENT_MIGRATION_COUNT = 24;
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
             .withDatabaseName("rag_test").withUsername("migration_owner").withPassword("migration_test_only");
     private static final String RUNTIME_USER = "rag_runtime_test";
@@ -53,6 +53,21 @@ class PostgresMigrationIntegrationTest {
     }
 
     @Test
+    void upgradesHistoricalQaAuditWithoutPretendingItsPolicyIsKnown() throws SQLException {
+        Flyway.configure().dataSource(POSTGRES.getJdbcUrl(),POSTGRES.getUsername(),POSTGRES.getPassword())
+                .locations("classpath:db/migration").target("21").load().migrate();
+        UUID actor=UUID.randomUUID(), request=UUID.randomUUID();
+        sql("INSERT INTO app_user(id,external_id,display_name) VALUES ('"+actor+"','legacy-actor','Legacy')");
+        sql("INSERT INTO qa_request(id,actor_id,question_digest,status,created_at,updated_at) VALUES ('"+request+"','"+actor+"','"+"a".repeat(64)+"','RECEIVED',now(),now())");
+        sql("INSERT INTO qa_model_call_audit(request_id,provider,endpoint_identifier,model_name,model_config_version,request_digest,response_digest,input_tokens,output_tokens,latency_ms,sanitization_hit_count,retry_count,result_code,occurred_at) VALUES ('"
+                +request+"','provider','chat','model','config','"+"b".repeat(64)+"','"+"c".repeat(64)+"',1,2,3,0,0,'SUCCESS',now())");
+        assertEquals(3,flyway("classpath:db/migration").migrate().migrationsExecuted);
+        assertEquals("legacy-unknown",scalar("SELECT qa_policy_version FROM qa_model_call_audit WHERE request_id='"+request+"'"));
+        assertEquals("b".repeat(64),scalar("SELECT request_digest FROM qa_model_call_audit WHERE request_id='"+request+"'"));
+        assertTrue(scalar("SELECT column_default FROM information_schema.columns WHERE table_name='qa_model_call_audit' AND column_name='qa_policy_version'").contains("legacy-unknown"));
+    }
+
+    @Test
     void migratesAnEmptyPostgresDatabaseWithAllFoundationTablesAndConstraints() throws SQLException {
         migrate();
         assertEquals(Set.of("app_user", "org_unit", "org_membership", "knowledge_space", "document",
@@ -61,7 +76,7 @@ class PostgresMigrationIntegrationTest {
                 "retrieval_projection_event", "document_retrieval_metadata", "external_identity",
                 "local_credential", "login_source_attempt", "system_role_assignment",
                 "space_role_assignment", "idempotency_record", "document_review",
-                "qa_request", "qa_evidence_snapshot", "qa_answer", "qa_model_call_audit",
+                "qa_request", "qa_evidence_snapshot", "qa_conflict_screening_snapshot", "qa_answer", "qa_model_call_audit",
                 "qa_evaluation_run", "qa_actor_rate_limit", "solution", "solution_requirement_version",
                 "solution_requirement_item", "solution_requirement_source", "solution_outline_version",
                 "solution_outline_node", "solution_outline_node_risk", "solution_adopted_section",

@@ -70,11 +70,16 @@ public record EvaluationCase(
     }
 
     public enum ReviewVerdict { SUPPORTED, UNSUPPORTED }
+    public enum QuestionRelevance { RELEVANT, IRRELEVANT, UNKNOWN }
     private record ReviewKey(String text,Set<ReviewedEvidence> sources) { }
 
     public record ReviewedClaim(String text,Set<ReviewedEvidence> supportingEvidence,String reviewReference,
-                                ReviewVerdict verdict) {
+                                ReviewVerdict verdict,QuestionRelevance questionRelevance) {
+        public ReviewedClaim(String text,Set<ReviewedEvidence> supportingEvidence,String reviewReference,ReviewVerdict verdict) {
+            this(text,supportingEvidence,reviewReference,verdict,QuestionRelevance.UNKNOWN);
+        }
         public ReviewedClaim {
+            questionRelevance=questionRelevance==null?QuestionRelevance.UNKNOWN:questionRelevance;
             if(text==null||text.isBlank()||text.codePointCount(0,text.length())>2000)
                 throw new IllegalArgumentException("reviewed claim text is invalid");
             supportingEvidence=Set.copyOf(Objects.requireNonNull(supportingEvidence));

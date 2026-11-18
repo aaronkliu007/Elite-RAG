@@ -13,6 +13,7 @@ const error = ref('')
 const draft = ref('')
 const references = reactive<Record<string, string>>({})
 const verdicts = reactive<Record<string, string>>({})
+const relevance = reactive<Record<string, string>>({})
 const url = () => `/api/admin/qa/evaluation-runs/${encodeURIComponent(props.runId)}/cases/${encodeURIComponent(props.caseId)}/review-context`
 function failureMessage(failure: unknown) {
   return failure instanceof ApiRequestError ? failure.displayMessage : '审核内容暂不可用，请检查本人权限和评测版本。'
@@ -23,7 +24,10 @@ async function load() {
   draft.value = ''
   try {
     context.value = await apiRequest<ReviewContext>(url())
-    for (const claim of context.value.claims) verdicts[claim.claimId] ??= ''
+    for (const claim of context.value.claims) {
+      verdicts[claim.claimId] ??= ''
+      relevance[claim.claimId] ??= ''
+    }
   }
   catch (failure) { context.value = null; error.value = failureMessage(failure) }
   finally { loading.value = false }
@@ -31,6 +35,8 @@ async function load() {
 async function prepare(claim: ReviewClaim) {
   const reviewReference = references[claim.claimId]?.trim() ?? ''
   const verdict = verdicts[claim.claimId] ?? ''
+  const questionRelevance = relevance[claim.claimId] ?? ''
+  if (!['RELEVANT', 'IRRELEVANT'].includes(questionRelevance)) return
   if (!context.value || !claim.eligible || !reviewReference || !['SUPPORTED', 'UNSUPPORTED'].includes(verdict) || loading.value) return
   loading.value = true
   error.value = ''
@@ -41,7 +47,7 @@ async function prepare(claim: ReviewClaim) {
     if (!current?.eligible || fresh.reviewQuestionDigest !== context.value.reviewQuestionDigest
       || JSON.stringify(current) !== JSON.stringify(claim)) throw new Error('changed')
     draft.value = JSON.stringify({ reviewQuestionDigest: fresh.reviewQuestionDigest, reviewedClaims: [{
-      text: current.text, supportingEvidence: current.supportingEvidence, reviewReference, verdict,
+      text: current.text, supportingEvidence: current.supportingEvidence, reviewReference, verdict, questionRelevance,
     }] }, null, 2)
     context.value = fresh
   } catch (failure) {
@@ -99,17 +105,23 @@ onMounted(load)
             maxlength="128"
             autocomplete="off"
           ></label>
-          <label>审核结论<select
+          <label>来源是否支持<select
             v-model="verdicts[claim.claimId]"
             name="verdict"
           >
             <option value="">请选择</option><option value="SUPPORTED">支持</option><option value="UNSUPPORTED">不支持</option>
           </select></label>
+          <label>是否针对问题<select
+            v-model="relevance[claim.claimId]"
+            name="questionRelevance"
+          >
+            <option value="">请选择</option><option value="RELEVANT">针对问题</option><option value="IRRELEVANT">与问题无关</option>
+          </select></label>
           <button
             class="button button-primary"
             type="button"
             data-action="prepare-label"
-            :disabled="loading || !references[claim.claimId]?.trim() || !verdicts[claim.claimId]"
+            :disabled="loading || !references[claim.claimId]?.trim() || !verdicts[claim.claimId] || !relevance[claim.claimId]"
             @click="prepare(claim)"
           >
             生成标注片段

@@ -9,6 +9,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
+import java.util.List;
+import com.yunjihai.rag.retrieval.domain.Evidence;
 
 public interface QaPersistencePort {
     record RequestState(UUID requestId, UUID actorId, QaStatus status, long revision, boolean degraded) {
@@ -26,6 +28,9 @@ public interface QaPersistencePort {
 
     Optional<RequestState> saveEvidence(
             UUID requestId, long expectedRevision, EvidenceBundle evidence, boolean degraded, Instant at);
+
+    /** Save identities only; fail closed if an implementation does not support the scoped path. */
+    default boolean saveConflictScreening(UUID requestId,long expectedRevision,List<Evidence> candidates) { return false; }
 
     Optional<RequestState> complete(
             UUID requestId, long expectedRevision, QaOutcome outcome, Instant at);
@@ -48,6 +53,11 @@ public interface QaPersistencePort {
     }
 
     Optional<QaOutcome> find(UUID requestId, UUID actorId);
+
+    default Optional<QaOutcome> findAuthorized(UUID requestId, UUID actorId, BooleanSupplier authorizationCheck) {
+        return find(requestId, actorId).filter(result -> !(result instanceof QaOutcome.Answered)
+                || authorizationCheck.getAsBoolean());
+    }
 
     default Optional<Instant> completedAt(UUID requestId, UUID actorId) {
         return Optional.empty();

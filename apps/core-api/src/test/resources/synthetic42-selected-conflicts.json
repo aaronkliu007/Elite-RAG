@@ -1,0 +1,129 @@
+{
+  "note": "虚构42题的历史最终证据快照，仅用于离线回放；不含完整授权筛查候选，不能判定可安全回答。",
+  "source": "本地重排42题检索明细.json / 42题冲突类别诊断.json",
+  "cases": [
+    {
+      "id": "Q05",
+      "question": "星河项目的备份保留多久？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q06",
+      "question": "星河项目多久组织一次恢复演练？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q09",
+      "question": "星河项目预算记录甲记载多少？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q10",
+      "question": "星河预算记录甲是否注明审批日期？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q11",
+      "question": "星河项目预算记录乙记载多少？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q12",
+      "question": "星河预算记录乙是否注明版本号？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q18",
+      "question": "北辰平台发布完成后由谁记录版本号？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": []
+    },
+    {
+      "id": "Q21",
+      "question": "星河项目评审前需要准备哪些资料？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q22",
+      "question": "星河评审会议由谁主持？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": []
+    },
+    {
+      "id": "Q29",
+      "question": "发现星河项目严重故障后先通知谁？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q30",
+      "question": "星河故障关闭后需要做什么？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": []
+    },
+    {
+      "id": "Q35",
+      "question": "星河项目评审会议安排在哪一天？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q36",
+      "question": "谁负责整理星河评审会议纪要？",
+      "expectedBehavior": "可回答",
+      "selectedBudgetTables": []
+    },
+    {
+      "id": "Q37",
+      "question": "星河项目研发预算究竟是多少？",
+      "expectedBehavior": "应拒答或提示冲突",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    },
+    {
+      "id": "Q40",
+      "question": "星河项目的客户合同金额是多少？",
+      "expectedBehavior": "应拒答",
+      "selectedBudgetTables": [
+        "05_星河项目预算记录甲",
+        "06_星河项目预算记录乙"
+      ]
+    }
+  ]
+}

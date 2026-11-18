@@ -8,6 +8,8 @@ import com.yunjihai.rag.qa.domain.QaQuestion;
 import com.yunjihai.rag.qa.domain.QaStatus;
 import com.yunjihai.rag.qa.domain.RefusalReason;
 import com.yunjihai.rag.qa.conflict.EvidenceConflictDetector;
+import com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy;
+import com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.GroundedAnswerPrompt;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
@@ -56,6 +58,7 @@ public final class GroundedQaService {
     private final Clock clock;
     private final QaMetrics metrics;
     private final EvaluationTraceRegistry evaluationTraces;
+    private final QuestionScopedConflictPolicy scopedPolicy;
 
     public GroundedQaService(
             AuthorizedSpaceScopePort authorizedSpaces,
@@ -109,6 +112,17 @@ public final class GroundedQaService {
             Clock clock,
             QaMetrics metrics,
             EvaluationTraceRegistry evaluationTraces) {
+        this(authorizedSpaces,retrieval,persistence,audits,digests,sanitizer,chat,conflictDetector,
+                citationVerifier,policy,evidenceAuthorization,clock,metrics,evaluationTraces,
+                QuestionScopedConflictPolicy.strict());
+    }
+
+    public GroundedQaService(
+            AuthorizedSpaceScopePort authorizedSpaces, RetrievalService retrieval, QaPersistencePort persistence,
+            ModelCallAuditPort audits, QuestionDigestPort digests, SensitiveContentSanitizer sanitizer,
+            ChatCompletionPort chat, EvidenceConflictDetector conflictDetector, CitationSupportVerifier citationVerifier,
+            QaPolicy policy, QaEvidenceAuthorizationPort evidenceAuthorization, Clock clock, QaMetrics metrics,
+            EvaluationTraceRegistry evaluationTraces, QuestionScopedConflictPolicy scopedPolicy) {
         this.authorizedSpaces = Objects.requireNonNull(authorizedSpaces);
         this.retrieval = Objects.requireNonNull(retrieval);
         this.persistence = Objects.requireNonNull(persistence);
@@ -123,6 +137,7 @@ public final class GroundedQaService {
         this.clock = Objects.requireNonNull(clock);
         this.metrics = Objects.requireNonNull(metrics);
         this.evaluationTraces = Objects.requireNonNull(evaluationTraces);
+        this.scopedPolicy = Objects.requireNonNull(scopedPolicy);
     }
 
     public QaOutcome ask(AskQuestionCommand command) {
@@ -229,13 +244,22 @@ public final class GroundedQaService {
             return complete(state, command.actorId(), new QaOutcome.Refused(
                     command.requestId(), RefusalReason.INSUFFICIENT_EVIDENCE, pack.degraded()));
         }
+        boolean scopedConflict=false;
+        String requestPolicyVersion=POLICY_VERSION;
         try {
             var conflictKind = Objects.requireNonNull(conflictDetector.conflictKind(pack.conflictScreeningEvidence()));
             evaluationTraces.recordConflictScreeningCompleted(command.requestId());
             if (conflictKind != EvidenceConflictDetector.ConflictKind.NONE) {
                 LOGGER.info("qa_conflict_screening_detected requestId={} kind={}", command.requestId(), conflictKind);
-                return complete(state, command.actorId(), new QaOutcome.Refused(
-                        command.requestId(), RefusalReason.CONFLICTING_EVIDENCE, pack.degraded()));
+                var scopedVersion=allConflictsExplicitlyUnrelated(safeQuestion,pack.conflictScreeningEvidence());
+                if (scopedVersion.isEmpty()) {
+                    return complete(state, command.actorId(), new QaOutcome.Refused(
+                            command.requestId(), RefusalReason.CONFLICTING_EVIDENCE, pack.degraded()));
+                }
+                scopedConflict=true;
+                requestPolicyVersion=scopedVersion.orElseThrow();
+                LOGGER.info("qa_conflict_scoped_resolution requestId={} result=UNRELATED policy={}",
+                        command.requestId(),requestPolicyVersion);
             }
         } catch (RuntimeException detectorFailure) {
             evaluationTraces.recordConflictScreeningUnavailable(command.requestId());
@@ -256,6 +280,18 @@ public final class GroundedQaService {
                 command.requestId(), state.revision(), evidence, pack.degraded(), clock.instant());
         if (saved.isEmpty()) return stale(command);
         state = saved.orElseThrow();
+
+        if (scopedConflict) {
+            try {
+                if (!persistence.saveConflictScreening(command.requestId(), state.revision(), pack.conflictScreeningEvidence())) {
+                    return complete(state, command.actorId(), new QaOutcome.Failed(
+                            command.requestId(), "CONFLICT_SCOPE_PERSIST_FAILED", pack.degraded()));
+                }
+            } catch (RuntimeException failure) {
+                return complete(state, command.actorId(), new QaOutcome.Failed(
+                        command.requestId(), "CONFLICT_SCOPE_PERSIST_FAILED", pack.degraded()));
+            }
+        }
 
         long sanitizationStarted = System.nanoTime();
         SanitizationResult sanitized;
@@ -284,7 +320,7 @@ public final class GroundedQaService {
         if (generating.isEmpty()) return stale(command);
         state = generating.orElseThrow();
         GroundedAnswerPrompt prompt = new GroundedAnswerPrompt(
-                safeQuestion, sanitized.evidence(), "zh-CN", POLICY_VERSION, PROMPT_VERSION,
+                safeQuestion, sanitized.evidence(), "zh-CN", requestPolicyVersion, PROMPT_VERSION,
                 policy.maxModelOutputCodePoints());
         ModelCallDescriptor descriptor = chat.descriptor();
         long generationStarted = System.nanoTime();
@@ -302,7 +338,7 @@ public final class GroundedQaService {
                     command.requestId(), descriptor.provider(), descriptor.endpointIdentifier(),
                     descriptor.model(), descriptor.configVersion(), questionDigest,
                     responseDigest(attempt), attempt.usage(),
-                    totalSanitizationHits, attempt.retryCount(), attempt.resultCode(), clock.instant()));
+                    totalSanitizationHits, attempt.retryCount(), attempt.resultCode(), clock.instant(),requestPolicyVersion));
         } catch (RuntimeException auditFailure) {
             return complete(state, command.actorId(), new QaOutcome.Failed(
                     command.requestId(), "MODEL_AUDIT_FAILED", pack.degraded()));
@@ -345,6 +381,22 @@ public final class GroundedQaService {
                 return complete(state, command.actorId(), new QaOutcome.Refused(
                         command.requestId(), RefusalReason.UNSUPPORTED_CLAIM, pack.degraded()));
             }
+            if(scopedConflict) {
+                if(!hasLiteralScopedCitations(candidate,sanitized.evidence())) {
+                    return complete(state,command.actorId(),new QaOutcome.Refused(
+                            command.requestId(),RefusalReason.UNSUPPORTED_CLAIM,pack.degraded()));
+                }
+                try {
+                    if(scopedPolicy.verifyAnswer(safeQuestion,candidate,sanitized.evidence())
+                            !=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT) {
+                        return complete(state,command.actorId(),new QaOutcome.Refused(
+                                command.requestId(),RefusalReason.UNSUPPORTED_CLAIM,pack.degraded()));
+                    }
+                } catch(RuntimeException unavailable) {
+                    return complete(state,command.actorId(),new QaOutcome.Refused(
+                            command.requestId(),RefusalReason.UNSUPPORTED_CLAIM,pack.degraded()));
+                }
+            }
             if (timedOut(deadline)) {
                 return complete(state, command.actorId(), new QaOutcome.Failed(
                         command.requestId(), "QA_TIMEOUT", pack.degraded()));
@@ -373,10 +425,55 @@ public final class GroundedQaService {
         }
     }
 
+    private Optional<String> allConflictsExplicitlyUnrelated(QaQuestion question,java.util.List<Evidence> candidates) {
+        if(!scopedPolicy.enabled() || !(conflictDetector instanceof DeterministicEvidenceConflictDetector detector))return Optional.empty();
+        String version=scopedPolicy.version();
+        if(version==null || !version.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,47}"))return Optional.empty();
+        var immutable=java.util.List.copyOf(candidates);
+        // Retrieval clips screening excerpts at 1200 code points; equal length is ambiguous too.
+        if(immutable.stream().anyMatch(item->item.excerpt().codePointCount(0,item.excerpt().length())>=1200))
+            return Optional.empty();
+        var ids=immutable.stream().map(Evidence::evidenceId).collect(java.util.stream.Collectors.toSet());
+        if(ids.size()!=immutable.size())return Optional.empty();
+        var pairs=detector.findConflictingPairs(immutable);
+        if(pairs.isEmpty())return Optional.empty();
+        for(var pair:pairs) {
+            if(!ids.contains(pair.firstEvidenceId()) || !ids.contains(pair.secondEvidenceId())
+                    || pair.kind()==EvidenceConflictDetector.ConflictKind.IDENTITY
+                    || pair.kind()==EvidenceConflictDetector.ConflictKind.APPROVAL
+                    || (pair.kind()!=EvidenceConflictDetector.ConflictKind.TYPED_FACT
+                        && pair.kind()!=EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE))return Optional.empty();
+        }
+        for(var pair:pairs)
+            if(scopedPolicy.classify(question,pair,immutable)!=QuestionScopedConflictPolicy.Scope.UNRELATED)return Optional.empty();
+        return Optional.of("qa-scoped-"+version);
+    }
+
+    private static boolean hasLiteralScopedCitations(CandidateAnswer answer,EvidenceBundle evidence) {
+        String joined=answer.claims().stream().map(claim->claim.text()).collect(java.util.stream.Collectors.joining("\n"));
+        if(!joined.equals(answer.answer()))return false;
+        var known=evidence.evidence().stream().collect(java.util.stream.Collectors.toMap(item->item.evidenceId(),item->item));
+        for(var claim:answer.claims()) {
+            boolean claimQuoted=false;
+            for(var support:claim.supports()) {
+                var source=known.get(support.evidenceId());
+                if(source==null || !source.excerpt().contains(support.quote()))return false;
+                if(support.quote().contains(claim.text()))claimQuoted=true;
+            }
+            if(!claimQuoted)return false;
+        }
+        return true;
+    }
+
     public Optional<QaOutcome> find(UUID requestId, UUID actorId) {
-        return persistence.find(
-                Objects.requireNonNull(requestId, "requestId must not be null"),
-                Objects.requireNonNull(actorId, "actorId must not be null"));
+        Objects.requireNonNull(requestId, "requestId must not be null");
+        Objects.requireNonNull(actorId, "actorId must not be null");
+        try {
+            return persistence.findAuthorized(requestId, actorId,
+                    () -> evidenceAuthorization.allAuthorized(requestId, actorId, clock.instant()));
+        } catch (RuntimeException unavailable) {
+            return Optional.empty();
+        }
     }
 
     public Optional<Instant> completedAt(UUID requestId, UUID actorId) {
@@ -455,12 +552,12 @@ public final class GroundedQaService {
                 state.requestId(), state.revision(), outcome, clock.instant()).isPresent()) {
             return outcome;
         }
-        return persistence.find(state.requestId(), actorId)
+        return find(state.requestId(), actorId)
                 .orElseGet(() -> new QaOutcome.Failed(state.requestId(), "STALE_QA_RESULT"));
     }
 
     private QaOutcome stale(AskQuestionCommand command) {
-        return persistence.find(command.requestId(), command.actorId())
+        return find(command.requestId(), command.actorId())
                 .orElseGet(() -> new QaOutcome.Failed(command.requestId(), "STALE_QA_RESULT"));
     }
 

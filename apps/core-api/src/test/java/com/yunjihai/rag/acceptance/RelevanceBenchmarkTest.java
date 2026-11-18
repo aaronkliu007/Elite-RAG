@@ -3,6 +3,7 @@ package com.yunjihai.rag.acceptance;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,6 +41,26 @@ class RelevanceBenchmarkTest {
         }
     }
 
+    @Test
+    void ambiguousConflictPairsRemainProtectedEvenWhenOneDocumentIsLabeledIrrelevant() throws Exception {
+        var json=new com.fasterxml.jackson.databind.ObjectMapper();
+        try (var source=RelevanceBenchmarkTest.class.getResourceAsStream("/relevance-benchmark-v3.json")) {
+            var dataset=json.readValue(java.util.Objects.requireNonNull(source),RelevanceBenchmark.Dataset.class);
+            assertThat(dataset.version()).isEqualTo("synthetic-relevance-v3");
+            var budget=dataset.cases().stream().filter(item->item.id().equals("budget-conflict")).findFirst().orElseThrow();
+            var all=budget.documents().stream().map(RelevanceBenchmark.Document::id).toList();
+            var withoutOtherProject=all.stream().filter(id->!id.equals("d3")).toList();
+            var result=RelevanceBenchmark.assessScreening(budget,all,withoutOtherProject);
+            assertThat(result.removedIrrelevant()).isEqualTo(1);
+            assertThat(result.harmedUncertainPairs()).isEqualTo(1);
+            assertThat(result.preservesAvailableSafetyEvidence()).isFalse();
+            var names=dataset.cases().stream().filter(item->item.id().equals("name-substring")).findFirst().orElseThrow();
+            assertThat(names.conflicts()).anySatisfy(pair->{
+                assertThat(Set.of(pair.first(),pair.second())).containsExactlyInAnyOrder("d1","d5");
+                assertThat(pair.scope()).isEqualTo(RelevanceBenchmark.Judgment.UNCERTAIN);
+            });
+        }
+    }
     @Test
     void measuresRelevantRecallAndSeparatesIrrelevantUnknownAndConflictPairs() {
         var sample = new RelevanceBenchmark.Sample("case", "问题", List.of(
@@ -195,6 +216,29 @@ class RelevanceBenchmarkTest {
         }
     }
 
+    @Test
+    void earlierModelDocumentFilteringBreaksAmbiguousConflictPairsInV3() throws Exception {
+        var json=new com.fasterxml.jackson.databind.ObjectMapper();
+        try (var benchmark=RelevanceBenchmarkTest.class.getResourceAsStream("/relevance-benchmark-v3.json");
+             var first=RelevanceBenchmarkTest.class.getResourceAsStream("/relevance-v2-shadow-snapshot.json");
+             var second=RelevanceBenchmarkTest.class.getResourceAsStream("/relevance-v2-shadow-second-snapshot.json")) {
+            var dataset=json.readValue(java.util.Objects.requireNonNull(benchmark),RelevanceBenchmark.Dataset.class);
+            for (var stream : List.of(java.util.Objects.requireNonNull(first),java.util.Objects.requireNonNull(second))) {
+                var snapshot=json.readTree(stream);
+                var labels=new java.util.HashMap<String,com.fasterxml.jackson.databind.JsonNode>();
+                snapshot.path("cases").forEach(item->labels.put(item.path("caseId").asText(),item.path("labels")));
+                int harmedPairs=0;
+                for (var sample:dataset.cases()) {
+                    var all=sample.documents().stream().map(RelevanceBenchmark.Document::id).toList();
+                    var retained=all.stream().filter(id->!"IRRELEVANT".equals(
+                            labels.get(sample.id()).path(id).asText())).toList();
+                    var result=RelevanceBenchmark.assessScreening(sample,all,retained);
+                    harmedPairs+=result.harmedUncertainPairs();
+                }
+                assertThat(harmedPairs).isGreaterThanOrEqualTo(4);
+            }
+        }
+    }
     @Test
     void repeatedShadowConsensusStillFailsTheUncertainEvidenceGate() throws Exception {
         var json = new com.fasterxml.jackson.databind.ObjectMapper();

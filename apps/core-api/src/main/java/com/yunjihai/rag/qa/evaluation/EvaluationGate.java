@@ -3,7 +3,7 @@ package com.yunjihai.rag.qa.evaluation;
 import java.util.*;
 
 public final class EvaluationGate {
-    public enum Failure { LEAKAGE,CITATION_VALIDITY,RECALL_AT_10,CLAIM_SUPPORT,CLAIM_REVIEW_COVERAGE,CORRECT_REFUSAL,DATASET_PROVENANCE,REFUSAL_DIAGNOSTICS_INCOMPLETE }
+    public enum Failure { LEAKAGE,CITATION_VALIDITY,RECALL_AT_10,CLAIM_SUPPORT,CLAIM_REVIEW_COVERAGE,QUESTION_RELEVANCE,CORRECT_REFUSAL,DATASET_PROVENANCE,REFUSAL_DIAGNOSTICS_INCOMPLETE }
     public record Assessment(boolean passed,List<Failure> failures) {
         public Assessment { failures=List.copyOf(Objects.requireNonNull(failures)); }
     }
@@ -17,6 +17,7 @@ public final class EvaluationGate {
         if(metrics.claimSupport()<0.90d)failures.add(Failure.CLAIM_SUPPORT);
         if(metrics.claimReviewCoverage()<1d||metrics.supportedClaimCount()>metrics.reviewedClaimCount())
             failures.add(Failure.CLAIM_REVIEW_COVERAGE);
+        if(metrics.irrelevantClaimCount()>0)failures.add(Failure.QUESTION_RELEVANCE);
         if(metrics.correctRefusalRate()<1d)failures.add(Failure.CORRECT_REFUSAL);
         return new Assessment(failures.isEmpty(),failures);
     }

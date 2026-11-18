@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.domain.*;
+import com.yunjihai.rag.retrieval.domain.Evidence;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -130,6 +131,35 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
     }
 
     @Override
+    public boolean saveConflictScreening(UUID requestId, long expectedRevision, List<Evidence> candidates) {
+        Objects.requireNonNull(requestId);
+        var items = List.copyOf(candidates);
+        if (items.isEmpty() || items.size() > 128) return false;
+        try {
+            return Boolean.TRUE.equals(transactions.execute(transaction -> {
+                var state = jdbc.sql("SELECT status,revision FROM qa_request WHERE id=:id FOR UPDATE")
+                        .param("id", requestId).query((rs, row) ->
+                                rs.getString("status").equals("SANITIZING") && rs.getLong("revision") == expectedRevision)
+                        .optional();
+                if (state.isEmpty() || !state.orElseThrow()) return false;
+                if (jdbc.sql("SELECT count(*) FROM qa_conflict_screening_snapshot WHERE request_id=:id")
+                        .param("id", requestId).query(Long.class).single() != 0) return false;
+                for (Evidence item : items) {
+                    jdbc.sql("""
+                            INSERT INTO qa_conflict_screening_snapshot(request_id,space_id,document_id,version_id,node_id)
+                            VALUES (:request,:space,:document,:version,:node) ON CONFLICT DO NOTHING
+                            """).param("request", requestId).param("space", item.spaceId())
+                            .param("document", item.documentId()).param("version", item.versionId())
+                            .param("node", item.nodeId()).update();
+                }
+                return true;
+            }));
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
+    @Override
     public Optional<RequestState> complete(
             UUID requestId, long expectedRevision, QaOutcome outcome, Instant at) {
         Objects.requireNonNull(outcome); Objects.requireNonNull(at);
@@ -190,8 +220,9 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
             return transactions.execute(transaction -> {
                 lockActorAndSpaces(requestId);
                 List<UUID> documents = jdbc.sql("""
-                        SELECT DISTINCT document_id FROM qa_evidence_snapshot
-                        WHERE request_id=:requestId ORDER BY document_id
+                        SELECT document_id FROM qa_evidence_snapshot WHERE request_id=:requestId
+                        UNION SELECT document_id FROM qa_conflict_screening_snapshot WHERE request_id=:requestId
+                        ORDER BY document_id
                         """).param("requestId", requestId).query(UUID.class).list();
                 return withDocumentLocks(documents, 0, () -> {
                     if (!authorizationCheck.getAsBoolean()) {
@@ -213,8 +244,8 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
                 """).param("requestId", requestId).query(UUID.class).single();
         jdbc.sql("""
                 SELECT space.id FROM knowledge_space space
-                WHERE space.id IN (SELECT DISTINCT snapshot.space_id FROM qa_evidence_snapshot snapshot
-                                   WHERE snapshot.request_id=:requestId)
+                WHERE space.id IN (SELECT space_id FROM qa_evidence_snapshot WHERE request_id=:requestId
+                                   UNION SELECT space_id FROM qa_conflict_screening_snapshot WHERE request_id=:requestId)
                 ORDER BY space.id FOR SHARE
                 """).param("requestId", requestId).query(UUID.class).list();
     }
@@ -223,6 +254,27 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
         if (index == documents.size()) return action.get();
         return documentLock.withDocumentLock(documents.get(index),
                 () -> withDocumentLocks(documents, index + 1, action));
+    }
+
+    @Override
+    public Optional<QaOutcome> findAuthorized(UUID requestId, UUID actorId, BooleanSupplier authorizationCheck) {
+        Objects.requireNonNull(authorizationCheck);
+        try {
+            return transactions.execute(transaction -> {
+                var initial = find(requestId, actorId);
+                if (initial.isEmpty() || !(initial.orElseThrow() instanceof QaOutcome.Answered)) return initial;
+                lockActorAndSpaces(requestId);
+                List<UUID> documents = jdbc.sql("""
+                        SELECT document_id FROM qa_evidence_snapshot WHERE request_id=:requestId
+                        UNION SELECT document_id FROM qa_conflict_screening_snapshot WHERE request_id=:requestId
+                        ORDER BY document_id
+                        """).param("requestId", requestId).query(UUID.class).list();
+                return withDocumentLocks(documents, 0, () ->
+                        authorizationCheck.getAsBoolean() ? find(requestId, actorId) : Optional.empty());
+            });
+        } catch (DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
     }
 
     @Override

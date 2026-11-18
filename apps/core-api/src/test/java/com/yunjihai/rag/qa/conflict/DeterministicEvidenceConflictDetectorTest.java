@@ -195,6 +195,65 @@ class DeterministicEvidenceConflictDetectorTest {
     }
 
     @Test
+    void reportsEveryConflictingPairWithoutExposingTheirContents() {
+        var first=evidence(1,"星河项目预算：100万元。该方案已批准。");
+        var second=evidence(2,"星河项目预算：120万元。该方案未批准。");
+        var third=evidence(3,"星河项目预算：130万元。");
+        var findings=detector.findConflictingPairs(List.of(first,second,third));
+        assertThat(findings).extracting(f->f.kind()).contains(
+                EvidenceConflictDetector.ConflictKind.APPROVAL, EvidenceConflictDetector.ConflictKind.TYPED_FACT);
+        assertThat(findings).anySatisfy(f->{
+            assertThat(f.firstEvidenceId()).isEqualTo(first.evidenceId());
+            assertThat(f.secondEvidenceId()).isEqualTo(second.evidenceId());
+            assertThat(f.kind()).isEqualTo(EvidenceConflictDetector.ConflictKind.APPROVAL);
+        });
+        assertThat(findings).anySatisfy(f->{
+            assertThat(f.firstEvidenceId()).isEqualTo(first.evidenceId());
+            assertThat(f.secondEvidenceId()).isEqualTo(third.evidenceId());
+            assertThat(f.kind()).isEqualTo(EvidenceConflictDetector.ConflictKind.TYPED_FACT);
+        });
+        assertThat(findings.toString()).doesNotContain("星河项目","100万元","120万元");
+    }
+    @Test
+    void pairDiagnosticsDoNotHideLaterUninterpretableTableUnits() {
+        var detector=new DeterministicEvidenceConflictDetector(item -> budgetCells("星河项目",
+                item.evidenceId().equals(id(3)) ? "金额（天）" : "金额（万元）",
+                item.evidenceId().equals(id(1)) ? "100" : "120"));
+        assertThatThrownBy(() -> detector.findConflictingPairs(
+                List.of(tableEvidence(1),tableEvidence(2),tableEvidence(3))))
+                .isInstanceOf(IllegalStateException.class).hasMessage("AMBIGUOUS_TABLE_UNITS");
+    }
+
+    @Test
+    void pairDiagnosticsFailClosedWhenCandidateSetExceedsTheBound() {
+        var items=java.util.stream.IntStream.range(0,129).mapToObj(i->evidence(i+1,"内容")).toList();
+        assertThatThrownBy(() -> detector.findConflictingPairs(items))
+                .isInstanceOf(IllegalStateException.class).hasMessage("CONFLICT_SCREENING_LIMIT_EXCEEDED");
+    }
+    @Test
+    void pairDiagnosticsRemainBoundedForThirtyDenseCandidates() {
+        var items=java.util.stream.IntStream.range(0,30).mapToObj(index -> {
+            String text=java.util.stream.IntStream.range(0,20)
+                    .mapToObj(fact -> "指标"+index+"项"+fact+"为1天；")
+                    .collect(java.util.stream.Collectors.joining());
+            return evidence(index+1,text);
+        }).toList();
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(5),
+                () -> assertThat(detector.findConflictingPairs(items)).isEmpty());
+    }
+    @Test
+    void refusesBackupRetentionConflictWhenOneSourceDoesNotNameTheProject() {
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"备份制度规定星河项目备份保留30天。"),
+                evidence(2,"备份保留90天，未注明项目。")))).isTrue();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"星河项目备份保留期限为30日。"),
+                evidence(2,"备份保留90天，未注明项目。")))).isTrue();
+        assertThat(detector.hasConflict(List.of(
+                evidence(1,"星河项目备份保留期限为30日。"),
+                evidence(2,"备份保留30天，未注明项目。")))).isFalse();
+    }
+    @Test
     void backupRetentionKeepsEquivalentUnitsAndDifferentEnvironmentsSeparate() {
         assertThat(detector.hasConflict(List.of(
                 evidence(1, "北辰平台生产环境备份保留30天。"),

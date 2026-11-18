@@ -27,7 +27,7 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
                     + "(?:设置为|设为|定为|[:：]|(?<!设置)(?<!设)(?<!定)为|是)"
                     + "\\s*([^\\n。；;，,]{1,40})");
     private static final Pattern BACKUP_RETENTION = Pattern.compile(
-            "([\\p{IsHan}A-Za-z0-9_（）()·\\-/ ]{2,40}备份保留)\\s*"
+            "([\\p{IsHan}A-Za-z0-9_（）()·\\-/ ]{0,40}备份保留)(?:期限|时长)?\\s*(?:为|是|[:：])?\\s*"
                     + "(\\d+(?:\\.\\d+)?\\s*(?:个月|月|年|天|日))");
     private static final Pattern DATE=Pattern.compile(
             "^(\\d{4})\\s*(?:年|[-/.])\\s*(\\d{1,2})\\s*(?:月|[-/.])\\s*(\\d{1,2})\\s*日?");
@@ -79,6 +79,73 @@ public final class DeterministicEvidenceConflictDetector implements EvidenceConf
         return ConflictKind.NONE;
     }
 
+    /** Internal diagnostic only. Contains opaque evidence identifiers and fixed categories, never facts or values. */
+    public record ConflictPair(UUID firstEvidenceId, UUID secondEvidenceId, ConflictKind kind) {
+        public ConflictPair {
+            Objects.requireNonNull(firstEvidenceId);
+            Objects.requireNonNull(secondEvidenceId);
+            Objects.requireNonNull(kind);
+        }
+    }
+
+    /**
+     * Enumerates all conflicting evidence pairs without changing the strict runtime decision.
+     * A bound or table decoding failure is propagated to ensure callers cannot treat it as no conflict.
+     */
+    public List<ConflictPair> findConflictingPairs(List<Evidence> evidence) {
+        var items=List.copyOf(evidence);
+        if(items.size()>128)throw new IllegalStateException("CONFLICT_SCREENING_LIMIT_EXCEEDED");
+        var allFacts=new ArrayList<List<Fact>>();
+        var allTableFacts=new ArrayList<List<TableFact>>();
+        int factCount=0,tableFactCount=0;
+        long tableCount=items.stream().filter(item->item.locator() instanceof TableLocator).count();
+        for(var item:items) {
+            var facts=extract(item);
+            factCount+=facts.size();
+            requireBounded(factCount);
+            allFacts.add(facts);
+            var tableFacts=tableCount>=2 && item.locator() instanceof TableLocator
+                    ?tableFacts(item,tableSource.load(item)):List.<TableFact>of();
+            tableFactCount+=tableFacts.size();
+            requireBounded(tableFactCount);
+            allTableFacts.add(tableFacts);
+        }
+        // Validate the aggregate approval fact limit before accepting any diagnostic result.
+        hasApprovalConflict(items);
+        var result=new ArrayList<ConflictPair>();
+        for(int left=0;left<items.size();left++) {
+            for(int right=left+1;right<items.size();right++) {
+                var first=items.get(left);
+                var second=items.get(right);
+                var pair=List.of(first,second);
+                if(hasIdentityConflict(pair))result.add(new ConflictPair(first.evidenceId(),second.evidenceId(),ConflictKind.IDENTITY));
+                if(hasApprovalConflict(pair))result.add(new ConflictPair(first.evidenceId(),second.evidenceId(),ConflictKind.APPROVAL));
+                if(tableFactsConflict(allTableFacts.get(left),allTableFacts.get(right)))
+                    result.add(new ConflictPair(first.evidenceId(),second.evidenceId(),ConflictKind.STRUCTURED_TABLE));
+                if(typedFactsConflict(allFacts.get(left),allFacts.get(right)))
+                    result.add(new ConflictPair(first.evidenceId(),second.evidenceId(),ConflictKind.TYPED_FACT));
+            }
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean typedFactsConflict(List<Fact> first,List<Fact> second) {
+        for(var left:first) for(var right:second)
+            if(!left.evidenceId().equals(right.evidenceId())&&keysMatch(left.key(),right.key())
+                    &&!left.value().equals(right.value()))return true;
+        return false;
+    }
+
+    private static boolean tableFactsConflict(List<TableFact> first,List<TableFact> second) {
+        for(var left:first) for(var right:second) {
+            if(left.evidenceId().equals(right.evidenceId())||!left.key().equals(right.key()))continue;
+            if(!left.value().substring(0,left.value().indexOf(':'))
+                    .equals(right.value().substring(0,right.value().indexOf(':'))))
+                throw new IllegalStateException("AMBIGUOUS_TABLE_UNITS");
+            if(!left.value().equals(right.value()))return true;
+        }
+        return false;
+    }
     private boolean hasTableConflict(List<Evidence> items) {
         var tables = items.stream().filter(item -> item.locator() instanceof TableLocator).toList();
         if (tables.size() < 2) return false;

@@ -47,7 +47,7 @@ public class QaController {
         if(request==null)throw new IllegalArgumentException("request body is required");
         QaQuestion.normalize(request.question());
         String hash=IdempotencyService.sha256(json.writeValueAsBytes(request));
-        return idempotency.execute(
+        var response = idempotency.execute(
                 new IdempotencyScope(actorId,"qa.question.ask",idempotencyKey),
                 hash,QaDtos.QuestionResponse.class,()->{
                     rateLimiter.acquire(actorId);
@@ -58,6 +58,11 @@ public class QaController {
                             ()->new IllegalStateException("QA_TERMINAL_RESULT_NOT_PERSISTED"));
                     return QaDtos.QuestionResponse.from(outcome,completedAt);
                 });
+        if (response.status() == com.yunjihai.rag.qa.domain.QaStatus.ANSWERED) {
+            var current = qa.find(response.requestId(), actorId).orElseThrow(AccessDeniedAsNotFoundException::new);
+            return QaDtos.QuestionResponse.from(current, response.completedAt());
+        }
+        return response;
     }
 
     @GetMapping("/{requestId}")

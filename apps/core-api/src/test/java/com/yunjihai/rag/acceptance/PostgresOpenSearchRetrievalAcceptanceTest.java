@@ -97,6 +97,26 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
         }
     }
 
+    @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_RELEVANCE_V3_DIAGNOSTIC", matches = "true")
+    void measuresAmbiguousConflictPairsThroughTrustedRetrieval() throws Exception {
+        try (var input=RelevanceBenchmark.class.getResourceAsStream("/relevance-benchmark-v3.json")) {
+            if(input==null)throw new IllegalStateException("ambiguous relevance benchmark missing");
+            var dataset=new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(input,RelevanceBenchmark.Dataset.class);
+            measureRelevanceThroughTrustedRetrieval(dataset);
+        }
+    }
+    @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_RELEVANCE_V4_DIAGNOSTIC", matches = "true")
+    void measuresClearAndAmbiguousConflictPairsThroughTrustedRetrieval() throws Exception {
+        try (var input=RelevanceBenchmark.class.getResourceAsStream("/relevance-benchmark-v4.json")) {
+            if (input==null) throw new IllegalStateException("relevance benchmark v4 missing");
+            measureRelevanceThroughTrustedRetrieval(new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readValue(input,RelevanceBenchmark.Dataset.class));
+        }
+    }
+
     private void measureRelevanceThroughTrustedRetrieval(RelevanceBenchmark.Dataset dataset) throws Exception {
         try (var context = startContext(Map.of(
                 "rag.test.counting-embedding", "false",
@@ -143,6 +163,8 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             int relevantPairsTotal = 0, relevantPairsComplete = 0, relevantPairsPartial = 0;
             int irrelevantPairsComplete = 0, uncertainPairsComplete = 0, uncertainPairsPartial = 0, belowMinimum = 0;
             int qaConflictRefusals = 0, qaAnswered = 0, cautionCasesAnswered = 0, answersUsingIrrelevant = 0;
+            int pairRelevant=0, pairIrrelevant=0, pairUncertain=0, pairUnlabeled=0;
+            int shadowUnrelated=0, shadowUnsafe=0, shadowPotentialCases=0;
             for (var scenario : scenarios) {
                 var pack = retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(), scenario.user(),
                         Set.of(scenario.space()), scenario.sample().question(), Map.of(), 10));
@@ -162,6 +184,59 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
                 if (pack.evidence().size() < com.yunjihai.rag.qa.QaPolicy.defaults().minEvidenceCount()) belowMinimum++;
                 boolean selectedConflictDetected = detector.hasConflict(pack.evidence());
                 boolean conflictDetected = detector.hasConflict(pack.conflictScreeningEvidence());
+                var findings=detector.findConflictingPairs(pack.conflictScreeningEvidence());
+                assertThat(findings.isEmpty()).isEqualTo(!conflictDetected);
+                var evidenceLabels=pack.conflictScreeningEvidence().stream().collect(java.util.stream.Collectors.toMap(
+                        e->e.evidenceId(),e->scenario.ids().get(e.documentId())));
+                var detectedPairs=findings.stream().map(f->Set.of(
+                        evidenceLabels.get(f.firstEvidenceId()),evidenceLabels.get(f.secondEvidenceId())))
+                        .collect(java.util.stream.Collectors.toSet());
+                var evidenceById=pack.conflictScreeningEvidence().stream().collect(java.util.stream.Collectors.toMap(
+                        e->e.evidenceId(), e->e));
+                int caseShadowUnrelated=0;
+                for (var finding : findings) {
+                    if (QuestionScopedConflictShadow.assess(scenario.sample().question(),finding,evidenceById)
+                            == QuestionScopedConflictShadow.Scope.EXPLICITLY_UNRELATED) {
+                        caseShadowUnrelated++;
+                        shadowUnrelated++;
+                        var labels=Set.of(evidenceLabels.get(finding.firstEvidenceId()),
+                                evidenceLabels.get(finding.secondEvidenceId()));
+                        boolean annotatedUnrelated=scenario.sample().conflicts().stream().anyMatch(pair ->
+                                labels.equals(Set.of(pair.first(),pair.second()))
+                                        && pair.scope()==RelevanceBenchmark.Judgment.IRRELEVANT);
+                        if (!annotatedUnrelated) shadowUnsafe++;
+                    }
+                }
+                if (scenario.sample().id().equals("same-project-other-topic-clear")) {
+                    assertThat(caseShadowUnrelated).isPositive().isEqualTo(findings.size());
+                }
+                if ((dataset.version().equals("synthetic-relevance-v3") || dataset.version().equals("synthetic-relevance-v4"))
+                        && scenario.sample().id().equals("same-project-other-topic")) {
+                    assertThat(caseShadowUnrelated).isPositive().isLessThan(findings.size());
+                }
+                if (!findings.isEmpty() && caseShadowUnrelated==findings.size()) shadowPotentialCases++;
+                System.out.println("CONFLICT_SHADOW case="+scenario.sample().id()
+                        +" unrelated="+caseShadowUnrelated+" unknown="+(findings.size()-caseShadowUnrelated));
+                for (var detected : detectedPairs) {
+                    var annotation=scenario.sample().conflicts().stream()
+                            .filter(pair->detected.equals(Set.of(pair.first(),pair.second())))
+                            .findFirst().orElse(null);
+                    if (annotation==null) {
+                        pairUnlabeled++;
+                        System.out.println("CONFLICT_UNLABELED case="+scenario.sample().id()+" pair="+detected);
+                    }
+                    else switch (annotation.scope()) {
+                        case RELEVANT -> pairRelevant++;
+                        case IRRELEVANT -> pairIrrelevant++;
+                        case UNCERTAIN -> pairUncertain++;
+                    }
+                }
+                for (var annotated : scenario.sample().conflicts()) {
+                    if (annotated.scope()!=RelevanceBenchmark.Judgment.IRRELEVANT) {
+                        assertThat(detectedPairs).as("标注的相关或不确定冲突对必须被实际识别: "+scenario.sample().id())
+                                .contains(Set.of(annotated.first(),annotated.second()));
+                    }
+                }
                 context.getBean(com.yunjihai.rag.access.role.RoleAssignmentStore.class).grantSpaceRole(
                         scenario.space(), scenario.user(), com.yunjihai.rag.access.role.SpaceRole.SPACE_ADMIN,
                         scenario.user(), Instant.now());
@@ -220,6 +295,12 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             assertThat(afterRevocation.stats().reauthorizedCount()).isZero();
             assertThat(afterRevocation.evidence()).isEmpty();
             assertThat(afterRevocation.conflictScreeningEvidence()).isEmpty();
+            assertThat(shadowUnsafe).as("影子规则不能忽略未标注、相关或不确定的冲突").isZero();
+            System.out.println("CONFLICT_SHADOW_SUMMARY version="+dataset.version()
+                    +" unrelated="+shadowUnrelated+" unsafe="+shadowUnsafe+" potentialCases="+shadowPotentialCases);
+            System.out.println("CONFLICT_PAIR_SCOPE version="+dataset.version()
+                    +" relevant="+pairRelevant+" irrelevant="+pairIrrelevant
+                    +" uncertain="+pairUncertain+" unlabeled="+pairUnlabeled);
             System.out.println("RELEVANCE_BASELINE version=" + dataset.version() + " cases=" + scenarios.size()
                     + " relevant=" + relevantRetrieved + "/" + relevantTotal
                     + " irrelevantRetrieved=" + irrelevantRetrieved + " uncertainRetrieved=" + uncertainRetrieved
@@ -328,6 +409,86 @@ class PostgresOpenSearchRetrievalAcceptanceTest {
             assertThat(RELEVANCE_MODEL_CALLS).hasValue(0);
         }
     }
+    @Test
+    @EnabledIfEnvironmentVariable(named = "RAG_TABLE_SHADOW_DIAGNOSTIC", matches = "true")
+    void checksBudgetTableShadowWithRealAuthorizedRetrieval() throws Exception {
+        try (var context=startContext(Map.of("rag.test.counting-embedding","false",
+                "rag.test.relevance-chat","true","rag.ai.enabled","false",
+                "rag.qa.hmac-key","synthetic-test-only-hmac-key-32-bytes"))) {
+            RELEVANCE_MODEL_CALLS.set(0);
+            var jdbc=context.getBean(JdbcClient.class);
+            UUID user=UUID.randomUUID(), space=UUID.randomUUID(), first=UUID.randomUUID(), version=UUID.randomUUID();
+            seedPublishedDocument(jdbc,user,space,first,version,UUID.randomUUID());
+            jdbc.sql("UPDATE canonical_node SET body_text=:text WHERE version_id=:version")
+                    .param("text","星河项目备份保留30天。").param("version",version).update();
+            var documents=new java.util.ArrayList<UUID>(); documents.add(first);
+            var json=new com.fasterxml.jackson.databind.ObjectMapper();
+            for (String amount : java.util.List.of("100","120")) {
+                UUID document=UUID.randomUUID(), tableVersion=UUID.randomUUID();
+                seedAdditionalPublishedDocument(jdbc,user,space,document,tableVersion,"星河项目备份相关的研发预算表 " + amount);
+                var cells=java.util.List.of(
+                        new com.yunjihai.rag.ingestion.CanonicalTableCell(0,0,1,1,"项目"),
+                        new com.yunjihai.rag.ingestion.CanonicalTableCell(0,1,1,1,"预算类别"),
+                        new com.yunjihai.rag.ingestion.CanonicalTableCell(0,2,1,1,"金额（万元）"),
+                        new com.yunjihai.rag.ingestion.CanonicalTableCell(1,0,1,1,"星河项目"),
+                        new com.yunjihai.rag.ingestion.CanonicalTableCell(1,1,1,1,"研发预算"),
+                        new com.yunjihai.rag.ingestion.CanonicalTableCell(1,2,1,1,amount),
+                        new com.yunjihai.rag.ingestion.CanonicalTableCell(0,3,1,1,"审批日期及版本"),
+                        new com.yunjihai.rag.ingestion.CanonicalTableCell(1,3,1,1,"未注明"));
+                jdbc.sql("UPDATE canonical_node SET kind='TABLE', table_cells=CAST(:cells AS jsonb) WHERE version_id=:version")
+                        .param("cells",json.writeValueAsString(cells)).param("version",tableVersion).update();
+                documents.add(document);
+            }
+            for (int i=0;i<5;i++) {
+                UUID document=UUID.randomUUID();
+                seedAdditionalPublishedDocument(jdbc,user,space,document,UUID.randomUUID(),"星河项目备份管理记录编号 " + i);
+                documents.add(document);
+            }
+            var tx=new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+            var publisher=context.getBean(ProjectionChangePublisher.class);
+            for (var document:documents) tx.executeWithoutResult(status -> publisher.withDocumentChangeLock(document,()->{
+                publisher.documentAclChanged(space,document,Instant.now()); return null;
+            }));
+            assertThat(context.getBean(ProjectionWorker.class).runOnce("table-shadow-worker",OpenSearchIndexManager.WRITE_ALIAS))
+                    .isEqualTo(documents.size());
+            context.getBean(com.yunjihai.rag.access.role.RoleAssignmentStore.class).grantSpaceRole(space,user,
+                    com.yunjihai.rag.access.role.SpaceRole.SPACE_ADMIN,user,Instant.now());
+            String question="星河项目的备份保留多久？";
+            var pack=context.getBean(TrustedRetrievalService.class).retrieve(new RetrievalQuery(
+                    UUID.randomUUID(),user,Set.of(space),question,Map.of(),10));
+            var source=new com.yunjihai.rag.infrastructure.postgres.JdbcTableEvidenceSource(jdbc);
+            var detector=new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector(source);
+            var byId=pack.conflictScreeningEvidence().stream().collect(java.util.stream.Collectors.toMap(
+                    e->e.evidenceId(),e->e));
+            var findings=detector.findConflictingPairs(pack.conflictScreeningEvidence());
+            assertThat(findings).anySatisfy(pair -> {
+                assertThat(pair.kind()).isEqualTo(com.yunjihai.rag.qa.conflict.EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
+                assertThat(QuestionScopedConflictShadow.assess(question,pair,byId,source))
+                        .isEqualTo(QuestionScopedConflictShadow.Scope.EXPLICITLY_UNRELATED);
+            });
+            var outcome=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class).ask(
+                    new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),user,question));
+            assertThat(outcome).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                    refused -> assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            assertThat(RELEVANCE_MODEL_CALLS).hasValue(0);
+            String drillQuestion="星河项目多久组织一次恢复演练？";
+            var drillPack=context.getBean(TrustedRetrievalService.class).retrieve(new RetrievalQuery(
+                    UUID.randomUUID(),user,Set.of(space),drillQuestion,Map.of(),10));
+            var drillById=drillPack.conflictScreeningEvidence().stream().collect(java.util.stream.Collectors.toMap(
+                    e->e.evidenceId(),e->e));
+            assertThat(detector.findConflictingPairs(drillPack.conflictScreeningEvidence())).anySatisfy(pair -> {
+                assertThat(pair.kind()).isEqualTo(com.yunjihai.rag.qa.conflict.EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
+                assertThat(QuestionScopedConflictShadow.assess(drillQuestion,pair,drillById,source))
+                        .isEqualTo(QuestionScopedConflictShadow.Scope.EXPLICITLY_UNRELATED);
+            });
+            var drillOutcome=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class).ask(
+                    new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),user,drillQuestion));
+            assertThat(drillOutcome).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                    refused -> assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            assertThat(RELEVANCE_MODEL_CALLS).hasValue(0);
+        }
+    }
+
     @Test
     @EnabledIfEnvironmentVariable(named = "RAG_GOLDEN_DIAGNOSTIC", matches = "true")
     void strictLexicalAndCanMissBothSidesOfARealConflict() throws Exception {

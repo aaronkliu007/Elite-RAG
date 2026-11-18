@@ -20,7 +20,14 @@ public interface ModelCallAuditPort {
             int sanitizationHitCount,
             int retryCount,
             String resultCode,
-            Instant occurredAt) {
+            Instant occurredAt,
+            String qaPolicyVersion) {
+        public ModelCallAudit(UUID requestId,String provider,String endpointIdentifier,String model,String modelConfigVersion,
+                String requestDigest,String responseDigest,ModelUsage usage,int sanitizationHitCount,int retryCount,
+                String resultCode,Instant occurredAt) {
+            this(requestId,provider,endpointIdentifier,model,modelConfigVersion,requestDigest,responseDigest,usage,
+                    sanitizationHitCount,retryCount,resultCode,occurredAt,"legacy-unknown");
+        }
         public ModelCallAudit {
             Objects.requireNonNull(requestId, "requestId must not be null");
             requireIdentifier(provider, "provider");
@@ -38,6 +45,8 @@ public interface ModelCallAuditPort {
             }
             requireText(resultCode, "resultCode");
             Objects.requireNonNull(occurredAt, "occurredAt must not be null");
+            if(qaPolicyVersion==null || !qaPolicyVersion.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}"))
+                throw new IllegalArgumentException("qaPolicyVersion is invalid");
         }
 
         private static void requireText(String value, String field) {

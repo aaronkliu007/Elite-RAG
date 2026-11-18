@@ -8,6 +8,7 @@ import com.yunjihai.rag.qa.domain.QaStatus;
 import com.yunjihai.rag.qa.domain.RefusalReason;
 import com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector;
 import com.yunjihai.rag.qa.conflict.EvidenceConflictDetector;
+import com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.model.ModelGatewayException;
 import com.yunjihai.rag.qa.model.ModelCallDescriptor;
@@ -179,6 +180,185 @@ class GroundedQaServiceTest {
         assertThat(harness.service().ask(command("方案是否批准？")))
                 .isEqualTo(new QaOutcome.Refused(id(1), RefusalReason.CONFLICTING_EVIDENCE, false));
         assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void allowsOnlyFullyResolvedConflictsAndRequiresQuestionRelevantAnswer() {
+        var harness=new Harness();
+        harness.pack=typedConflictPack(2);
+        harness.answer=answer(id(100),"证据　正文 0");
+        var policy=new RecordingScopedPolicy();
+        policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT;
+        harness.scopedPolicy=policy;
+        assertThat(harness.service().ask(command("星河备份多久？"))).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(policy.screeningCount).isEqualTo(10);
+        assertThat(harness.savedScreeningCount).isEqualTo(10);
+        assertThat(policy.classifications).isEqualTo(1);
+        assertThat(policy.answerChecks).isEqualTo(1);
+        assertThat(harness.modelCalls).hasValue(1);
+        assertThat(harness.prompt.get().policyVersion()).isEqualTo("qa-scoped-test-v1");
+        assertThat(harness.audits).singleElement().satisfies(audit->
+                assertThat(audit.qaPolicyVersion()).isEqualTo("qa-scoped-test-v1"));
+
+        var rejected=new Harness(); rejected.pack=typedConflictPack(2); rejected.answer=answer(id(100),"证据　正文 0");
+        var irrelevant=new RecordingScopedPolicy(); irrelevant.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        irrelevant.answer=QuestionScopedConflictPolicy.AnswerRelevance.IRRELEVANT; rejected.scopedPolicy=irrelevant;
+        assertThat(rejected.service().ask(command("星河备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.UNSUPPORTED_CLAIM,false));
+        assertThat(rejected.modelCalls).hasValue(1);
+    }
+
+    @Test
+    void unknownOrFailedScopeAndAdditionalUnresolvedConflictFailClosed() {
+        for(var mode:List.of(0,1,2)) {
+            var harness=new Harness(); harness.pack=typedConflictPack(3);
+            var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+            if(mode==0)policy.scope=QuestionScopedConflictPolicy.Scope.UNKNOWN;
+            if(mode==1)policy.throwScope=true;
+            if(mode==2)policy.unknownAfterFirst=true;
+            harness.scopedPolicy=policy;
+            assertThat(harness.service().ask(command("星河备份多久？")))
+                    .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+            assertThat(harness.modelCalls).hasValue(0);
+        }
+    }
+
+    @Test
+    void scopedAnswerVerifierFailureAndLateRevocationNeverReturnAnAnswer() {
+        for(boolean revoked:List.of(false,true)) {
+            var harness=new Harness(); harness.pack=typedConflictPack(2);
+            harness.answer=answer(id(100),"证据　正文 0");
+            var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+            policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT;
+            policy.throwAnswer=!revoked; harness.finalAuthorization=!revoked; harness.scopedPolicy=policy;
+            assertThat(harness.service().ask(command("星河备份多久？")))
+                    .isEqualTo(new QaOutcome.Refused(id(1),revoked ? RefusalReason.NO_AUTHORIZED_SPACE : RefusalReason.UNSUPPORTED_CLAIM,false));
+            assertThat(harness.modelCalls).hasValue(1);
+        }
+    }
+
+    @Test
+    void unsupportedDetectorAndEvidenceIdentityConflictCannotBeResolvedByPolicy() {
+        var unknownDetector=new Harness(); unknownDetector.pack=typedConflictPack(2);
+        unknownDetector.conflictDetector=ignored->true;
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; unknownDetector.scopedPolicy=policy;
+        assertThat(unknownDetector.service().ask(command("问题")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+        assertThat(unknownDetector.modelCalls).hasValue(0);
+        var identity=new Harness(); var items=new ArrayList<>(evidence(8,0.9));
+        var first=items.getFirst(); items.set(1,new Evidence(first.spaceId(),id(999),first.documentId(),first.versionId(),
+                first.nodeId(),first.title(),"不同内容",first.score(),first.locator()));
+        identity.pack=pack(items); identity.scopedPolicy=policy;
+        assertThat(identity.service().ask(command("问题")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+        assertThat(identity.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void scopedPolicyCannotOverrideApprovalConflictOrMissingExactCitation() {
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT;
+        var approval=new Harness(); var selected=evidence(8,0.9); var screening=new ArrayList<>(selected);
+        screening.add(new Evidence(id(10),id(900),id(901),id(902),"approval-1","审批","该方案已经批准。",0.1,
+                new MarkdownLocator(List.of("审批"),"approval-1")));
+        screening.add(new Evidence(id(10),id(903),id(904),id(905),"approval-2","审批","该方案未批准。",0.1,
+                new MarkdownLocator(List.of("审批"),"approval-2")));
+        approval.pack=new EvidencePack(id(1),selected,false,Set.of(),new RetrievalStats(10,0,10,10,8),NOW,screening);
+        approval.scopedPolicy=policy;
+        assertThat(approval.service().ask(command("备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+        assertThat(policy.classifications).isZero();
+        assertThat(approval.modelCalls).hasValue(0);
+
+        var noQuote=new Harness(); noQuote.pack=typedConflictPack(2); noQuote.scopedPolicy=policy;
+        noQuote.answer=answer(id(100),"证据以外的内容");
+        assertThat(noQuote.service().ask(command("备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.UNSUPPORTED_CLAIM,false));
+        assertThat(policy.answerChecks).isZero();
+    }
+
+    @Test
+    void scopedPolicyWithoutAValidVersionFailsClosedBeforeAnyModelCall() {
+        var harness=new Harness(); harness.pack=typedConflictPack(2);
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT;
+        policy.policyVersion="包含中文或空格"; harness.scopedPolicy=policy;
+        assertThat(harness.service().ask(command("星河备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void scopedPolicyCannotIgnorePossiblyTruncatedScreeningCandidates() {
+        var harness=new Harness(); var base=typedConflictPack(2);
+        var candidates=new ArrayList<>(base.conflictScreeningEvidence());
+        candidates.add(new Evidence(id(10),id(980),id(981),id(982),"long-node","长文",
+                "证".repeat(1200),0.1,new MarkdownLocator(List.of("长文"),"long-node")));
+        harness.pack=new EvidencePack(id(1),base.evidence(),false,Set.of(),new RetrievalStats(11,0,11,11,8),NOW,candidates);
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; harness.scopedPolicy=policy;
+        assertThat(harness.service().ask(command("星河备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void scopedPolicyCannotUseAQuoteThatOnlyMatchesAfterNormalization() {
+        var harness=new Harness(); var selected=new ArrayList<>(evidence(8,0.9));
+        var first=selected.getFirst();
+        selected.set(0,new Evidence(first.spaceId(),first.evidenceId(),first.documentId(),first.versionId(),
+                first.nodeId(),first.title(),"测试标识ＡＢＣ",first.score(),first.locator()));
+        var candidates=new ArrayList<>(selected);
+        candidates.addAll(typedConflictPack(2).conflictScreeningEvidence().subList(8,10));
+        harness.pack=new EvidencePack(id(1),selected,false,Set.of(),new RetrievalStats(10,0,10,10,8),NOW,candidates);
+        harness.answer=answer(id(100),"ABC");
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; harness.scopedPolicy=policy;
+        assertThat(harness.service().ask(command("星河备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.UNSUPPORTED_CLAIM,false));
+        assertThat(harness.modelCalls).hasValue(1);
+    }
+
+    @Test
+    void scopedConflictCannotProceedWhenFullScreeningSnapshotCannotBeSaved() {
+        var harness=new Harness(); harness.pack=typedConflictPack(2); harness.rejectScreeningSave=true;
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; harness.scopedPolicy=policy;
+        assertThat(harness.service().ask(command("星河备份多久？")))
+                .isEqualTo(new QaOutcome.Failed(id(1),"CONFLICT_SCOPE_PERSIST_FAILED",false));
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    private static EvidencePack typedConflictPack(int count) {
+        var selected=evidence(8,0.9);
+        var screening=new ArrayList<>(selected);
+        for(int i=0;i<count;i++)screening.add(new Evidence(id(10),id(900+i),id(910+i),id(920+i),"extra-"+i,
+                "预算", "星河项目研发预算为"+(100+i*20)+"万元。",0.1,
+                new MarkdownLocator(List.of("预算"),"extra-"+i)));
+        return new EvidencePack(id(1),selected,false,Set.of(),new RetrievalStats(8+count,0,8+count,8+count,8),NOW,screening);
+    }
+
+    private static final class RecordingScopedPolicy implements QuestionScopedConflictPolicy {
+        private Scope scope=Scope.UNKNOWN;
+        private AnswerRelevance answer=AnswerRelevance.UNKNOWN;
+        private boolean throwScope,throwAnswer,unknownAfterFirst;
+        private String policyVersion="test-v1";
+        private int classifications,answerChecks,screeningCount;
+        @Override public String version() { return policyVersion; }
+        @Override public Scope classify(com.yunjihai.rag.qa.domain.QaQuestion question,
+                DeterministicEvidenceConflictDetector.ConflictPair pair,List<Evidence> candidates) {
+            classifications++; screeningCount=candidates.size();
+            if(throwScope)throw new IllegalStateException("unavailable");
+            return unknownAfterFirst && classifications>1 ? Scope.UNKNOWN : scope;
+        }
+        @Override public AnswerRelevance verifyAnswer(com.yunjihai.rag.qa.domain.QaQuestion question,
+                CandidateAnswer candidate,com.yunjihai.rag.qa.domain.EvidenceBundle evidence) {
+            answerChecks++;
+            if(throwAnswer)throw new IllegalStateException("unavailable");
+            return answer;
+        }
     }
 
     @Test
@@ -535,12 +715,15 @@ class GroundedQaServiceTest {
         private boolean nullQuestionSanitization;
         private boolean auditFailure;
         private boolean rejectAnsweredCompletion;
+        private boolean rejectScreeningSave;
+        private int savedScreeningCount;
         private boolean finalAuthorization = true;
         private QaOutcome persistedOutcome;
         private QaMetrics metrics = QaMetrics.noop();
         private final com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry traces =
                 new com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry();
         private EvidenceConflictDetector conflictDetector = new DeterministicEvidenceConflictDetector();
+        private QuestionScopedConflictPolicy scopedPolicy=QuestionScopedConflictPolicy.strict();
         private final List<com.yunjihai.rag.retrieval.domain.RetrievalQuery> queries = new ArrayList<>();
         private final AtomicReference<com.yunjihai.rag.qa.model.GroundedAnswerPrompt> prompt =
                 new AtomicReference<>();
@@ -596,7 +779,7 @@ class GroundedQaServiceTest {
                     scope, retrieval, new FakePersistence(), audit, value -> "digest:" + value.length(),
                     sanitizer, chat, conflictDetector, new ExactQuoteCitationSupportVerifier(), QaPolicy.defaults(),
                     (requestId, actorId, at) -> finalAuthorization,
-                    Clock.fixed(NOW, ZoneOffset.UTC), metrics, traces);
+                    Clock.fixed(NOW, ZoneOffset.UTC), metrics, traces,scopedPolicy);
         }
 
         private final class FakePersistence implements QaPersistencePort {
@@ -630,6 +813,13 @@ class GroundedQaServiceTest {
                         state.revision() + 1, degraded);
                 states.add(state.status());
                 return Optional.of(state);
+            }
+
+            @Override
+            public boolean saveConflictScreening(UUID requestId,long expectedRevision,List<Evidence> candidates) {
+                if(rejectScreeningSave || state.revision()!=expectedRevision || state.status()!=QaStatus.SANITIZING)return false;
+                savedScreeningCount=candidates.size();
+                return true;
             }
 
             @Override

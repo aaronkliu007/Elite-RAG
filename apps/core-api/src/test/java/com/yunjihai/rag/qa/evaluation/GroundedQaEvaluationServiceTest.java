@@ -136,7 +136,7 @@ class GroundedQaEvaluationServiceTest {
         var base=dataset(actor,document,false);
         var cases=base.cases().stream().map(item->new EvaluationCase(item.id(),actor,item.question(),
                 item.expectedEvidence(),Set.of(),Set.of(),false,item.coverageTags(),Set.of(new EvaluationCase.ReviewedClaim(
-                        "受支持声明",Set.of(source),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED)),"f".repeat(64))).toList();
+                        "受支持声明",Set.of(source),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED,EvaluationCase.QuestionRelevance.RELEVANT)),"f".repeat(64))).toList();
         var dataset=new EvaluationDataset(base.id(),base.version(),base.promptVersion(),base.sanitizationVersion(),cases,true);
         var repository=new MemoryRepository(dataset,new EvaluationRepository.Observation(
                 Set.of(ref),Set.of(evidence),Set.of(),Set.of(),Map.of(evidence,source),"f".repeat(64)));
@@ -168,7 +168,7 @@ class GroundedQaEvaluationServiceTest {
             var verdict=index<45?EvaluationCase.ReviewVerdict.SUPPORTED:EvaluationCase.ReviewVerdict.UNSUPPORTED;
             cases.add(new EvaluationCase(item.id(),item.evaluationActorId(),item.question(),item.expectedEvidence(),
                     item.forbiddenDocumentIds(),item.forbiddenNodeIds(),item.shouldRefuse(),item.coverageTags(),
-                    Set.of(new EvaluationCase.ReviewedClaim("受支持声明",Set.of(source),"review-001",verdict)),"f".repeat(64)));
+                    Set.of(new EvaluationCase.ReviewedClaim("受支持声明",Set.of(source),"review-001",verdict,EvaluationCase.QuestionRelevance.RELEVANT)),"f".repeat(64)));
         }
         var dataset=new EvaluationDataset(base.id(),base.version(),base.promptVersion(),base.sanitizationVersion(),cases,true);
         var repository=new MemoryRepository(dataset,new EvaluationRepository.Observation(
@@ -192,7 +192,7 @@ class GroundedQaEvaluationServiceTest {
         var cases=base.cases().stream().map(item->new EvaluationCase(item.id(),actor,item.question(),
                 Set.of(new EvaluationCase.EvidenceRef(document,"node-1"),new EvaluationCase.EvidenceRef(document,"node-2")),
                 Set.of(),Set.of(),false,item.coverageTags(),Set.of(new EvaluationCase.ReviewedClaim(
-                        "受支持声明",Set.of(first,second),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED)),"f".repeat(64))).toList();
+                        "受支持声明",Set.of(first,second),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED,EvaluationCase.QuestionRelevance.RELEVANT)),"f".repeat(64))).toList();
         var dataset=new EvaluationDataset(base.id(),base.version(),base.promptVersion(),base.sanitizationVersion(),cases,true);
         var repository=new MemoryRepository(dataset,new EvaluationRepository.Observation(
                 Set.of(new EvaluationCase.EvidenceRef(document,"node-1")),Set.of(evidence),Set.of(),Set.of(),Map.of(evidence,first),"f".repeat(64)));
@@ -212,7 +212,7 @@ class GroundedQaEvaluationServiceTest {
         var reviewedCases=base.cases().stream().map(item->new EvaluationCase(item.id(),item.evaluationActorId(),
                 item.question(),item.expectedEvidence(),item.forbiddenDocumentIds(),item.forbiddenNodeIds(),
                 item.shouldRefuse(),item.coverageTags(),Set.of(new EvaluationCase.ReviewedClaim(
-                        "受支持声明",Set.of(reviewedRef),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED)),"f".repeat(64))).toList();
+                        "受支持声明",Set.of(reviewedRef),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED,EvaluationCase.QuestionRelevance.RELEVANT)),"f".repeat(64))).toList();
         var reviewed=new EvaluationDataset(base.id(),base.version(),base.promptVersion(),base.sanitizationVersion(),reviewedCases,true);
         var repository=new MemoryRepository(reviewed,new EvaluationRepository.Observation(
                 Set.of(ref),Set.of(evidence),Set.of(),Set.of(),Map.of(evidence,reviewedRef),"f".repeat(64)));
@@ -228,6 +228,55 @@ class GroundedQaEvaluationServiceTest {
     }
 
     @Test
+    void legacyEvidenceSupportReviewCannotProveAnswerRelevance() {
+        UUID actor=UUID.randomUUID(),document=UUID.randomUUID(),evidence=UUID.randomUUID(),version=UUID.randomUUID();
+        var ref=new EvaluationCase.EvidenceRef(document,"node-1");
+        var reviewedRef=new EvaluationCase.ReviewedEvidence(document,version,"node-1","a".repeat(64),"c".repeat(64),"e".repeat(64));
+        var base=dataset(actor,document,false);
+        var reviewedCases=base.cases().stream().map(item->new EvaluationCase(item.id(),item.evaluationActorId(),
+                item.question(),item.expectedEvidence(),item.forbiddenDocumentIds(),item.forbiddenNodeIds(),
+                item.shouldRefuse(),item.coverageTags(),Set.of(new EvaluationCase.ReviewedClaim(
+                        "受支持声明",Set.of(reviewedRef),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED)),"f".repeat(64))).toList();
+        var reviewed=new EvaluationDataset(base.id(),base.version(),base.promptVersion(),base.sanitizationVersion(),reviewedCases,true);
+        var repository=new MemoryRepository(reviewed,new EvaluationRepository.Observation(
+                Set.of(ref),Set.of(evidence),Set.of(),Set.of(),Map.of(evidence,reviewedRef),"f".repeat(64)));
+        var service=new GroundedQaEvaluationService(command->new QaOutcome.Answered(command.requestId(),"受支持声明",
+                List.of(new CitationClaim(UUID.randomUUID(),"受支持声明",List.of(evidence))),false),
+                repository,new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC));
+
+        var result=service.run(reviewed.id(),"code","policy","model");
+
+        assertThat(result.metrics().reviewedClaimCount()).isZero();
+        assertThat(result.metrics().supportedClaimCount()).isZero();
+        assertThat(result.assessment().failures()).contains(EvaluationGate.Failure.CLAIM_REVIEW_COVERAGE);
+    }
+
+    @Test
+    void irrelevantReviewedAnswerFailsTheIndependentRelevanceGate() {
+        UUID actor=UUID.randomUUID(),document=UUID.randomUUID(),evidence=UUID.randomUUID(),version=UUID.randomUUID();
+        var ref=new EvaluationCase.EvidenceRef(document,"node-1");
+        var reviewedRef=new EvaluationCase.ReviewedEvidence(document,version,"node-1","a".repeat(64),"c".repeat(64),"e".repeat(64));
+        var base=dataset(actor,document,false);
+        var reviewedCases=base.cases().stream().map(item->new EvaluationCase(item.id(),item.evaluationActorId(),
+                item.question(),item.expectedEvidence(),item.forbiddenDocumentIds(),item.forbiddenNodeIds(),
+                item.shouldRefuse(),item.coverageTags(),Set.of(new EvaluationCase.ReviewedClaim(
+                        "受支持声明",Set.of(reviewedRef),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED,EvaluationCase.QuestionRelevance.IRRELEVANT)),"f".repeat(64))).toList();
+        var reviewed=new EvaluationDataset(base.id(),base.version(),base.promptVersion(),base.sanitizationVersion(),reviewedCases,true);
+        var repository=new MemoryRepository(reviewed,new EvaluationRepository.Observation(
+                Set.of(ref),Set.of(evidence),Set.of(),Set.of(),Map.of(evidence,reviewedRef),"f".repeat(64)));
+        var service=new GroundedQaEvaluationService(command->new QaOutcome.Answered(command.requestId(),"受支持声明",
+                List.of(new CitationClaim(UUID.randomUUID(),"受支持声明",List.of(evidence))),false),
+                repository,new EvaluationGate(),Clock.fixed(NOW,ZoneOffset.UTC));
+
+        var result=service.run(reviewed.id(),"code","policy","model");
+
+        assertThat(result.metrics().reviewedClaimCount()).isEqualTo(50);
+        assertThat(result.metrics().irrelevantClaimCount()).isEqualTo(50);
+        assertThat(result.metrics().supportedClaimCount()).isZero();
+        assertThat(result.assessment().failures()).contains(EvaluationGate.Failure.QUESTION_RELEVANCE);
+    }
+
+    @Test
     void wrongOrUnmappedCitationCannotBorrowAnOtherwiseReviewedClaim() {
         UUID actor=UUID.randomUUID(),document=UUID.randomUUID(),other=UUID.randomUUID(),evidence=UUID.randomUUID(),version=UUID.randomUUID();
         var expected=new EvaluationCase.EvidenceRef(document,"node-1");
@@ -236,7 +285,7 @@ class GroundedQaEvaluationServiceTest {
         var reviewedCases=base.cases().stream().map(item->new EvaluationCase(item.id(),item.evaluationActorId(),
                 item.question(),item.expectedEvidence(),item.forbiddenDocumentIds(),item.forbiddenNodeIds(),
                 item.shouldRefuse(),item.coverageTags(),Set.of(new EvaluationCase.ReviewedClaim(
-                        "受支持声明",Set.of(approvedSource),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED)),"f".repeat(64))).toList();
+                        "受支持声明",Set.of(approvedSource),"review-001",EvaluationCase.ReviewVerdict.SUPPORTED,EvaluationCase.QuestionRelevance.RELEVANT)),"f".repeat(64))).toList();
         var reviewed=new EvaluationDataset(base.id(),base.version(),base.promptVersion(),base.sanitizationVersion(),reviewedCases,true);
         for(var mapping:List.of(Map.<UUID,EvaluationCase.ReviewedEvidence>of(),
                 Map.of(evidence,new EvaluationCase.ReviewedEvidence(other,version,"node-other","a".repeat(64),"c".repeat(64),"e".repeat(64))),

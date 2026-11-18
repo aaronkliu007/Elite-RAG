@@ -90,11 +90,13 @@ describe('问答评测结果', () => {
     expect((wrapper.get('select[name="verdict"]').element as HTMLSelectElement).selectedIndex).toBe(0)
     await wrapper.get('input[name="reviewReference"]').setValue('审核记录-001')
     await wrapper.get('select[name="verdict"]').setValue('SUPPORTED')
+    expect(wrapper.get('[data-action="prepare-label"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('select[name="questionRelevance"]').setValue('RELEVANT')
     await wrapper.get('[data-action="prepare-label"]').trigger('click')
     await flushPromises()
     const label = JSON.parse((wrapper.get('textarea[name="reviewDraft"]').element as HTMLTextAreaElement).value)
     expect(label.reviewQuestionDigest).toBe('d'.repeat(64))
-    expect(label.reviewedClaims[0]).toMatchObject({ text: '虚构声明', verdict: 'SUPPORTED', reviewReference: '审核记录-001' })
+    expect(label.reviewedClaims[0]).toMatchObject({ text: '虚构声明', verdict: 'SUPPORTED', questionRelevance: 'RELEVANT', reviewReference: '审核记录-001' })
   })
 
   it('审核期间撤权后不生成片段，并清除已展示的声明', async () => {
@@ -123,6 +125,8 @@ describe('问答评测结果', () => {
     await flushPromises()
     await wrapper.get('input[name="reviewReference"]').setValue('审核记录-001')
     await wrapper.get('select[name="verdict"]').setValue('SUPPORTED')
+    expect(wrapper.get('[data-action="prepare-label"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('select[name="questionRelevance"]').setValue('RELEVANT')
     await wrapper.get('[data-action="prepare-label"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('textarea[name="reviewDraft"]').exists()).toBe(false)

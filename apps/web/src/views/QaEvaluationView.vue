@@ -33,7 +33,7 @@ const reasons: Record<string, string> = {
 }
 const failures: Record<string, string> = {
   LEAKAGE: '越权泄漏', CITATION_VALIDITY: '引用有效率', RECALL_AT_10: '证据召回率',
-  CLAIM_SUPPORT: '声明支持率', CLAIM_REVIEW_COVERAGE: '声明审核覆盖率',
+  CLAIM_SUPPORT: '声明支持率', CLAIM_REVIEW_COVERAGE: '声明审核覆盖率', QUESTION_RELEVANCE: '回答与问题无关',
   CORRECT_REFUSAL: '正确拒答率', REFUSAL_DIAGNOSTICS_INCOMPLETE: '拒答诊断不完整', DATASET_PROVENANCE: '数据集内容未匹配',
 }
 async function load() {

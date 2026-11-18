@@ -32,6 +32,31 @@ class EvaluationGateTest {
     }
 
     @Test
+    void oneIrrelevantClaimFailsEvenWhenSupportRateExceedsThreshold() {
+        var metrics=new EvaluationMetrics(100,100,100,100,100,99,1,1,0,100,100,1);
+        assertThat(metrics.claimSupport()).isGreaterThan(0.90);
+        assertThat(new EvaluationGate().assess(metrics).failures()).contains(EvaluationGate.Failure.QUESTION_RELEVANCE);
+    }
+
+    @Test
+    void oldAndNewReviewAnnotationsRoundTripWithBothJsonLibraries() throws Exception {
+        var source=new EvaluationCase.ReviewedEvidence(UUID.randomUUID(),UUID.randomUUID(),"node",
+                "a".repeat(64),"b".repeat(64),"c".repeat(64));
+        var reviewed=new EvaluationCase.ReviewedClaim("声明",Set.of(source),"review-1",
+                EvaluationCase.ReviewVerdict.SUPPORTED,EvaluationCase.QuestionRelevance.IRRELEVANT);
+        var jackson2=new com.fasterxml.jackson.databind.ObjectMapper();
+        var jackson3=new tools.jackson.databind.ObjectMapper();
+        String encoded=jackson2.writeValueAsString(reviewed);
+        assertThat(jackson2.readValue(encoded,EvaluationCase.ReviewedClaim.class)).isEqualTo(reviewed);
+        assertThat(jackson3.readValue(encoded,EvaluationCase.ReviewedClaim.class)).isEqualTo(reviewed);
+        var legacy=jackson2.readTree(encoded); ((com.fasterxml.jackson.databind.node.ObjectNode)legacy).remove("questionRelevance");
+        assertThat(jackson2.treeToValue(legacy,EvaluationCase.ReviewedClaim.class).questionRelevance())
+                .isEqualTo(EvaluationCase.QuestionRelevance.UNKNOWN);
+        assertThat(jackson3.readValue(legacy.toString(),EvaluationCase.ReviewedClaim.class).questionRelevance())
+                .isEqualTo(EvaluationCase.QuestionRelevance.UNKNOWN);
+    }
+
+    @Test
     void rejectsReviewedClaimsWhoseEvidenceIsNotExpectedOrWhoseReviewReferenceIsMissing() {
         UUID actor=UUID.randomUUID(),document=UUID.randomUUID(),version=UUID.randomUUID(),other=UUID.randomUUID();
         var approved=new EvaluationCase.ReviewedEvidence(other,version,"node","a".repeat(64),"c".repeat(64),"e".repeat(64));

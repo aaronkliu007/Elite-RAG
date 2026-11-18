@@ -76,6 +76,21 @@ class JdbcEvaluationRepositoryIntegrationTest {
     }
 
     @Test
+    void persistsIrrelevantClaimCountAndKeepsRelevanceGateFailed() {
+        String digest=EvaluationDatasetFingerprint.sha256(dataset);
+        var metrics=new EvaluationMetrics(100,100,100,100,100,99,1,1,0,100,100,1);
+        var result=new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),true,
+                com.yunjihai.rag.qa.domain.QaStatus.REFUSED,"INSUFFICIENT_EVIDENCE",0,0,0,0,0,0);
+        var run=new EvaluationRepository.EvaluationRun(UUID.randomUUID(),dataset.id(),dataset.version(),"code","policy",
+                dataset.promptVersion(),dataset.sanitizationVersion(),"model",Instant.EPOCH,Instant.EPOCH,
+                metrics,new EvaluationGate().assess(metrics),digest,digest,List.of(result));
+        repository.save(run);
+        var loaded=repository.findRun(run.runId()).orElseThrow().withCurrentDatasetDigest(digest);
+        assertThat(loaded.metrics().irrelevantClaimCount()).isEqualTo(1);
+        assertThat(loaded.currentAssessment().failures()).contains(EvaluationGate.Failure.QUESTION_RELEVANCE);
+    }
+
+    @Test
     void persistsCaseDiagnosticsWithoutQuestionOrEvidenceText() {
         String digest=EvaluationDatasetFingerprint.sha256(dataset);
         var result=new EvaluationCaseResult(UUID.randomUUID(),UUID.randomUUID(),false,

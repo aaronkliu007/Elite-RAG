@@ -22,7 +22,6 @@ function locatorLabel(locator: SourceLocator) {
         <h3 :title="item.title">
           {{ item.title }}
         </h3>
-        <span>{{ Math.round(item.score * 100) }}%</span>
       </div>
       <p>{{ item.excerpt }}</p>
       <a
@@ -37,6 +36,6 @@ function locatorLabel(locator: SourceLocator) {
 .results { display: grid; gap: 14px; }
 .result-card { min-width: 0; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: #fff; box-shadow: var(--shadow-panel); }
 .result-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-h3 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .result-heading span { flex: 0 0 auto; color: var(--color-muted); font-size: 12px; }
+h3 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 p { margin: 12px 0; overflow-wrap: anywhere; color: #33455b; line-height: 1.7; } a { color: var(--color-accent); font-weight: 750; } a:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
 </style>

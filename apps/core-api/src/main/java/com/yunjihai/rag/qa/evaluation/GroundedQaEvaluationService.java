@@ -113,8 +113,11 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
                 for(var claim:answered.claims()) {
                     var verdict=reviewed(item,claim,observation);
                     if(verdict.isPresent()) {
+                        var review=verdict.orElseThrow();
                         total.reviewedClaims++;
-                        if(verdict.orElseThrow()==EvaluationCase.ReviewVerdict.SUPPORTED)total.supportedClaims++;
+                        if(review.questionRelevance()==EvaluationCase.QuestionRelevance.IRRELEVANT)total.irrelevantClaims++;
+                        if(review.verdict()==EvaluationCase.ReviewVerdict.SUPPORTED
+                                && review.questionRelevance()==EvaluationCase.QuestionRelevance.RELEVANT)total.supportedClaims++;
                     }
                 }
                 total.validCitations+=answered.claims().stream().flatMap(claim->claim.evidenceIds().stream())
@@ -133,7 +136,7 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
                 observation.conflictScreeningCompleted()&&!observation.conflictScreeningUnavailable());
     }
 
-    private static Optional<EvaluationCase.ReviewVerdict> reviewed(
+    private static Optional<EvaluationCase.ReviewedClaim> reviewed(
             EvaluationCase item,CitationClaim claim,EvaluationRepository.Observation observation) {
         if(item.reviewQuestionDigest()==null||!item.reviewQuestionDigest().equals(observation.sanitizedQuestionDigest())
                 ||claim.evidenceIds().isEmpty()||!observation.evidenceIds().containsAll(claim.evidenceIds()))return Optional.empty();
@@ -144,8 +147,9 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
             cited.add(ref);
         }
         return item.reviewedClaims().stream().filter(review->
-                review.text().equals(claim.text())&&review.supportingEvidence().equals(cited))
-                .map(EvaluationCase.ReviewedClaim::verdict).findFirst();
+                review.text().equals(claim.text())&&review.supportingEvidence().equals(cited)
+                        && review.questionRelevance()!=EvaluationCase.QuestionRelevance.UNKNOWN)
+                .findFirst();
     }
 
     private static long leakages(EvaluationCase item,EvaluationRepository.Observation observation,QaOutcome outcome) {
@@ -169,15 +173,15 @@ public final class GroundedQaEvaluationService implements QaEvaluationUseCase {
 
     private static final class Accumulator {
         int expected,citations,claims,generatedClaims,refusalCases,leakages;
-        long retrieved,validCitations,supportedClaims,reviewedClaims,correctRefusals;
+        long retrieved,validCitations,supportedClaims,reviewedClaims,irrelevantClaims,correctRefusals;
         void add(Accumulator other) {
             expected+=other.expected; citations+=other.citations; claims+=other.claims;
             generatedClaims+=other.generatedClaims; refusalCases+=other.refusalCases; leakages+=other.leakages;
             retrieved+=other.retrieved; validCitations+=other.validCitations; supportedClaims+=other.supportedClaims;
-            reviewedClaims+=other.reviewedClaims; correctRefusals+=other.correctRefusals;
+            reviewedClaims+=other.reviewedClaims; irrelevantClaims+=other.irrelevantClaims; correctRefusals+=other.correctRefusals;
         }
         EvaluationMetrics metrics() { return new EvaluationMetrics(expected,Math.toIntExact(retrieved),citations,
                 Math.toIntExact(validCitations),claims,Math.toIntExact(supportedClaims),refusalCases,
-                Math.toIntExact(correctRefusals),leakages,Math.toIntExact(reviewedClaims),generatedClaims); }
+                Math.toIntExact(correctRefusals),leakages,Math.toIntExact(reviewedClaims),generatedClaims,Math.toIntExact(irrelevantClaims)); }
     }
 }

@@ -29,7 +29,7 @@ public final class EvaluationDatasetFingerprint {
     public static String sha256(EvaluationDataset dataset) {
         Objects.requireNonNull(dataset);
         return digest(out->{
-            write(out,"evaluation-dataset-fingerprint-v1");
+            write(out,"evaluation-dataset-fingerprint-v2");
             write(out,dataset.id().toString()); write(out,dataset.version());
             write(out,dataset.promptVersion()); write(out,dataset.sanitizationVersion());
             out.writeBoolean(dataset.active()); out.writeInt(dataset.cases().size());
@@ -53,6 +53,7 @@ public final class EvaluationDatasetFingerprint {
 
     private static void writeReview(DataOutputStream out,EvaluationCase.ReviewedClaim review) throws IOException {
         write(out,review.text()); write(out,review.reviewReference()); write(out,review.verdict().name());
+        write(out,review.questionRelevance().name());
         var sources=review.supportingEvidence().stream().sorted(REVIEWED_SOURCE_ORDER).toList();
         out.writeInt(sources.size());
         for(var source:sources) {

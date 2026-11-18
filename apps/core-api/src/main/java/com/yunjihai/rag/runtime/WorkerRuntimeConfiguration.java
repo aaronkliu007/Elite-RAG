@@ -33,6 +33,8 @@ import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QaPolicy;
 import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.qa.conflict.EvidenceConflictDetector;
+import com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy;
+import org.springframework.beans.factory.ObjectProvider;
 import com.yunjihai.rag.qa.model.ChatCompletionPort;
 import com.yunjihai.rag.qa.evaluation.EvaluationGate;
 import com.yunjihai.rag.qa.evaluation.EvaluationRepository;
@@ -65,6 +67,12 @@ import java.util.stream.Collectors;
 @Profile("local")
 @EnableScheduling
 public class WorkerRuntimeConfiguration {
+
+    static QuestionScopedConflictPolicy selectScopedPolicy(boolean enabled,ObjectProvider<QuestionScopedConflictPolicy> policies) {
+        if(!enabled)return QuestionScopedConflictPolicy.strict();
+        var candidates=policies.stream().limit(2).toList();
+        return candidates.size()==1 ? candidates.getFirst() : QuestionScopedConflictPolicy.strict();
+    }
 
     @Bean
     QaMetrics qaMetrics(
@@ -107,10 +115,13 @@ public class WorkerRuntimeConfiguration {
             QaEvidenceAuthorizationPort evidenceAuthorization,
             Clock clock,
             QaMetrics metrics,
-            EvaluationTraceRegistry evaluationTraces) {
+            EvaluationTraceRegistry evaluationTraces,
+            ObjectProvider<QuestionScopedConflictPolicy> scopedPolicies,
+            @Value("${rag.qa.question-scoped-conflicts.enabled:false}") boolean scopedConflictsEnabled) {
         return new GroundedQaService(
                 authorizedSpaces,retrieval,persistence,audits,digests,sanitizer,chat,
-                conflictDetector,citationVerifier,policy,evidenceAuthorization,clock,metrics,evaluationTraces);
+                conflictDetector,citationVerifier,policy,evidenceAuthorization,clock,metrics,evaluationTraces,
+                selectScopedPolicy(scopedConflictsEnabled,scopedPolicies));
     }
 
     @Bean

@@ -17,7 +17,9 @@ const answered = {
 }
 
 async function mountAt(path = '/qa') {
-  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/qa', component: QaView }] })
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/qa', component: QaView }, { path: '/search', component: { template: '<div>全文检索</div>' } },
+  ] })
   await router.push(path)
   await router.isReady()
   return { wrapper: mount(QaView, { global: { plugins: [router] } }), router }
@@ -96,5 +98,19 @@ describe('知识问答页', () => {
     expect(restoring.wrapper.get('[data-state="loading"]').attributes('role')).toBe('status')
     resolveRestore?.(json(answered))
     await flushPromises()
+  })
+
+  it('依据冲突时提供检索入口，不把问题放进链接或改变拒答结果', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json({ ...answered, requestId: 'request-conflict',
+      status: 'REFUSED', answer: null, refusal: 'CONFLICTING_EVIDENCE', degraded: false, citations: [] })))
+    const { wrapper, router } = await mountAt('/qa?requestId=request-conflict')
+    await flushPromises()
+    const link = wrapper.get('[data-action="search-sources"]')
+    expect(link.attributes('href')).toBe('/search')
+    expect(wrapper.get('[data-state="refused"]').text()).toContain('系统已严格拒答')
+    expect(wrapper.text()).toContain('选择知识空间')
+    await link.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe('/search')
   })
 })

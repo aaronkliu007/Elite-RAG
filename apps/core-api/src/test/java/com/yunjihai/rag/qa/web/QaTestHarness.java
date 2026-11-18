@@ -23,6 +23,7 @@ final class QaTestHarness {
     final AtomicInteger modelCalls=new AtomicInteger();
     final AtomicInteger rateLimitAcquisitions=new AtomicInteger();
     final AtomicBoolean rejectRateLimit=new AtomicBoolean();
+    final AtomicBoolean authorized=new AtomicBoolean(true);
     final AtomicReference<UUID> lastActor=new AtomicReference<>();
     final CountDownLatch modelEntered=new CountDownLatch(1);
     final CountDownLatch releaseModel=new CountDownLatch(1);
@@ -79,7 +80,7 @@ final class QaTestHarness {
         var service=new GroundedQaService(spaces,retrieval,persistence,ignored->{},
                 ignored->"a".repeat(64),sanitizer,chat,new DeterministicEvidenceConflictDetector(),
                 new ExactQuoteCitationSupportVerifier(),
-                QaPolicy.defaults(),(requestId,actorId,at)->true,
+                QaPolicy.defaults(),(requestId,actorId,at)->authorized.get(),
                 Clock.fixed(NOW,ZoneOffset.UTC));
         var json=new ObjectMapper();
         var idempotency=new IdempotencyService(new MemoryIdempotencyStore(),json,
