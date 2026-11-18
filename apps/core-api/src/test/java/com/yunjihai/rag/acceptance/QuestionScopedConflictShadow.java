@@ -13,11 +13,11 @@ import java.util.regex.Pattern;
 final class QuestionScopedConflictShadow {
     enum Scope { EXPLICITLY_UNRELATED, UNKNOWN }
     private static final Pattern BACKUP_QUESTION=Pattern.compile(
-            "^[\\p{IsHan}A-Za-z0-9]{2,30}的?备份保留(?:期限|时长)?(?:为|是)?(?:多久|多长时间|多少天)[?？]?$");
+            "^[\\p{IsHan}A-Za-z0-9]{2,30}项目的?备份保留(?:期限|时长)?(?:为|是)?(?:多久|多长时间|多少天)[?？]?$");
     private static final Pattern RESTORE_DRILL_QUESTION=Pattern.compile(
-            "^[\\p{IsHan}A-Za-z0-9]{2,30}多久组织一次恢复演练[?？]?$");
+            "^[\\p{IsHan}A-Za-z0-9]{2,30}项目多久组织一次恢复演练[?？]?$");
     private static final Pattern SIMPLE_PROJECT_BUDGET=Pattern.compile(
-            "^[\\p{IsHan}A-Za-z0-9]{2,30}项目研发预算(?:为|是|[:：])"
+            "^([\\p{IsHan}A-Za-z0-9]{2,30}项目)研发预算(?:为|是|[:：])"
                     + "[+\\-−]?\\d+(?:\\.\\d+)?(?:万元|元)[。.]?$");
 
     private QuestionScopedConflictShadow() { }
@@ -31,8 +31,10 @@ final class QuestionScopedConflictShadow {
         String q=normalize(question);
         if(pair.kind()!=ConflictKind.TYPED_FACT || q.contains("预算") || q.contains("费用")
                 || !isSupportedQuestion(q))return Scope.UNKNOWN;
-        return SIMPLE_PROJECT_BUDGET.matcher(normalize(first.excerpt())).matches()
-                && SIMPLE_PROJECT_BUDGET.matcher(normalize(second.excerpt())).matches()
+        var firstBudget=SIMPLE_PROJECT_BUDGET.matcher(normalize(first.excerpt()));
+        var secondBudget=SIMPLE_PROJECT_BUDGET.matcher(normalize(second.excerpt()));
+        return firstBudget.matches() && secondBudget.matches()
+                && firstBudget.group(1).equals(secondBudget.group(1))
                 ?Scope.EXPLICITLY_UNRELATED:Scope.UNKNOWN;
     }
 

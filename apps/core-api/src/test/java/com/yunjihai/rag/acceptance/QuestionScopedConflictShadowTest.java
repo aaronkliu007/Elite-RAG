@@ -15,6 +15,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class QuestionScopedConflictShadowTest {
     @Test
+    void ambiguousQuestionPrefixAndDifferentBudgetSubjectsRemainUnknown() {
+        var first=evidence(1,"星河项目研发预算为100万元。");
+        var second=evidence(2,"星河项目研发预算为120万元。");
+        var pair=new ConflictPair(first.evidenceId(),second.evidenceId(),ConflictKind.TYPED_FACT);
+        var sources=Map.of(first.evidenceId(),first,second.evidenceId(),second);
+        assertThat(QuestionScopedConflictShadow.assess("星河项目删除的备份保留多久？",pair,sources))
+                .isEqualTo(QuestionScopedConflictShadow.Scope.UNKNOWN);
+        assertThat(QuestionScopedConflictShadow.assess("星河项目未完成的恢复演练多久组织一次恢复演练？",pair,sources))
+                .isEqualTo(QuestionScopedConflictShadow.Scope.UNKNOWN);
+        var other=evidence(3,"海川项目研发预算为120万元。");
+        assertThat(QuestionScopedConflictShadow.assess("星河项目的备份保留多久？",
+                new ConflictPair(first.evidenceId(),other.evidenceId(),ConflictKind.TYPED_FACT),
+                Map.of(first.evidenceId(),first,other.evidenceId(),other)))
+                .isEqualTo(QuestionScopedConflictShadow.Scope.UNKNOWN);
+    }
+
+    @Test
     void explicitIndependentTopicsAreShadowOnlyAndEveryAmbiguityStaysUnknown() {
         var a=evidence(1,"星河项目研发预算为100万元。");
         var b=evidence(2,"星河项目研发预算为120万元。");
@@ -135,6 +152,29 @@ class QuestionScopedConflictShadowTest {
         assertThat(completePairs).isEqualTo(11);
         assertThat(explicitlyUnrelated).containsExactly("Q05","Q06");
         // Selected evidence is not the complete conflict-screening candidate set; this cannot approve answers.
+    }
+
+    @Test
+    void screensAllSyntheticQuestionsAgainstTheSameBudgetConflictWithoutExpandingTheAllowList() throws Exception {
+        try (var input=QuestionScopedConflictShadowTest.class.getResourceAsStream("/synthetic42-questions.json")) {
+            var cases=new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readTree(java.util.Objects.requireNonNull(input)).path("cases");
+            assertThat(cases).hasSize(42);
+            var first=tableEvidence(41); var second=tableEvidence(42);
+            var evidence=Map.of(first.evidenceId(),first,second.evidenceId(),second);
+            var pair=new ConflictPair(first.evidenceId(),second.evidenceId(),ConflictKind.STRUCTURED_TABLE);
+            com.yunjihai.rag.qa.conflict.TableEvidenceSource tables=item -> realisticBudgetCells(
+                    item.evidenceId().equals(first.evidenceId()) ? "100" : "120","未注明");
+            var unrelated=new java.util.TreeSet<String>();
+            var ids=new java.util.HashSet<String>();
+            for (var item:cases) {
+                assertThat(ids.add(item.path("id").asText())).isTrue();
+                if (QuestionScopedConflictShadow.assess(item.path("question").asText(),pair,evidence,tables)
+                        ==QuestionScopedConflictShadow.Scope.EXPLICITLY_UNRELATED) unrelated.add(item.path("id").asText());
+            }
+            assertThat(unrelated).containsExactly("Q05","Q06");
+        }
+        // Classification of one synthetic pair is not an authorization or a full-retrieval replay.
     }
 
     @Test
