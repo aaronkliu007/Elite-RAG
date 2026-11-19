@@ -49,6 +49,12 @@ public final class JdbcQaEvidenceAuthorizationAdapter implements QaEvidenceAutho
                     )
                     SELECT EXISTS (SELECT 1 FROM requested_evidence)
                        AND NOT EXISTS (
+                           SELECT 1 FROM qa_conflict_screening_snapshot snapshot
+                           WHERE snapshot.request_id=:requestId
+                             AND (snapshot.context_fingerprint IS NULL OR snapshot.context_fingerprint IS DISTINCT FROM
+                                  qa_document_context_fingerprint(snapshot.document_id,snapshot.version_id))
+                       )
+                       AND NOT EXISTS (
                            SELECT 1 FROM requested_evidence evidence
                            WHERE NOT EXISTS (
                                SELECT 1 FROM document document

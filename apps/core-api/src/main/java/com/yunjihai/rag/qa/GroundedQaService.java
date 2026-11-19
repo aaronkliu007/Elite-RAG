@@ -404,11 +404,15 @@ public final class GroundedQaService {
             var answered = new QaOutcome.Answered(
                     command.requestId(), candidate.answer(), candidate.claims().stream()
                             .map(CitationClaim::from).toList(), pack.degraded());
+            final boolean recheckScope=scopedConflict;
+            final String expectedPolicyVersion=requestPolicyVersion;
             try {
                 var completed = persistence.completeAuthorized(
                         state.requestId(), state.revision(), answered, clock.instant(),
                         () -> evidenceAuthorization.allAuthorized(
-                                command.requestId(), command.actorId(), clock.instant()));
+                                command.requestId(), command.actorId(), clock.instant())
+                                && (!recheckScope || allConflictsExplicitlyUnrelated(safeQuestion,pack.conflictScreeningEvidence())
+                                .filter(expectedPolicyVersion::equals).isPresent()));
                 if (!completed.authorized()) {
                     return complete(state, command.actorId(), new QaOutcome.Refused(
                             command.requestId(), RefusalReason.NO_AUTHORIZED_SPACE, pack.degraded()));

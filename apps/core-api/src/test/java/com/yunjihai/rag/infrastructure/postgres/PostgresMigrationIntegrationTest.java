@@ -25,7 +25,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PostgresMigrationIntegrationTest {
-    private static final int CURRENT_MIGRATION_COUNT = 24;
+    private static final int CURRENT_MIGRATION_COUNT = 25;
     private static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:17-alpine")
             .withDatabaseName("rag_test").withUsername("migration_owner").withPassword("migration_test_only");
     private static final String RUNTIME_USER = "rag_runtime_test";
@@ -61,7 +61,7 @@ class PostgresMigrationIntegrationTest {
         sql("INSERT INTO qa_request(id,actor_id,question_digest,status,created_at,updated_at) VALUES ('"+request+"','"+actor+"','"+"a".repeat(64)+"','RECEIVED',now(),now())");
         sql("INSERT INTO qa_model_call_audit(request_id,provider,endpoint_identifier,model_name,model_config_version,request_digest,response_digest,input_tokens,output_tokens,latency_ms,sanitization_hit_count,retry_count,result_code,occurred_at) VALUES ('"
                 +request+"','provider','chat','model','config','"+"b".repeat(64)+"','"+"c".repeat(64)+"',1,2,3,0,0,'SUCCESS',now())");
-        assertEquals(3,flyway("classpath:db/migration").migrate().migrationsExecuted);
+        assertEquals(4,flyway("classpath:db/migration").migrate().migrationsExecuted);
         assertEquals("legacy-unknown",scalar("SELECT qa_policy_version FROM qa_model_call_audit WHERE request_id='"+request+"'"));
         assertEquals("b".repeat(64),scalar("SELECT request_digest FROM qa_model_call_audit WHERE request_id='"+request+"'"));
         assertTrue(scalar("SELECT column_default FROM information_schema.columns WHERE table_name='qa_model_call_audit' AND column_name='qa_policy_version'").contains("legacy-unknown"));

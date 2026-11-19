@@ -140,7 +140,7 @@ class JdbcQaPersistenceIntegrationTest {
     }
 
     @Test
-    void rechecksNonSelectedScreeningDocumentsBeforeReturningScopedAnswer() {
+    void rechecksNonSelectedScreeningDocumentsBeforeReturningScopedAnswer() throws Exception {
         UUID secondDocument=UUID.randomUUID(),secondVersion=UUID.randomUUID();
         jdbc.sql("INSERT INTO document(id,space_id,title) VALUES (:id,:space,'冲突来源')")
                 .param("id",secondDocument).param("space",space).update();
@@ -179,6 +179,18 @@ class JdbcQaPersistenceIntegrationTest {
         var priorAnswer=new QaOutcome.Answered(priorRequest,"制度",List.of(new CitationClaim(UUID.randomUUID(),"制度",List.of(selectedId))),false);
         assertThat(persistence.completeAuthorized(priorRequest,priorVerifying.revision(),priorAnswer,NOW,
                 ()->auth.allAuthorized(priorRequest,actor,NOW)).authorized()).isTrue();
+        assertThat(persistence.findAuthorized(priorRequest,actor,()->auth.allAuthorized(priorRequest,actor,NOW))).isPresent();
+        try(var executor=Executors.newVirtualThreadPerTaskExecutor()) {
+            var firstRead=executor.submit(()->persistence.findAuthorized(priorRequest,actor,()->auth.allAuthorized(priorRequest,actor,NOW)));
+            var secondRead=executor.submit(()->persistence.findAuthorized(priorRequest,actor,()->auth.allAuthorized(priorRequest,actor,NOW)));
+            assertThat(firstRead.get(10,TimeUnit.SECONDS)).isPresent();
+            assertThat(secondRead.get(10,TimeUnit.SECONDS)).isPresent();
+        }
+        jdbc.sql("UPDATE canonical_node SET body_text='新增约束' WHERE version_id=:version AND node_id='node-2'")
+                .param("version",secondVersion).update();
+        assertThat(persistence.findAuthorized(priorRequest,actor,()->auth.allAuthorized(priorRequest,actor,NOW))).isEmpty();
+        jdbc.sql("UPDATE canonical_node SET body_text='冲突资料' WHERE version_id=:version AND node_id='node-2'")
+                .param("version",secondVersion).update();
         assertThat(persistence.findAuthorized(priorRequest,actor,()->auth.allAuthorized(priorRequest,actor,NOW))).isPresent();
         jdbc.sql("INSERT INTO acl_entry(id,space_id,document_id,scope,principal_type,principal_id,revoked_at) VALUES (:id,:space,:document,'DOCUMENT','USER',:actor,:at)")
                 .param("id",UUID.randomUUID()).param("space",space).param("document",secondDocument).param("actor",actor)

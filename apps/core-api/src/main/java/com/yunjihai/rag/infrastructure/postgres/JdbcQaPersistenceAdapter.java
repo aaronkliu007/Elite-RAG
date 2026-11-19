@@ -146,8 +146,8 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
                         .param("id", requestId).query(Long.class).single() != 0) return false;
                 for (Evidence item : items) {
                     jdbc.sql("""
-                            INSERT INTO qa_conflict_screening_snapshot(request_id,space_id,document_id,version_id,node_id)
-                            VALUES (:request,:space,:document,:version,:node) ON CONFLICT DO NOTHING
+                            INSERT INTO qa_conflict_screening_snapshot(request_id,space_id,document_id,version_id,node_id,context_fingerprint)
+                            VALUES (:request,:space,:document,:version,:node,qa_document_context_fingerprint(:document,:version)) ON CONFLICT DO NOTHING
                             """).param("request", requestId).param("space", item.spaceId())
                             .param("document", item.documentId()).param("version", item.versionId())
                             .param("node", item.nodeId()).update();
@@ -225,6 +225,7 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
                         ORDER BY document_id
                         """).param("requestId", requestId).query(UUID.class).list();
                 return withDocumentLocks(documents, 0, () -> {
+                    lockScreeningContent(requestId);
                     if (!authorizationCheck.getAsBoolean()) {
                         return new AuthorizedCompletion(false, Optional.empty());
                     }
@@ -256,6 +257,31 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
                 () -> withDocumentLocks(documents, index + 1, action));
     }
 
+    private void lockScreeningContent(UUID requestId) {
+        jdbc.sql("""
+                SELECT d.id FROM document d WHERE d.id IN (
+                    SELECT document_id FROM qa_evidence_snapshot WHERE request_id=:id
+                    UNION SELECT document_id FROM qa_conflict_screening_snapshot WHERE request_id=:id)
+                ORDER BY d.id FOR SHARE OF d
+                """).param("id",requestId).query(UUID.class).list();
+        jdbc.sql("""
+                SELECT v.id FROM document_version v WHERE v.id IN (
+                    SELECT version_id FROM qa_evidence_snapshot WHERE request_id=:id
+                    UNION SELECT version_id FROM qa_conflict_screening_snapshot WHERE request_id=:id)
+                ORDER BY v.id FOR SHARE OF v
+                """).param("id",requestId).query(UUID.class).list();
+        jdbc.sql("""
+                SELECT c.version_id FROM canonical_document c
+                WHERE c.version_id IN (SELECT version_id FROM qa_conflict_screening_snapshot WHERE request_id=:id)
+                ORDER BY c.version_id FOR UPDATE OF c
+                """).param("id",requestId).query(UUID.class).list();
+        jdbc.sql("""
+                SELECT n.node_id FROM canonical_node n
+                WHERE n.version_id IN (SELECT version_id FROM qa_conflict_screening_snapshot WHERE request_id=:id)
+                ORDER BY n.version_id,n.node_id FOR SHARE OF n
+                """).param("id",requestId).query(String.class).list();
+    }
+
     @Override
     public Optional<QaOutcome> findAuthorized(UUID requestId, UUID actorId, BooleanSupplier authorizationCheck) {
         Objects.requireNonNull(authorizationCheck);
@@ -269,8 +295,10 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
                         UNION SELECT document_id FROM qa_conflict_screening_snapshot WHERE request_id=:requestId
                         ORDER BY document_id
                         """).param("requestId", requestId).query(UUID.class).list();
-                return withDocumentLocks(documents, 0, () ->
-                        authorizationCheck.getAsBoolean() ? find(requestId, actorId) : Optional.empty());
+                return withDocumentLocks(documents, 0, () -> {
+                    lockScreeningContent(requestId);
+                    return authorizationCheck.getAsBoolean() ? find(requestId, actorId) : Optional.empty();
+                });
             });
         } catch (DataAccessException failure) {
             throw PostgresPersistenceExceptionTranslator.translate(failure);

@@ -43,9 +43,9 @@ class Synthetic42CompleteScreeningDiagnosticTest {
         var flyway=org.flywaydb.core.Flyway.configure().dataSource(url,user,password)
                 .locations("classpath:db/migration").load();
         String current=flyway.info().current().getVersion().getVersion();
-        assertThat(current).isIn("21","021","22","022","23","023","24","024");
+        assertThat(current).isIn("21","021","22","022","23","023","24","024","25","025");
         flyway.migrate();
-        assertThat(flyway.info().current().getVersion().getVersion()).isIn("24","024");
+        assertThat(flyway.info().current().getVersion().getVersion()).isIn("25","025");
     }
 
     @Test
@@ -84,6 +84,86 @@ class Synthetic42CompleteScreeningDiagnosticTest {
         }
     }
 
+    @Test
+    @EnabledIfEnvironmentVariable(named="RAG_SYNTH_SCOPED_TRIAL",matches="true")
+    void builtInBackupBudgetPolicyRefusesWhenFullScreeningContainsUnrecognizedCandidates() {
+        SyntheticScopedPolicyConfiguration.MODEL_CALLS.set(0);
+        try(var disabled=startSyntheticContext(false,false,false,true)) {
+            var jdbc=disabled.getBean(JdbcClient.class);
+            UUID actor=jdbc.sql("SELECT id FROM app_user WHERE display_name=:name").param("name","模拟数据管理员").query(UUID.class).single();
+            var result=disabled.getBean(com.yunjihai.rag.qa.GroundedQaService.class).ask(
+                    new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,"星河项目的备份保留多久？"));
+            assertThat(result).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                    refused->assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(0);
+        }
+        try(var context=startSyntheticContext(false,false,true,true)) {
+            var jdbc=context.getBean(JdbcClient.class);
+            assertThat(context.getBeansOfType(com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy.class).values())
+                    .singleElement().isInstanceOf(com.yunjihai.rag.qa.conflict.BackupBudgetQuestionScopedPolicy.class);
+            assertThat(jdbc.sql("SELECT count(*) FROM document WHERE archived=false AND current_published_version_id IS NOT NULL")
+                    .query(Long.class).single()).isEqualTo(18);
+            UUID actor=jdbc.sql("SELECT id FROM app_user WHERE display_name=:name").param("name","模拟数据管理员").query(UUID.class).single();
+            var qa=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class);
+            for(var question:java.util.List.of("星河项目的备份保留多久？","星河项目多久组织一次恢复演练？")) {
+                var result=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,question));
+                assertThat(result).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                        refused->assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            }
+            var budget=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,"星河项目研发预算究竟是多少？"));
+            assertThat(budget).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                    refused->assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(0);
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named="RAG_SYNTH_SCOPED_TRIAL",matches="true")
+    void measuresStandaloneContextCoverageForTheFullAuthorizedCandidates() {
+        try(var context=startSyntheticContext()) {
+            var jdbc=context.getBean(JdbcClient.class);
+            assertThat(jdbc.sql("SELECT count(*) FROM document WHERE archived=false AND current_published_version_id IS NOT NULL")
+                    .query(Long.class).single()).isEqualTo(18);
+            UUID actor=jdbc.sql("SELECT id FROM app_user WHERE display_name=:name").param("name","模拟数据管理员").query(UUID.class).single();
+            var spaces=context.getBean(AuthorizedSpaceScopePort.class).resolve(actor,Instant.now());
+            var retrieval=context.getBean(TrustedRetrievalService.class);
+            var source=new JdbcTableEvidenceSource(jdbc);
+            for(var question:java.util.List.of("星河项目的备份保留多久？","星河项目多久组织一次恢复演练？")) {
+                var pack=retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(),actor,spaces,question,Map.of(),10));
+                int recognizedTable=0,recognizedSource=0,unknown=0;
+                for(var item:pack.conflictScreeningEvidence()) {
+                    if(item.locator() instanceof com.yunjihai.rag.retrieval.domain.TableLocator) {
+                        if(source.hasStandaloneBudgetContext(item))recognizedTable++; else unknown++;
+                    } else if(source.hasStandaloneBackupContext(item)) recognizedSource++; else unknown++;
+                }
+                assertThat(recognizedTable+recognizedSource+unknown).isEqualTo(pack.conflictScreeningEvidence().size());
+                System.out.println("SYNTH_STANDALONE_CONTEXT id="+(question.contains("演练")?"Q06":"Q05")
+                        +" candidates="+pack.conflictScreeningEvidence().size()+" standaloneBudget="+recognizedTable
+                        +" standaloneSource="+recognizedSource+" unknown="+unknown);
+            }
+            for(var item:Map.of("backup","03_星河项目数据备份制度","budgetA","05_星河项目预算记录甲","budgetB","06_星河项目预算记录乙").entrySet()) {
+                var shape=jdbc.sql("""
+                        SELECT count(*),count(*) FILTER (WHERE n.kind='HEADING'),
+                               count(*) FILTER (WHERE n.kind='PARAGRAPH'),count(*) FILTER (WHERE n.kind='TABLE'),
+                               count(*) FILTER (WHERE n.kind='TABLE' AND n.body_text='研发预算')
+                        FROM document d JOIN canonical_node n ON n.version_id=d.current_published_version_id
+                        WHERE d.title=:title AND NOT d.archived
+                        """).param("title",item.getValue()).query((rs,row)->new long[]{
+                                rs.getLong(1),rs.getLong(2),rs.getLong(3),rs.getLong(4),rs.getLong(5)}).single();
+                System.out.println("SYNTH_DOCUMENT_SHAPE id="+item.getKey()+" nodes="+shape[0]+" headings="+shape[1]
+                        +" paragraphs="+shape[2]+" tables="+shape[3]+" exactBudgetBodies="+shape[4]);
+            }
+        }
+    }
+
+    @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods=false)
+    static class SyntheticChatOnlyConfiguration {
+        @org.springframework.context.annotation.Bean @org.springframework.context.annotation.Primary
+        com.yunjihai.rag.qa.model.ChatCompletionPort syntheticScopedChat() {
+            return new SyntheticScopedPolicyConfiguration().syntheticScopedChat();
+        }
+    }
+
     @org.springframework.boot.test.context.TestConfiguration(proxyBeanMethods=false)
     static class SyntheticScopedPolicyConfiguration {
         static final java.util.concurrent.atomic.AtomicInteger MODEL_CALLS=new java.util.concurrent.atomic.AtomicInteger();
@@ -117,9 +197,10 @@ class Synthetic42CompleteScreeningDiagnosticTest {
                     var evidence=prompt.evidence().evidence().stream().filter(item->item.title().equals("03_星河项目数据备份制度")
                             && item.excerpt().contains("备份保留30天")).findFirst().orElseThrow();
                     var support=new com.yunjihai.rag.qa.domain.EvidenceSupport(evidence.evidenceId(),evidence.excerpt());
-                    var claim=new com.yunjihai.rag.qa.domain.GroundedClaim(UUID.randomUUID(),"备份保留30天",java.util.List.of(support));
+                    String value=prompt.question().value().contains("恢复演练")?"每月组织一次恢复演练":"备份保留30天";
+                    var claim=new com.yunjihai.rag.qa.domain.GroundedClaim(UUID.randomUUID(),value,java.util.List.of(support));
                     var answer=new com.yunjihai.rag.qa.domain.CandidateAnswer(com.yunjihai.rag.qa.domain.CandidateAnswer.Decision.ANSWER,
-                            "备份保留30天",java.util.List.of(claim));
+                            value,java.util.List.of(claim));
                     return new com.yunjihai.rag.qa.model.ModelGeneration(answer,
                             new com.yunjihai.rag.qa.model.ModelUsage(0,0,java.time.Duration.ZERO),"synthetic",0);
                 }
@@ -454,6 +535,11 @@ class Synthetic42CompleteScreeningDiagnosticTest {
 
     private static org.springframework.context.ConfigurableApplicationContext startSyntheticContext(
             boolean realModel,boolean includeSyntheticPolicy,boolean enableScopedPolicy) {
+        return startSyntheticContext(realModel,includeSyntheticPolicy,enableScopedPolicy,false);
+    }
+
+    private static org.springframework.context.ConfigurableApplicationContext startSyntheticContext(
+            boolean realModel,boolean includeSyntheticPolicy,boolean enableScopedPolicy,boolean builtinPolicy) {
         var config=new HashMap<String,Object>();
         config.put("server.port","0");
         config.put("spring.datasource.url","jdbc:postgresql://127.0.0.1:15432/rag_synthetic");
@@ -466,6 +552,7 @@ class Synthetic42CompleteScreeningDiagnosticTest {
             throw new IllegalStateException("SYNTHETIC_REAL_MODEL_NOT_ENABLED");
         config.put("rag.ai.enabled",Boolean.toString(realModel));
         config.put("rag.qa.question-scoped-conflicts.enabled",Boolean.toString(enableScopedPolicy));
+        config.put("rag.qa.question-scoped-conflicts.builtin-backup-policy",Boolean.toString(builtinPolicy));
         if(realModel) {
             config.put("rag.ai.provider","deepseek");
             config.put("rag.ai.config-version","synthetic-shadow-v1");
@@ -494,6 +581,7 @@ class Synthetic42CompleteScreeningDiagnosticTest {
         config.put("logging.level.root","ERROR");
         var builder=new SpringApplicationBuilder(RagApplication.class);
         if(includeSyntheticPolicy)builder.sources(SyntheticScopedPolicyConfiguration.class);
+        if(builtinPolicy)builder.sources(SyntheticChatOnlyConfiguration.class);
         return builder.profiles("local")
                 .initializers(app->app.getEnvironment().getPropertySources()
                         .addFirst(new MapPropertySource("synthetic-complete-screening",config))).run();

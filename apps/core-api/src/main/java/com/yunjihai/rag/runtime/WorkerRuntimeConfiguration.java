@@ -68,6 +68,14 @@ import java.util.stream.Collectors;
 @EnableScheduling
 public class WorkerRuntimeConfiguration {
 
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(
+            name="rag.qa.question-scoped-conflicts.builtin-backup-policy",havingValue="true")
+    QuestionScopedConflictPolicy backupBudgetQuestionScopedPolicy(org.springframework.jdbc.core.simple.JdbcClient jdbc) {
+        return new com.yunjihai.rag.qa.conflict.BackupBudgetQuestionScopedPolicy(
+                new com.yunjihai.rag.infrastructure.postgres.JdbcTableEvidenceSource(jdbc));
+    }
+
     static QuestionScopedConflictPolicy selectScopedPolicy(boolean enabled,ObjectProvider<QuestionScopedConflictPolicy> policies) {
         if(!enabled)return QuestionScopedConflictPolicy.strict();
         var candidates=policies.stream().limit(2).toList();

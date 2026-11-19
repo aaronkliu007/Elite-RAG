@@ -216,6 +216,146 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
     }
 
     @Test
+    void standaloneBudgetProofExaminesWholeCanonicalDocumentAndFailsClosed() {
+        var ids=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",4);
+        jdbc.sql("UPDATE document SET title='预算' WHERE id=:id").param("id",ids.documentId()).update();
+        insertNode(ids.versionId(),"heading","HEADING","预算",null,1,null,null,0);
+        insertNode(ids.versionId(),"table","TABLE","研发预算","heading",1,null,"[]",1);
+        var evidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),
+                ids.versionId(),"table","预算","研发预算",1,new TableLocator("预算",1,2,1,3));
+        var tableSource=new JdbcTableEvidenceSource(jdbc);
+        assertTrue(tableSource.hasStandaloneBudgetContext(evidence));
+        jdbc.sql("UPDATE document SET title='预算决定备份期限' WHERE id=:id").param("id",ids.documentId()).update();
+        assertFalse(tableSource.hasStandaloneBudgetContext(evidence));
+        jdbc.sql("UPDATE document SET title='预算' WHERE id=:id").param("id",ids.documentId()).update();
+        jdbc.sql("UPDATE canonical_node SET body_text='备份期限由预算决定' WHERE version_id=:version AND node_id='heading'")
+                .param("version",ids.versionId()).update();
+        assertFalse(tableSource.hasStandaloneBudgetContext(evidence));
+        jdbc.sql("UPDATE canonical_node SET body_text='预算' WHERE version_id=:version AND node_id='heading'")
+                .param("version",ids.versionId()).update();
+        jdbc.sql("UPDATE canonical_node SET body_text='研发预算决定备份期限' WHERE version_id=:version AND node_id='table'")
+                .param("version",ids.versionId()).update();
+        assertFalse(tableSource.hasStandaloneBudgetContext(evidence));
+        jdbc.sql("UPDATE canonical_node SET body_text='研发预算' WHERE version_id=:version AND node_id='table'")
+                .param("version",ids.versionId()).update();
+        insertNode(ids.versionId(),"note","PARAGRAPH","其他说明",null,1,null,null,2);
+        assertFalse(tableSource.hasStandaloneBudgetContext(evidence));
+        var wrongSpace=new com.yunjihai.rag.retrieval.domain.Evidence(UUID.randomUUID(),evidence.evidenceId(),
+                evidence.documentId(),evidence.versionId(),evidence.nodeId(),evidence.title(),evidence.excerpt(),1,evidence.locator());
+        assertFalse(tableSource.hasStandaloneBudgetContext(wrongSpace));
+    }
+
+    @Test
+    void standaloneBackupProofRejectsHiddenContextAndDifferentPublishedContent() {
+        var ids=publishedDocument(spaceId,false,true,"text/markdown",4);
+        jdbc.sql("UPDATE document SET title='制度' WHERE id=:id").param("id",ids.documentId()).update();
+        insertNode(ids.versionId(),"heading","HEADING","备份制度",null,1,null,null,0);
+        insertNode(ids.versionId(),"body","PARAGRAPH","星河项目备份保留30天。","heading",1,null,null,1);
+        var evidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),
+                ids.versionId(),"body","制度","星河项目备份保留30天。",1,new MarkdownLocator(List.of("备份制度"),"body"));
+        var tableSource=new JdbcTableEvidenceSource(jdbc);
+        assertTrue(tableSource.hasStandaloneBackupContext(evidence));
+        insertNode(ids.versionId(),"qualifier","PARAGRAPH","仅适用于测试环境",null,1,null,null,2);
+        assertFalse(tableSource.hasStandaloneBackupContext(evidence));
+        jdbc.sql("DELETE FROM canonical_node WHERE version_id=:version AND node_id='qualifier'").param("version",ids.versionId()).update();
+        jdbc.sql("UPDATE canonical_node SET body_text='星河项目备份保留60天。' WHERE version_id=:version AND node_id='body'")
+                .param("version",ids.versionId()).update();
+        assertFalse(tableSource.hasStandaloneBackupContext(evidence));
+    }
+
+    @Test
+    void preliminaryContextCheckDoesNotHoldDocumentLocksAcrossModelCall() throws Exception {
+        var ids=publishedDocument(spaceId,false,true,"text/markdown",4);
+        jdbc.sql("UPDATE document SET title='制度' WHERE id=:id").param("id",ids.documentId()).update();
+        insertNode(ids.versionId(),"heading","HEADING","备份制度",null,1,null,null,0);
+        insertNode(ids.versionId(),"body","PARAGRAPH","星河项目备份保留30天。","heading",1,null,null,1);
+        var evidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),
+                ids.versionId(),"body","制度","星河项目备份保留30天。",1,new MarkdownLocator(List.of("备份制度"),"body"));
+        try(var connection=java.sql.DriverManager.getConnection(POSTGRES.getJdbcUrl(),"rag_runtime_test","runtime_test_only");
+            var executor=java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            connection.setAutoCommit(false);
+            var ds=new org.springframework.jdbc.datasource.SingleConnectionDataSource(connection,true);
+            var checking=new JdbcTableEvidenceSource(JdbcClient.create(ds));
+            assertTrue(checking.hasStandaloneBackupContext(evidence));
+            var update=executor.submit(()->{
+                try(var other=java.sql.DriverManager.getConnection(POSTGRES.getJdbcUrl(),"rag_runtime_test","runtime_test_only");
+                    var statement=other.createStatement()) {
+                    statement.execute("SET lock_timeout='2s'");
+                    return statement.executeUpdate("UPDATE canonical_node SET body_text='备份制度' WHERE version_id='"+ids.versionId()+"' AND node_id='heading'");
+                }
+            });
+            assertEquals(1,update.get(5,java.util.concurrent.TimeUnit.SECONDS));
+            connection.rollback();
+        }
+    }
+
+    @Test
+    void builtInPolicyUsesRealStandaloneDocumentsAndRejectsAddedQualifiers() {
+        var first=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",4);
+        var second=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",5);
+        var backup=publishedDocument(spaceId,false,true,"text/markdown",6);
+        jdbc.sql("UPDATE document SET title='预算' WHERE id IN (:first,:second)")
+                .param("first",first.documentId()).param("second",second.documentId()).update();
+        jdbc.sql("UPDATE document SET title='制度' WHERE id=:id").param("id",backup.documentId()).update();
+        String cells="""
+                [{"row":0,"column":0,"rowSpan":1,"columnSpan":1,"text":"项目"},
+                 {"row":0,"column":1,"rowSpan":1,"columnSpan":1,"text":"预算类别"},
+                 {"row":0,"column":2,"rowSpan":1,"columnSpan":1,"text":"金额（万元）"},
+                 {"row":1,"column":0,"rowSpan":1,"columnSpan":1,"text":"星河项目"},
+                 {"row":1,"column":1,"rowSpan":1,"columnSpan":1,"text":"研发预算"},
+                 {"row":1,"column":2,"rowSpan":1,"columnSpan":1,"text":"AMOUNT"}]
+                """;
+        insertNode(first.versionId(),"table","TABLE","研发预算",null,1,null,cells.replace("AMOUNT","100"),0);
+        insertNode(second.versionId(),"table","TABLE","研发预算",null,1,null,cells.replace("AMOUNT","120"),0);
+        insertNode(backup.versionId(),"body","PARAGRAPH","星河项目备份保留30天。",null,1,null,null,0);
+        var a=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),first.documentId(),first.versionId(),"table","预算","研发预算",1,new TableLocator("预算",1,2,1,3));
+        var b=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),second.documentId(),second.versionId(),"table","预算","研发预算",1,new TableLocator("预算",1,2,1,3));
+        var sourceEvidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),backup.documentId(),backup.versionId(),"body","制度","星河项目备份保留30天。",1,new MarkdownLocator(List.of("章节"),"body"));
+        var source=new JdbcTableEvidenceSource(jdbc);
+        var policy=new com.yunjihai.rag.qa.conflict.BackupBudgetQuestionScopedPolicy(source);
+        var pair=new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),b.evidenceId(),com.yunjihai.rag.qa.conflict.EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
+        var question=com.yunjihai.rag.qa.domain.QaQuestion.normalize("星河项目的备份保留多久？");
+        assertEquals(com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy.Scope.UNRELATED,policy.classify(question,pair,List.of(a,b,sourceEvidence)));
+        jdbc.sql("INSERT INTO acl_entry(id,space_id,scope,principal_type,principal_id) VALUES (:id,:space,'SPACE','USER',:actor)")
+                .param("id",UUID.randomUUID()).param("space",spaceId).param("actor",actorId).update();
+        var selected=new ArrayList<com.yunjihai.rag.retrieval.domain.Evidence>();
+        for(int i=0;i<8;i++)selected.add(new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),backup.documentId(),
+                backup.versionId(),"body","制度",sourceEvidence.excerpt(),1,sourceEvidence.locator()));
+        var screening=new ArrayList<>(selected); screening.add(a); screening.add(b);
+        var dataSource=new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(),"rag_runtime_test","runtime_test_only");
+        var client=JdbcClient.create(dataSource);
+        var persistence=new JdbcQaPersistenceAdapter(client,new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource)),new com.fasterxml.jackson.databind.ObjectMapper());
+        com.yunjihai.rag.qa.model.ChatCompletionPort chat=new com.yunjihai.rag.qa.model.ChatCompletionPort() {
+            @Override public com.yunjihai.rag.qa.model.ModelCallDescriptor descriptor() {
+                return new com.yunjihai.rag.qa.model.ModelCallDescriptor("test","chat","fake","v1");
+            }
+            @Override public com.yunjihai.rag.qa.model.ModelGeneration generate(com.yunjihai.rag.qa.model.GroundedAnswerPrompt prompt) {
+                String answer="备份保留30天"; var support=new com.yunjihai.rag.qa.domain.EvidenceSupport(selected.getFirst().evidenceId(),answer);
+                var claim=new com.yunjihai.rag.qa.domain.GroundedClaim(UUID.randomUUID(),answer,List.of(support));
+                return new com.yunjihai.rag.qa.model.ModelGeneration(new com.yunjihai.rag.qa.domain.CandidateAnswer(
+                        com.yunjihai.rag.qa.domain.CandidateAnswer.Decision.ANSWER,answer,List.of(claim)),
+                        new com.yunjihai.rag.qa.model.ModelUsage(0,0,java.time.Duration.ZERO),"test",0);
+            }
+        };
+        com.yunjihai.rag.retrieval.RetrievalService retrieval=query -> new com.yunjihai.rag.retrieval.domain.EvidencePack(
+                query.requestId(),selected,false,Set.of(),new com.yunjihai.rag.retrieval.domain.RetrievalStats(10,0,10,10,8),Instant.now(),screening);
+        var qa=new com.yunjihai.rag.qa.GroundedQaService((actor,at)->Set.of(spaceId),retrieval,persistence,ignored->{},
+                ignored->"a".repeat(64),new com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer(Set.of()),chat,
+                new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector(new JdbcTableEvidenceSource(client)),
+                new com.yunjihai.rag.qa.ExactQuoteCitationSupportVerifier(),com.yunjihai.rag.qa.QaPolicy.defaults(),
+                new JdbcQaEvidenceAuthorizationAdapter(client),java.time.Clock.systemUTC(),com.yunjihai.rag.qa.QaMetrics.noop(),
+                new com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry(),new com.yunjihai.rag.qa.conflict.BackupBudgetQuestionScopedPolicy(new JdbcTableEvidenceSource(client)));
+        var answer=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actorId,question.value()));
+        assertInstanceOf(com.yunjihai.rag.qa.domain.QaOutcome.Answered.class,answer);
+        assertTrue(qa.find(answer.requestId(),actorId).isPresent());
+        insertNode(backup.versionId(),"qualifier","PARAGRAPH","只用于测试环境",null,1,null,null,1);
+        assertEquals(com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy.Scope.UNKNOWN,policy.classify(question,pair,List.of(a,b,sourceEvidence)));
+        assertTrue(qa.find(answer.requestId(),actorId).isEmpty());
+    }
+
+    @Test
     void pagesSpaceAndAllDocumentsWithoutDuplicatesOrOmissions() {
         var expectedSpace = new HashSet<UUID>();
         for (int index = 0; index < 5; index++) {

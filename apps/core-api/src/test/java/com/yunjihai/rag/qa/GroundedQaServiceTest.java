@@ -194,7 +194,7 @@ class GroundedQaServiceTest {
         assertThat(harness.service().ask(command("星河备份多久？"))).isInstanceOf(QaOutcome.Answered.class);
         assertThat(policy.screeningCount).isEqualTo(10);
         assertThat(harness.savedScreeningCount).isEqualTo(10);
-        assertThat(policy.classifications).isEqualTo(1);
+        assertThat(policy.classifications).isEqualTo(2);
         assertThat(policy.answerChecks).isEqualTo(1);
         assertThat(harness.modelCalls).hasValue(1);
         assertThat(harness.prompt.get().policyVersion()).isEqualTo("qa-scoped-test-v1");
@@ -207,6 +207,33 @@ class GroundedQaServiceTest {
         assertThat(rejected.service().ask(command("星河备份多久？")))
                 .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.UNSUPPORTED_CLAIM,false));
         assertThat(rejected.modelCalls).hasValue(1);
+    }
+
+    @Test
+    void builtInPolicyAnswersOnlyWhenAllScreeningCandidatesAreRecognized() {
+        var harness=new Harness(); var selected=new ArrayList<Evidence>();
+        for(int i=0;i<8;i++) selected.add(new Evidence(id(10),id(100+i),id(200+i),id(300+i),"node-"+i,
+                "制度","星河项目备份保留30天。",0.9,new MarkdownLocator(List.of("章节"),"node-"+i)));
+        var all=new ArrayList<>(selected);
+        for(int i=0;i<2;i++) all.add(new Evidence(id(10),id(900+i),id(910+i),id(920+i),i==0?"100":"120",
+                "预算","研发预算",0.8,new com.yunjihai.rag.retrieval.domain.TableLocator("预算",1,2,1,3)));
+        com.yunjihai.rag.qa.conflict.TableEvidenceSource tables=new com.yunjihai.rag.qa.conflict.TableEvidenceSource() {
+          @Override public boolean hasStandaloneBudgetContext(Evidence item) { return true; }
+          @Override public boolean hasStandaloneBackupContext(Evidence item) { return true; }
+          @Override public java.util.List<com.yunjihai.rag.ingestion.CanonicalTableCell> load(Evidence item) { return List.of(
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,0,1,1,"项目"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,1,1,1,"预算类别"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(0,2,1,1,"金额（万元）"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,0,1,1,"星河项目"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,1,1,1,"研发预算"),
+                new com.yunjihai.rag.ingestion.CanonicalTableCell(1,2,1,1,item.nodeId())); }
+        };
+        harness.conflictDetector=new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector(tables);
+        harness.scopedPolicy=new com.yunjihai.rag.qa.conflict.BackupBudgetQuestionScopedPolicy(tables);
+        harness.pack=new EvidencePack(id(1),selected,false,Set.of(),new RetrievalStats(10,0,10,10,8),NOW,all);
+        harness.answer=answer(id(100),"备份保留30天");
+        assertThat(harness.service().ask(command("星河项目的备份保留多久？"))).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(harness.modelCalls).hasValue(1);
     }
 
     @Test
@@ -236,6 +263,19 @@ class GroundedQaServiceTest {
                     .isEqualTo(new QaOutcome.Refused(id(1),revoked ? RefusalReason.NO_AUTHORIZED_SPACE : RefusalReason.UNSUPPORTED_CLAIM,false));
             assertThat(harness.modelCalls).hasValue(1);
         }
+    }
+
+    @Test
+    void refusesIfScopedContextBecomesUnknownDuringGeneration() {
+        var harness=new Harness(); harness.pack=typedConflictPack(2);
+        harness.answer=answer(id(100),"证据　正文 0");
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; policy.unknownAfterFirst=true;
+        harness.scopedPolicy=policy;
+        assertThat(harness.service().ask(command("星河备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.NO_AUTHORIZED_SPACE,false));
+        assertThat(harness.modelCalls).hasValue(1);
+        assertThat(harness.persistedOutcome).isInstanceOf(QaOutcome.Refused.class);
     }
 
     @Test
