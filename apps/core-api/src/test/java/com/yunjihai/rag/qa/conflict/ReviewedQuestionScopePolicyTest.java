@@ -25,10 +25,13 @@ class ReviewedQuestionScopePolicyTest {
                 new ReviewedQuestionScopePolicy.DocumentReview(source.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.RELEVANT)),
                 List.of(new ReviewedQuestionScopePolicy.ClaimReview(source.documentId(),source.versionId(),source.nodeId(),
                         digest.apply("claim:备份保留30天"),digest.apply("quote:"+source.excerpt()))));
-        var policy=new ReviewedQuestionScopePolicy("reviewed-test-v1",List.of(review),e->Optional.of(HASH),digest::apply);
+        var policy=new ReviewedQuestionScopePolicy("reviewed-test-v1",List.of(review),e->Optional.of(HASH),digest::apply,(e,all)->true);
         var pair=new DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),b.evidenceId(),EvidenceConflictDetector.ConflictKind.TYPED_FACT);
+        assertThat(policy.requiresCompleteScreening(q)).isTrue();
+        assertThat(policy.requiresCompleteScreening(QaQuestion.normalize("未审核的问题？"))).isFalse();
+        assertThat(policy.classifyAll(q,List.of(),List.of(a,b,source))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNRELATED);
         assertThat(policy.classify(q,pair,List.of(a,b,source))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNRELATED);
-        var altered=new ReviewedQuestionScopePolicy("reviewed-test-v1",List.of(review),e->Optional.of(CHANGED),digest::apply);
+        var altered=new ReviewedQuestionScopePolicy("reviewed-test-v1",List.of(review),e->Optional.of(CHANGED),digest::apply,(e,all)->true);
         assertThat(altered.classify(q,pair,List.of(a,b,source))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNKNOWN);
         assertThat(policy.classify(q,pair,List.of(a,b,source,item("额外未知")))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNKNOWN);
         var relevantPair=new DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),source.evidenceId(),EvidenceConflictDetector.ConflictKind.TYPED_FACT);
@@ -78,7 +81,7 @@ class ReviewedQuestionScopePolicyTest {
         var claim=new ReviewedQuestionScopePolicy.ClaimReview(source.documentId(),source.versionId(),source.nodeId(),HASH,HASH);
         var review=new ReviewedQuestionScopePolicy.QuestionReview(sha256("question:"+q.value()),UUID.randomUUID(),true,docs,List.of(claim));
         var calls=new java.util.concurrent.atomic.AtomicInteger();
-        var policy=new ReviewedQuestionScopePolicy("review-v1",List.of(review),e->{calls.incrementAndGet();return Optional.of(HASH);},ReviewedQuestionScopePolicyTest::sha256);
+        var policy=new ReviewedQuestionScopePolicy("review-v1",List.of(review),e->{calls.incrementAndGet();return Optional.of(HASH);},ReviewedQuestionScopePolicyTest::sha256,(e,all)->true);
         var pair=new DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),b.evidenceId(),EvidenceConflictDetector.ConflictKind.TYPED_FACT);
         assertThat(policy.classifyAll(q,List.of(pair,pair),List.of(a,b,source))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNRELATED);
         assertThat(calls).hasValue(3);
@@ -94,11 +97,57 @@ class ReviewedQuestionScopePolicyTest {
         var first=QaQuestion.normalize("备份保留多久？"); var alias=QaQuestion.normalize("备份保留多长时间？");
         var reviews=List.of(new ReviewedQuestionScopePolicy.QuestionReview(sha256("question:"+first.value()),UUID.randomUUID(),true,docs,List.of(claim)),
                 new ReviewedQuestionScopePolicy.QuestionReview(sha256("question:"+alias.value()),UUID.randomUUID(),true,docs,List.of(claim)));
-        var policy=new ReviewedQuestionScopePolicy("review-v1",reviews,e->Optional.of(HASH),ReviewedQuestionScopePolicyTest::sha256);
+        var policy=new ReviewedQuestionScopePolicy("review-v1",reviews,e->Optional.of(HASH),ReviewedQuestionScopePolicyTest::sha256,(e,all)->true);
         var pair=new DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),b.evidenceId(),EvidenceConflictDetector.ConflictKind.TYPED_FACT);
         for(var question:List.of(first,alias))assertThat(policy.classifyAll(question,List.of(pair),List.of(a,b,source)))
                 .isEqualTo(QuestionScopedConflictPolicy.Scope.UNRELATED);
         assertThat(policy.classifyAll(QaQuestion.normalize("备份一定保留多久？"),List.of(pair),List.of(a,b,source)))
                 .isEqualTo(QuestionScopedConflictPolicy.Scope.UNKNOWN);
     }
+
+    @Test void refusesRelevantTableWhenCompleteCellCoverageCannotBeProved() {
+        var a=item("预算100万元"); var b=item("预算120万元");
+        var table=new Evidence(SPACE,UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),"n","预算表","预算表",1,
+                new TableLocator("预算表",1,2,1,2));
+        var q=QaQuestion.normalize("预算是多少？");
+        var docs=List.of(new ReviewedQuestionScopePolicy.DocumentReview(a.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.UNRELATED),
+                new ReviewedQuestionScopePolicy.DocumentReview(b.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.UNRELATED),
+                new ReviewedQuestionScopePolicy.DocumentReview(table.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.RELEVANT));
+        var claim=new ReviewedQuestionScopePolicy.ClaimReview(table.documentId(),table.versionId(),table.nodeId(),HASH,HASH);
+        var review=new ReviewedQuestionScopePolicy.QuestionReview(sha256("question:"+q.value()),UUID.randomUUID(),true,docs,List.of(claim));
+        var policy=new ReviewedQuestionScopePolicy("review-v1",List.of(review),e->Optional.of(HASH),ReviewedQuestionScopePolicyTest::sha256);
+        var pair=new DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),b.evidenceId(),EvidenceConflictDetector.ConflictKind.TYPED_FACT);
+        assertThat(policy.classifyAll(q,List.of(pair),List.of(a,b,table))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNKNOWN);
+    }
+
+    @Test void unrelatedReviewedTableDoesNotRequireCompleteTextCoverage() {
+        var table=new Evidence(SPACE,UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),"n","预算表","预算表",1,
+                new TableLocator("预算表",1,2,1,2));
+        var b=item("预算120万元"); var relevant=item("备份保留30天。");
+        var q=QaQuestion.normalize("备份保留多久？");
+        var docs=List.of(new ReviewedQuestionScopePolicy.DocumentReview(table.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.UNRELATED),
+                new ReviewedQuestionScopePolicy.DocumentReview(b.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.UNRELATED),
+                new ReviewedQuestionScopePolicy.DocumentReview(relevant.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.RELEVANT));
+        var claim=new ReviewedQuestionScopePolicy.ClaimReview(relevant.documentId(),relevant.versionId(),relevant.nodeId(),HASH,HASH);
+        var review=new ReviewedQuestionScopePolicy.QuestionReview(sha256("question:"+q.value()),UUID.randomUUID(),true,docs,List.of(claim));
+        var policy=new ReviewedQuestionScopePolicy("review-v1",List.of(review),e->Optional.of(HASH),ReviewedQuestionScopePolicyTest::sha256,(e,all)->true);
+        var pair=new DeterministicEvidenceConflictDetector.ConflictPair(table.evidenceId(),b.evidenceId(),EvidenceConflictDetector.ConflictKind.TYPED_FACT);
+        assertThat(policy.classifyAll(q,List.of(pair),List.of(table,b,relevant))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNRELATED);
+    }
+
+    @Test void refusesWhenARelevantDocumentsFullNodeCoverageHasNotBeenProved() {
+        var a=item("预算100万元"); var b=item("预算120万元"); var relevant=item("备份保留30天。");
+        var q=QaQuestion.normalize("备份保留多久？");
+        var docs=List.of(new ReviewedQuestionScopePolicy.DocumentReview(a.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.UNRELATED),
+                new ReviewedQuestionScopePolicy.DocumentReview(b.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.UNRELATED),
+                new ReviewedQuestionScopePolicy.DocumentReview(relevant.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.RELEVANT));
+        var claim=new ReviewedQuestionScopePolicy.ClaimReview(relevant.documentId(),relevant.versionId(),relevant.nodeId(),HASH,HASH);
+        var review=new ReviewedQuestionScopePolicy.QuestionReview(sha256("question:"+q.value()),UUID.randomUUID(),true,docs,List.of(claim));
+        var policy=new ReviewedQuestionScopePolicy("review-v1",List.of(review),e->Optional.of(HASH),ReviewedQuestionScopePolicyTest::sha256);
+        var pair=new DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),b.evidenceId(),EvidenceConflictDetector.ConflictKind.TYPED_FACT);
+        assertThat(policy.classifyAll(q,List.of(pair),List.of(a,b,relevant))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNKNOWN);
+        var complete=new ReviewedQuestionScopePolicy("review-v1",List.of(review),e->Optional.of(HASH),ReviewedQuestionScopePolicyTest::sha256,(e,all)->true);
+        assertThat(complete.classifyAll(q,List.of(pair),List.of(a,b,relevant))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNRELATED);
+    }
+
 }

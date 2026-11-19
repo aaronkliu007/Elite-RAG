@@ -26,6 +26,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -237,40 +238,6 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
     }
 
     @Test
-    void refusesToVerifyTableExcerptWhenCanonicalCellsContainOmittedFacts() {
-        var ids=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",1);
-        insertNode(ids.versionId(),"table","TABLE","研发预算",null,1,null,
-                "[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"金额\"},"
-                +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"100\"}]",0);
-        var locator=source.load(spaceId,ids.documentId(),SEQUENCE).nodes().getFirst().locator();
-        var evidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),ids.versionId(),
-                "table","投影文档","研发预算",1,locator);
-        assertTrue(new JdbcTableEvidenceSource(jdbc).verifiedContextFingerprint(evidence).isEmpty());
-    }
-
-    @Test
-    void refusesOverlappingMergedCellsAndAmbiguousCellBoundaries() {
-        String[][] cases={
-                {"预算\n项目","[{\"row\":0,\"column\":0,\"rowSpan\":2,\"columnSpan\":1,\"text\":\"预算\"},"
-                        +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"项目\"}]"},
-                {"预算\n金额\n100","[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"预算\\n金额\"},"
-                        +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"100\"}]"},
-                {"预算\n","[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"预算\"},"
-                        +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"\"}]"},
-                {"预算\n\u00a0\n100","[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"预算\"},"
-                        +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"\u00a0\"},"
-                        +"{\"row\":2,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"100\"}]"}};
-        for(var item:cases) {
-            var ids=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",1);
-            insertNode(ids.versionId(),"table","TABLE",item[0],null,1,null,item[1],0);
-            var locator=source.load(spaceId,ids.documentId(),SEQUENCE).nodes().getFirst().locator();
-            var evidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),ids.versionId(),
-                    "table","投影文档",item[0],1,locator);
-            assertTrue(new JdbcTableEvidenceSource(jdbc).verifiedContextFingerprint(evidence).isEmpty());
-        }
-    }
-
-    @Test
     void standaloneBudgetProofExaminesWholeCanonicalDocumentAndFailsClosed() {
         var ids=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",4);
         jdbc.sql("UPDATE document SET title='预算' WHERE id=:id").param("id",ids.documentId()).update();
@@ -331,6 +298,43 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
             timezone.execute("SET TIME ZONE 'Asia/Shanghai'");
             try(var rows=fingerprint.executeQuery()) { rows.next(); assertEquals(utc,rows.getString(1)); }
         }
+    }
+
+    @Test
+    void contextFingerprintChangesWhenTableCellsChangeEvenIfExcerptDoesNot() {
+        var ids=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",4);
+        String cells="[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"金额\"},"
+                +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"100\"}]";
+        insertNode(ids.versionId(),"table","TABLE","研发预算",null,1,null,cells,0);
+        var locator=source.load(spaceId,ids.documentId(),SEQUENCE).nodes().getFirst().locator();
+        var evidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),ids.versionId(),
+                "table","投影文档","研发预算",1,locator);
+        var tableSource=new JdbcTableEvidenceSource(jdbc);
+        String original=tableSource.verifiedContextFingerprint(evidence).orElseThrow();
+        jdbc.sql("UPDATE canonical_node SET table_cells=CAST(:cells AS jsonb) WHERE version_id=:version AND node_id='table'")
+                .param("cells",cells.replace("100","120")).param("version",ids.versionId()).update();
+        assertNotEquals(original,tableSource.verifiedContextFingerprint(evidence).orElseThrow());
+    }
+
+    @Test
+    void relevantTextDocumentMustIncludeEveryCurrentNodeAndCannotHideATable() {
+        var ids=publishedDocument(spaceId,false,true,"text/markdown",4);
+        insertNode(ids.versionId(),"first","PARAGRAPH","备份保留30天。",null,null,null,null,0);
+        insertNode(ids.versionId(),"second","PARAGRAPH","保留期限以审批结果为准。",null,null,null,null,1);
+        var snapshot=source.load(spaceId,ids.documentId(),SEQUENCE);
+        var candidates=snapshot.nodes().stream().map(node->new com.yunjihai.rag.retrieval.domain.Evidence(
+                spaceId,UUID.randomUUID(),ids.documentId(),ids.versionId(),node.nodeId(),snapshot.title(),node.bodyText(),1,node.locator())).toList();
+        var tableSource=new JdbcTableEvidenceSource(jdbc);
+        assertFalse(tableSource.hasFullyScreenedTextDocument(candidates.getFirst(),List.of(candidates.getFirst())));
+        assertTrue(tableSource.hasFullyScreenedTextDocument(candidates.getFirst(),candidates));
+        var expanded=tableSource.loadFullTextDocument(candidates.getFirst()).orElseThrow();
+        assertEquals(2,expanded.size());
+        assertTrue(tableSource.hasFullyScreenedTextDocument(candidates.getFirst(),expanded));
+        assertEquals(candidates.get(1).locator(),expanded.get(1).locator());
+        insertNode(ids.versionId(),"hidden-table","TABLE","预算",null,null,null,
+                "[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"预算\"}]",2);
+        assertFalse(tableSource.hasFullyScreenedTextDocument(candidates.getFirst(),candidates));
+        assertTrue(tableSource.loadFullTextDocument(candidates.getFirst()).isEmpty());
     }
 
     @Test

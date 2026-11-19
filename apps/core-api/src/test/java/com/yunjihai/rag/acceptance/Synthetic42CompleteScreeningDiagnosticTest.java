@@ -212,7 +212,7 @@ class Synthetic42CompleteScreeningDiagnosticTest {
                     assertFixtureCitation(jdbc,answer);
                 });
                 assertThat(jdbc.sql("SELECT qa_policy_version FROM qa_model_call_audit WHERE request_id=:id")
-                        .param("id",result.requestId()).query(String.class).single()).matches("qa-scoped-reviewed-[0-9a-f]{32}");
+                        .param("id",result.requestId()).query(String.class).single()).matches("qa-scoped-reviewed-v3-[0-9a-f]{32}");
                 if(first==null)first=result;
             }
             assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(3);
@@ -237,6 +237,44 @@ class Synthetic42CompleteScreeningDiagnosticTest {
                 jdbc.sql("UPDATE document SET title=:title WHERE id=:id").param("title",changed.title()).param("id",changed.documentId()).update();
             }
             assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(3);
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named="RAG_SYNTH_REVIEWED_TRIAL",matches="true")
+    void reviewedQuestionCompletesMissingAuthorizedDocumentNodeLocally() throws Exception {
+        SyntheticScopedPolicyConfiguration.MODEL_CALLS.set(0);
+        try(var context=startSyntheticContext(false,false,true)) {
+            var jdbc=context.getBean(JdbcClient.class);
+            UUID actor=jdbc.sql("SELECT id FROM app_user WHERE display_name=:name").param("name","模拟数据管理员").query(UUID.class).single();
+            var actual=context.getBean(TrustedRetrievalService.class);
+            var removed=new java.util.concurrent.atomic.AtomicReference<String>();
+            com.yunjihai.rag.retrieval.RetrievalService incomplete=query->{
+                var pack=actual.retrieve(query);
+                var candidate=pack.conflictScreeningEvidence().stream()
+                        .filter(e->e.title().equals("03_星河项目数据备份制度"))
+                        .filter(e->!e.excerpt().contains("30"))
+                        .findFirst().orElseThrow();
+                removed.set(candidate.nodeId());
+                var filtered=pack.conflictScreeningEvidence().stream().filter(e->!(e.documentId().equals(candidate.documentId()) && e.nodeId().equals(candidate.nodeId()))).toList();
+                var selected=pack.evidence().stream().filter(e->!(e.documentId().equals(candidate.documentId()) && e.nodeId().equals(candidate.nodeId()))).toList();
+                return new com.yunjihai.rag.retrieval.domain.EvidencePack(pack.requestId(),selected,pack.degraded(),
+                        pack.degradationReasons(),pack.stats(),pack.completedAt(),filtered);
+            };
+            var qa=new com.yunjihai.rag.qa.GroundedQaService(context.getBean(com.yunjihai.rag.qa.AuthorizedSpaceScopePort.class),incomplete,
+                    context.getBean(com.yunjihai.rag.qa.QaPersistencePort.class),context.getBean(com.yunjihai.rag.qa.ModelCallAuditPort.class),
+                    context.getBean(com.yunjihai.rag.qa.QuestionDigestPort.class),context.getBean(com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer.class),
+                    context.getBean(com.yunjihai.rag.qa.model.ChatCompletionPort.class),context.getBean(com.yunjihai.rag.qa.conflict.EvidenceConflictDetector.class),
+                    context.getBean(com.yunjihai.rag.qa.CitationSupportVerifier.class),context.getBean(com.yunjihai.rag.qa.QaPolicy.class),
+                    context.getBean(com.yunjihai.rag.qa.QaEvidenceAuthorizationPort.class),context.getBean(java.time.Clock.class),
+                    context.getBean(com.yunjihai.rag.qa.QaMetrics.class),context.getBean(com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry.class),
+                    context.getBean(com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy.class));
+            var result=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,"星河项目的备份保留多久？"));
+            assertThat(removed.get()).isNotBlank();
+            assertThat(result).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Answered.class,
+                    answered->assertThat(answered.answer()).isEqualTo("备份保留30天"));
+            assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(1);
+            assertThat(qa.find(result.requestId(),actor)).isPresent();
         }
     }
 

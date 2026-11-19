@@ -61,6 +61,17 @@ class ReviewedManifestTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MODULE.build_manifest({"questions": [item, duplicate]}, b"k" * 32)
 
+    def test_shared_java_fixture_is_generated_by_the_current_script(self):
+        doc = "00000000-0000-0000-0000-000000000001"
+        version = "00000000-0000-0000-0000-000000000002"
+        reviewed = {"questions": [{"question": "备份多久？", "approvalId": version, "allDocumentsReviewed": True,
+            "questionAliases": [{"question": "备份保留多长时间？", "approvalId": doc, "reviewed": True}],
+            "documents": [{"documentId": doc, "contextFingerprint": "a" * 64, "relation": "RELEVANT"}],
+            "claims": [{"documentId": doc, "versionId": version, "nodeId": "n", "text": "30天", "quote": "保留30天"}]}]}
+        fixture = Path(__file__).parents[2] / "apps/core-api/src/test/resources/reviewed-alias-manifest.json"
+        expected = MODULE.seal_manifest(MODULE.build_manifest(reviewed, b"k" * 32), b"k" * 32)
+        self.assertEqual(json.loads(fixture.read_text(encoding="utf-8-sig")), expected)
+
     def test_outputs_only_hmac_and_approved_metadata(self):
         key = b"k" * 32
         doc = "00000000-0000-0000-0000-000000000001"

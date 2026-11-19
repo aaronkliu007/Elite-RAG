@@ -98,8 +98,8 @@ public class WorkerRuntimeConfiguration {
             var manifest=mapper.readValue(payload,com.yunjihai.rag.qa.conflict.ReviewedQuestionScopePolicy.Manifest.class);
             String fingerprint=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
             var source=new com.yunjihai.rag.infrastructure.postgres.JdbcTableEvidenceSource(jdbc);
-            return new com.yunjihai.rag.qa.conflict.ReviewedQuestionScopePolicy("reviewed-"+fingerprint.substring(0,32),
-                    manifest.questions(),source::verifiedContextFingerprint,digests);
+            return new com.yunjihai.rag.qa.conflict.ReviewedQuestionScopePolicy("reviewed-v3-"+fingerprint.substring(0,32),
+                    manifest.questions(),source::verifiedContextFingerprint,digests,source::hasFullyScreenedTextDocument,source::loadFullTextDocument);
         } catch(Exception invalid) {
             throw new IllegalStateException("INVALID_REVIEW_MANIFEST");
         }

@@ -80,10 +80,37 @@ class WorkerRuntimeConfigurationTest {
                 encoded,digests.digest("manifest:"+encoded))));
         var jdbc=org.springframework.jdbc.core.simple.JdbcClient.create(new org.springframework.jdbc.datasource.DriverManagerDataSource());
         var config=new WorkerRuntimeConfiguration();
-        assertThat(config.reviewedQuestionScopePolicy(jdbc,digests,file.toString())).isInstanceOf(policy);
+        var loaded=config.reviewedQuestionScopePolicy(jdbc,digests,file.toString());
+        assertThat(loaded).isInstanceOf(policy);
+        assertThat(loaded.version()).matches("reviewed-v3-[0-9a-f]{32}");
         java.nio.file.Files.write(file,mapper.writeValueAsBytes(new com.yunjihai.rag.qa.conflict.ReviewedQuestionScopePolicy.SignedManifest(encoded,"0".repeat(64))));
         assertThatThrownBy(()->config.reviewedQuestionScopePolicy(jdbc,digests,file.toString()))
                 .isInstanceOf(IllegalStateException.class).hasMessage("INVALID_REVIEW_MANIFEST");
+    }
+
+    @Test
+    void pythonGeneratedManifestApprovesOnlyItsExplicitAliases(@org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+        var resource=getClass().getResourceAsStream("/reviewed-alias-manifest.json");
+        assertThat(resource).as("Python 生成的合成签名清单").isNotNull();
+        var file=directory.resolve("manifest.json");
+        try(resource) { java.nio.file.Files.copy(resource,file); }
+        var digests=new com.yunjihai.rag.infrastructure.crypto.HmacQuestionDigest("k".repeat(32).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var jdbc=org.springframework.jdbc.core.simple.JdbcClient.create(new org.springframework.jdbc.datasource.DriverManagerDataSource());
+        var policy=new WorkerRuntimeConfiguration().reviewedQuestionScopePolicy(jdbc,digests,file.toString());
+        var doc=java.util.UUID.fromString("00000000-0000-0000-0000-000000000001");
+        var version=java.util.UUID.fromString("00000000-0000-0000-0000-000000000002");
+        var id=java.util.UUID.randomUUID();
+        var evidence=new com.yunjihai.rag.qa.domain.QaEvidence(id,java.util.UUID.randomUUID(),doc,version,"n","制度","保留30天",1,
+                new com.yunjihai.rag.retrieval.domain.MarkdownLocator(java.util.List.of("章节"),"n"));
+        var claim=new com.yunjihai.rag.qa.domain.GroundedClaim(java.util.UUID.randomUUID(),"30天",
+                java.util.List.of(new com.yunjihai.rag.qa.domain.EvidenceSupport(id,"保留30天")));
+        var answer=new com.yunjihai.rag.qa.domain.CandidateAnswer(com.yunjihai.rag.qa.domain.CandidateAnswer.Decision.ANSWER,"30天",java.util.List.of(claim));
+        var bundle=new com.yunjihai.rag.qa.domain.EvidenceBundle(java.util.List.of(evidence),evidence.excerpt().codePointCount(0,evidence.excerpt().length()));
+        for(String text:java.util.List.of("备份多久？","备份保留多长时间？"))
+            assertThat(policy.verifyAnswer(com.yunjihai.rag.qa.domain.QaQuestion.normalize(text),answer,bundle))
+                    .isEqualTo(QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT);
+        assertThat(policy.verifyAnswer(com.yunjihai.rag.qa.domain.QaQuestion.normalize("备份一定保留多久？"),answer,bundle))
+                .isEqualTo(QuestionScopedConflictPolicy.AnswerRelevance.UNKNOWN);
     }
 
     private static final class UUIDSet {

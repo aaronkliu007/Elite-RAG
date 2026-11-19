@@ -210,6 +210,102 @@ class GroundedQaServiceTest {
     }
 
     @Test
+    void completesAnAuthorizedDocumentForLocalConflictScreeningWithoutSendingExtraNodesToTheModel() {
+        var harness=new Harness(); harness.pack=typedConflictPack(2);
+        var original=harness.pack.conflictScreeningEvidence().getFirst();
+        var extra=new Evidence(original.spaceId(),id(997),original.documentId(),original.versionId(),"node-extra",
+                original.title(),"完整文档的补充说明",0.0,new MarkdownLocator(List.of("第一章"),"node-extra"));
+        harness.answer=answer(id(100),"证据　正文 0");
+        harness.scopedPolicy=new QuestionScopedConflictPolicy() {
+            @Override public String version() { return "expansion-test-v1"; }
+            public Optional<List<Evidence>> expandScreening(com.yunjihai.rag.qa.domain.QaQuestion q,List<Evidence> candidates) {
+                var expanded=new ArrayList<>(candidates); expanded.add(extra); return Optional.of(expanded);
+            }
+            @Override public Scope classify(com.yunjihai.rag.qa.domain.QaQuestion q,
+                    DeterministicEvidenceConflictDetector.ConflictPair pair,List<Evidence> candidates) {
+                return candidates.contains(extra)?Scope.UNRELATED:Scope.UNKNOWN;
+            }
+            @Override public AnswerRelevance verifyAnswer(com.yunjihai.rag.qa.domain.QaQuestion q,
+                    CandidateAnswer candidate,com.yunjihai.rag.qa.domain.EvidenceBundle bundle) { return AnswerRelevance.RELEVANT; }
+        };
+        assertThat(harness.service().ask(command("星河备份多久？"))).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(harness.prompt.get().evidence().evidence()).noneMatch(item->item.nodeId().equals(extra.nodeId()));
+        assertThat(harness.savedScreeningCount).isEqualTo(10);
+    }
+
+    @Test
+    void refusesWhenSupplementalScreeningBecomesUnavailableAfterModelCall() {
+        var harness=new Harness(); harness.pack=typedConflictPack(2);
+        harness.answer=answer(id(100),"证据　正文 0");
+        var expansions=new AtomicInteger();
+        harness.scopedPolicy=new QuestionScopedConflictPolicy() {
+            @Override public String version() { return "late-expansion-v1"; }
+            @Override public Optional<List<Evidence>> expandScreening(com.yunjihai.rag.qa.domain.QaQuestion q,List<Evidence> candidates) {
+                return expansions.incrementAndGet()==1?Optional.of(candidates):Optional.empty();
+            }
+            @Override public Scope classify(com.yunjihai.rag.qa.domain.QaQuestion q,
+                    DeterministicEvidenceConflictDetector.ConflictPair pair,List<Evidence> candidates) { return Scope.UNRELATED; }
+            @Override public AnswerRelevance verifyAnswer(com.yunjihai.rag.qa.domain.QaQuestion q,
+                    CandidateAnswer answer,com.yunjihai.rag.qa.domain.EvidenceBundle bundle) { return AnswerRelevance.RELEVANT; }
+        };
+        assertThat(harness.service().ask(command("星河备份多久？"))).isInstanceOf(QaOutcome.Refused.class);
+        assertThat(expansions).hasValue(2);
+        assertThat(harness.modelCalls).hasValue(1);
+    }
+
+    @Test
+    void reviewedQuestionFindsConflictHiddenFromInitialRetrieval() {
+        var harness=new Harness(); harness.pack=typedConflictPack(1);
+        var source=harness.pack.conflictScreeningEvidence().getLast();
+        var hidden=new Evidence(source.spaceId(),id(997),source.documentId(),source.versionId(),"hidden",
+                source.title(),"星河项目研发预算为120万元。",0,new MarkdownLocator(List.of("预算"),"hidden"));
+        var expansions=new AtomicInteger();
+        harness.scopedPolicy=new QuestionScopedConflictPolicy() {
+            @Override public String version() { return "hidden-conflict-v1"; }
+            @Override public boolean requiresCompleteScreening(com.yunjihai.rag.qa.domain.QaQuestion q) { return true; }
+            @Override public Optional<List<Evidence>> expandScreening(com.yunjihai.rag.qa.domain.QaQuestion q,List<Evidence> candidates) {
+                expansions.incrementAndGet(); var result=new ArrayList<>(candidates); result.add(hidden); return Optional.of(result);
+            }
+            @Override public Scope classify(com.yunjihai.rag.qa.domain.QaQuestion q,
+                    DeterministicEvidenceConflictDetector.ConflictPair pair,List<Evidence> candidates) { return Scope.UNKNOWN; }
+            @Override public AnswerRelevance verifyAnswer(com.yunjihai.rag.qa.domain.QaQuestion q,
+                    CandidateAnswer answer,com.yunjihai.rag.qa.domain.EvidenceBundle bundle) { return AnswerRelevance.RELEVANT; }
+        };
+        assertThat(harness.service().ask(command("星河预算多少？"))).isInstanceOf(QaOutcome.Refused.class);
+        assertThat(expansions).hasValue(1);
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void rejectsUnsafeOrUnavailableSupplementalScreening() {
+        for(int mode=0;mode<5;mode++) {
+            var harness=new Harness(); harness.pack=typedConflictPack(2);
+            var original=harness.pack.conflictScreeningEvidence().getFirst();
+            final int scenario=mode;
+            harness.scopedPolicy=new QuestionScopedConflictPolicy() {
+                @Override public String version() { return "expansion-guard-v1"; }
+                @Override public Optional<List<Evidence>> expandScreening(com.yunjihai.rag.qa.domain.QaQuestion q,List<Evidence> candidates) {
+                    if(scenario==0)throw new IllegalStateException("unavailable");
+                    if(scenario==1)return Optional.empty();
+                    var result=new ArrayList<>(candidates);
+                    if(scenario==2)result.removeFirst();
+                    if(scenario==3)result.add(new Evidence(original.spaceId(),id(997),id(998),original.versionId(),"extra",
+                            original.title(),"补充内容",0,new MarkdownLocator(List.of("章节"),"extra")));
+                    if(scenario==4)result.add(new Evidence(original.spaceId(),original.evidenceId(),original.documentId(),original.versionId(),"extra",
+                            original.title(),"补充内容",0,new MarkdownLocator(List.of("章节"),"extra")));
+                    return Optional.of(result);
+                }
+                @Override public Scope classify(com.yunjihai.rag.qa.domain.QaQuestion q,
+                        DeterministicEvidenceConflictDetector.ConflictPair pair,List<Evidence> candidates) { return Scope.UNRELATED; }
+                @Override public AnswerRelevance verifyAnswer(com.yunjihai.rag.qa.domain.QaQuestion q,
+                        CandidateAnswer answer,com.yunjihai.rag.qa.domain.EvidenceBundle bundle) { return AnswerRelevance.RELEVANT; }
+            };
+            assertThat(harness.service().ask(command("星河备份多久？"))).isInstanceOf(QaOutcome.Refused.class);
+            assertThat(harness.modelCalls).hasValue(0);
+        }
+    }
+
+    @Test
     void builtInPolicyAnswersOnlyWhenAllScreeningCandidatesAreRecognized() {
         var harness=new Harness(); var selected=new ArrayList<Evidence>();
         for(int i=0;i<8;i++) selected.add(new Evidence(id(10),id(100+i),id(200+i),id(300+i),"node-"+i,

@@ -38,31 +38,50 @@ public final class JdbcTableEvidenceSource implements TableEvidenceSource {
             return java.util.Optional.empty();
         boolean matches=canonical.nodes().stream().anyMatch(node->node.nodeId().equals(evidence.nodeId())
                 && node.bodyText().equals(evidence.excerpt()) && node.locator().equals(evidence.locator()));
-        if(matches && evidence.locator() instanceof com.yunjihai.rag.retrieval.domain.TableLocator
-                && !containsCompleteTable(evidence))return java.util.Optional.empty();
         return matches ? fingerprint : java.util.Optional.empty();
     }
 
-    /** Ensures text coverage and rejects ambiguous cells; semantic interpretation still needs separate review. */
-    private boolean containsCompleteTable(Evidence evidence) {
+    /** Loads supplemental text nodes only from the same current authorized document. */
+    public java.util.Optional<List<Evidence>> loadFullTextDocument(Evidence evidence) {
         try {
-            var cells=load(evidence); var occupied=new java.util.HashSet<Long>();
-            for(var cell:cells)if(cell==null || cell.row()<0 || cell.column()<0 || cell.rowSpan()<1 || cell.columnSpan()<1
-                    || cell.text()==null || cell.text().codePoints().allMatch(cp->Character.isWhitespace(cp) || Character.isSpaceChar(cp))
-                    || cell.text().matches("(?s).*\\R.*"))return false;
-            for(var cell:cells) {
-                long rowEnd=(long)cell.row()+cell.rowSpan(),columnEnd=(long)cell.column()+cell.columnSpan();
-                if(rowEnd>Integer.MAX_VALUE || columnEnd>Integer.MAX_VALUE
-                        || (long)cell.rowSpan()*cell.columnSpan()>16384
-                        || occupied.size()+(long)cell.rowSpan()*cell.columnSpan()>16384)return false;
-                for(long row=cell.row();row<rowEnd;row++) for(long column=cell.column();column<columnEnd;column++)
-                    if(!occupied.add((row<<32)|column))return false;
+            var snapshot=new JdbcRetrievalProjectionSource(jdbc).load(evidence.spaceId(),evidence.documentId(),0);
+            if(!snapshot.indexable() || !evidence.versionId().equals(snapshot.versionId())
+                    || !evidence.title().equals(snapshot.title()) || snapshot.nodes().size()>128)return java.util.Optional.empty();
+            var result=new java.util.ArrayList<Evidence>();
+            for(var node:snapshot.nodes()) {
+                if(!List.of("TITLE","HEADING","PARAGRAPH").contains(node.kind())
+                        || node.bodyText().codePointCount(0,node.bodyText().length())>=1200)return java.util.Optional.empty();
+                result.add(new Evidence(evidence.spaceId(),node.candidateId(),evidence.documentId(),evidence.versionId(),
+                        node.nodeId(),evidence.title(),node.bodyText(),evidence.score(),node.locator()));
             }
-            var ordered=cells.stream().sorted(java.util.Comparator.comparingInt(CanonicalTableCell::row)
-                    .thenComparingInt(CanonicalTableCell::column)).toList();
-            return evidence.excerpt().equals(ordered.stream().map(CanonicalTableCell::text)
-                    .collect(java.util.stream.Collectors.joining("\n")));
-        } catch(RuntimeException invalid) { return false; }
+            return hasFullyScreenedTextDocument(evidence,result) ? java.util.Optional.of(List.copyOf(result)) : java.util.Optional.empty();
+        } catch(RuntimeException unavailable) { return java.util.Optional.empty(); }
+    }
+
+    /** Requires every canonical node of a relevant plain-text document in the screened set. */
+    public boolean hasFullyScreenedTextDocument(Evidence evidence,List<Evidence> candidates) {
+        if(evidence==null || candidates==null)return false;
+        try {
+            var rows=jdbc.sql("""
+                    SELECT n.node_id,n.kind,n.body_text FROM document d
+                    JOIN document_version v ON v.id=d.current_published_version_id AND v.document_id=d.id
+                    JOIN canonical_document c ON c.version_id=v.id
+                    JOIN canonical_node n ON n.version_id=v.id
+                    WHERE d.id=:document AND d.space_id=:space AND d.title=:title AND NOT d.archived
+                      AND v.id=:version AND v.status='PUBLISHED' AND v.parse_status='SUCCEEDED'
+                    ORDER BY n.stable_order LIMIT 513
+                    """).param("document",evidence.documentId()).param("space",evidence.spaceId())
+                    .param("title",evidence.title()).param("version",evidence.versionId())
+                    .query((rs,row)->new String[]{rs.getString(1),rs.getString(2),rs.getString(3)}).list();
+            if(rows.isEmpty() || rows.size()>512)return false;
+            for(var row:rows) {
+                if(!List.of("TITLE","HEADING","PARAGRAPH").contains(row[1]) || row[2]==null)return false;
+                if(candidates.stream().noneMatch(item->item!=null && item.spaceId().equals(evidence.spaceId())
+                        && item.documentId().equals(evidence.documentId()) && item.versionId().equals(evidence.versionId())
+                        && item.nodeId().equals(row[0]) && item.title().equals(evidence.title()) && item.excerpt().equals(row[2])))return false;
+            }
+            return true;
+        } catch(RuntimeException unavailable) { return false; }
     }
 
     @Override public boolean hasStandaloneBudgetContext(Evidence evidence) {

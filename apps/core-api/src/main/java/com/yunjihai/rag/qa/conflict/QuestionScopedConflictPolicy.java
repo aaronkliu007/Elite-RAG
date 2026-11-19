@@ -5,6 +5,7 @@ import com.yunjihai.rag.qa.domain.EvidenceBundle;
 import com.yunjihai.rag.qa.domain.QaQuestion;
 import com.yunjihai.rag.retrieval.domain.Evidence;
 import java.util.List;
+import java.util.Optional;
 
 /** Trusted local deployment extension. It receives authorized but unsanitized candidates: never send them externally. */
 public interface QuestionScopedConflictPolicy {
@@ -19,8 +20,14 @@ public interface QuestionScopedConflictPolicy {
         for(var pair:pairs)if(classify(question,pair,authorizedScreeningCandidates)!=Scope.UNRELATED)return Scope.UNKNOWN;
         return Scope.UNRELATED;
     }
+    /** Supplemental nodes stay local and must belong to an already authorized document. */
+    default Optional<List<Evidence>> expandScreening(QaQuestion question,List<Evidence> candidates) {
+        return Optional.of(List.copyOf(candidates));
+    }
     AnswerRelevance verifyAnswer(QaQuestion question, CandidateAnswer answer, EvidenceBundle evidence);
     default boolean enabled() { return true; }
+    /** Reviewed questions must be screened even if retrieved nodes show no conflict. */
+    default boolean requiresCompleteScreening(QaQuestion question) { return false; }
     /** Stable, non-sensitive identifier; change it whenever the policy or its rules change. */
     String version();
 

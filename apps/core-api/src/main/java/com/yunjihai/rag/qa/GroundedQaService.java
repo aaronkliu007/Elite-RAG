@@ -249,7 +249,7 @@ public final class GroundedQaService {
         try {
             var conflictKind = Objects.requireNonNull(conflictDetector.conflictKind(pack.conflictScreeningEvidence()));
             evaluationTraces.recordConflictScreeningCompleted(command.requestId());
-            if (conflictKind != EvidenceConflictDetector.ConflictKind.NONE) {
+            if (conflictKind != EvidenceConflictDetector.ConflictKind.NONE || scopedPolicy.requiresCompleteScreening(safeQuestion)) {
                 LOGGER.info("qa_conflict_screening_detected requestId={} kind={}", command.requestId(), conflictKind);
                 var scopedVersion=allConflictsExplicitlyUnrelated(command.question(),safeQuestion,pack.conflictScreeningEvidence());
                 if (scopedVersion.isEmpty()) {
@@ -443,14 +443,25 @@ public final class GroundedQaService {
         if(!scopedPolicy.enabled() || !(conflictDetector instanceof DeterministicEvidenceConflictDetector detector))return Optional.empty();
         String version=scopedPolicy.version();
         if(version==null || !version.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,47}"))return Optional.empty();
-        var immutable=java.util.List.copyOf(candidates);
+        final java.util.List<Evidence> immutable;
+        try {
+            var original=java.util.List.copyOf(candidates);
+            var expanded=scopedPolicy.expandScreening(question,original);
+            if(expanded.isEmpty())return Optional.empty();
+            immutable=java.util.List.copyOf(expanded.get());
+            if(immutable.isEmpty() || immutable.size()>128 || !immutable.containsAll(original))return Optional.empty();
+            for(var item:immutable) {
+                if(original.stream().noneMatch(source->source.spaceId().equals(item.spaceId())
+                        && source.documentId().equals(item.documentId()) && source.versionId().equals(item.versionId())
+                        && source.title().equals(item.title())))return Optional.empty();
+            }
+        } catch(RuntimeException unavailable) { return Optional.empty(); }
         // Retrieval clips screening excerpts at 1200 code points; equal length is ambiguous too.
         if(immutable.stream().anyMatch(item->item.excerpt().codePointCount(0,item.excerpt().length())>=1200))
             return Optional.empty();
         var ids=immutable.stream().map(Evidence::evidenceId).collect(java.util.stream.Collectors.toSet());
         if(ids.size()!=immutable.size())return Optional.empty();
         var pairs=detector.findConflictingPairs(immutable);
-        if(pairs.isEmpty())return Optional.empty();
         for(var pair:pairs) {
             if(!ids.contains(pair.firstEvidenceId()) || !ids.contains(pair.secondEvidenceId())
                     || pair.kind()==EvidenceConflictDetector.ConflictKind.IDENTITY
