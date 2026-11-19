@@ -306,6 +306,20 @@ public final class JdbcQaPersistenceAdapter implements QaPersistencePort {
     }
 
     @Override
+    public Optional<String> answerPolicyVersion(UUID requestId, UUID actorId) {
+        Objects.requireNonNull(requestId); Objects.requireNonNull(actorId);
+        try {
+            return jdbc.sql("""
+                    SELECT audit.qa_policy_version FROM qa_model_call_audit audit
+                    JOIN qa_request request ON request.id=audit.request_id
+                    WHERE request.id=:id AND request.actor_id=:actor AND request.status='ANSWERED'
+                    """).param("id",requestId).param("actor",actorId).query(String.class).optional();
+        } catch(DataAccessException failure) {
+            throw PostgresPersistenceExceptionTranslator.translate(failure);
+        }
+    }
+
+    @Override
     public Optional<QaOutcome> find(UUID requestId, UUID actorId) {
         Objects.requireNonNull(requestId); Objects.requireNonNull(actorId);
         try {

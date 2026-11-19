@@ -251,7 +251,7 @@ public final class GroundedQaService {
             evaluationTraces.recordConflictScreeningCompleted(command.requestId());
             if (conflictKind != EvidenceConflictDetector.ConflictKind.NONE) {
                 LOGGER.info("qa_conflict_screening_detected requestId={} kind={}", command.requestId(), conflictKind);
-                var scopedVersion=allConflictsExplicitlyUnrelated(safeQuestion,pack.conflictScreeningEvidence());
+                var scopedVersion=allConflictsExplicitlyUnrelated(command.question(),safeQuestion,pack.conflictScreeningEvidence());
                 if (scopedVersion.isEmpty()) {
                     return complete(state, command.actorId(), new QaOutcome.Refused(
                             command.requestId(), RefusalReason.CONFLICTING_EVIDENCE, pack.degraded()));
@@ -411,7 +411,7 @@ public final class GroundedQaService {
                         state.requestId(), state.revision(), answered, clock.instant(),
                         () -> evidenceAuthorization.allAuthorized(
                                 command.requestId(), command.actorId(), clock.instant())
-                                && (!recheckScope || allConflictsExplicitlyUnrelated(safeQuestion,pack.conflictScreeningEvidence())
+                                && (!recheckScope || allConflictsExplicitlyUnrelated(command.question(),safeQuestion,pack.conflictScreeningEvidence())
                                 .filter(expectedPolicyVersion::equals).isPresent()));
                 if (!completed.authorized()) {
                     return complete(state, command.actorId(), new QaOutcome.Refused(
@@ -429,7 +429,17 @@ public final class GroundedQaService {
         }
     }
 
-    private Optional<String> allConflictsExplicitlyUnrelated(QaQuestion question,java.util.List<Evidence> candidates) {
+    private Optional<String> allConflictsExplicitlyUnrelated(String originalQuestion,QaQuestion question,java.util.List<Evidence> candidates) {
+        var identityText=new StringBuilder();
+        originalQuestion.codePoints().filter(codePoint -> {
+            int type=Character.getType(codePoint);
+            return !Character.isWhitespace(codePoint) && !Character.isSpaceChar(codePoint)
+                    && type!=Character.CONNECTOR_PUNCTUATION && type!=Character.DASH_PUNCTUATION
+                    && type!=Character.START_PUNCTUATION && type!=Character.END_PUNCTUATION
+                    && type!=Character.INITIAL_QUOTE_PUNCTUATION && type!=Character.FINAL_QUOTE_PUNCTUATION
+                    && type!=Character.OTHER_PUNCTUATION;
+        }).forEach(identityText::appendCodePoint);
+        if(!java.text.Normalizer.isNormalized(identityText,java.text.Normalizer.Form.NFKC))return Optional.empty();
         if(!scopedPolicy.enabled() || !(conflictDetector instanceof DeterministicEvidenceConflictDetector detector))return Optional.empty();
         String version=scopedPolicy.version();
         if(version==null || !version.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,47}"))return Optional.empty();
@@ -448,8 +458,7 @@ public final class GroundedQaService {
                     || (pair.kind()!=EvidenceConflictDetector.ConflictKind.TYPED_FACT
                         && pair.kind()!=EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE))return Optional.empty();
         }
-        for(var pair:pairs)
-            if(scopedPolicy.classify(question,pair,immutable)!=QuestionScopedConflictPolicy.Scope.UNRELATED)return Optional.empty();
+        if(scopedPolicy.classifyAll(question,pairs,immutable)!=QuestionScopedConflictPolicy.Scope.UNRELATED)return Optional.empty();
         return Optional.of("qa-scoped-"+version);
     }
 
@@ -486,10 +495,16 @@ public final class GroundedQaService {
         Objects.requireNonNull(actorId, "actorId must not be null");
         try {
             return persistence.findAuthorized(requestId, actorId,
-                    () -> evidenceAuthorization.allAuthorized(requestId, actorId, clock.instant()));
+                    () -> evidenceAuthorization.allAuthorized(requestId, actorId, clock.instant())
+                            && persistence.answerPolicyVersion(requestId,actorId).filter(this::isCurrentAnswerPolicy).isPresent());
         } catch (RuntimeException unavailable) {
             return Optional.empty();
         }
+    }
+
+    private boolean isCurrentAnswerPolicy(String version) {
+        if(!version.startsWith("qa-scoped-"))return true;
+        return scopedPolicy.enabled() && version.equals("qa-scoped-"+scopedPolicy.version());
     }
 
     public Optional<Instant> completedAt(UUID requestId, UUID actorId) {

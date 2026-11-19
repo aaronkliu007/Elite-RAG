@@ -54,6 +54,9 @@ public interface QaPersistencePort {
 
     Optional<QaOutcome> find(UUID requestId, UUID actorId);
 
+    /** Audit provenance for completed answers; missing provenance cannot authorize a historical answer. */
+    default Optional<String> answerPolicyVersion(UUID requestId, UUID actorId) { return Optional.empty(); }
+
     default Optional<QaOutcome> findAuthorized(UUID requestId, UUID actorId, BooleanSupplier authorizationCheck) {
         return find(requestId, actorId).filter(result -> !(result instanceof QaOutcome.Answered)
                 || authorizationCheck.getAsBoolean());

@@ -69,6 +69,9 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
 
     @BeforeEach
     void seedScope() {
+        var owner=JdbcClient.create(new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(),POSTGRES.getUsername(),POSTGRES.getPassword()));
+        owner.sql("DELETE FROM qa_request").update();
         jdbc.sql("DELETE FROM retrieval_projection_event").update();
         jdbc.sql("DELETE FROM document_retrieval_metadata").update();
         jdbc.sql("DELETE FROM acl_entry").update();
@@ -184,6 +187,13 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
         assertEquals(0.2, locator.boundingBox().top());
         assertEquals(0.4, locator.boundingBox().right(), 0.000001);
         assertEquals(0.6, locator.boundingBox().bottom(), 0.000001);
+        var correct=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),ids.versionId(),
+                "pdf-node","投影文档","PDF 正文",1,locator);
+        var wrongPage=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,correct.evidenceId(),ids.documentId(),ids.versionId(),
+                "pdf-node","投影文档","PDF 正文",1,new PageLocator(999,null));
+        var tableSource=new JdbcTableEvidenceSource(jdbc);
+        assertTrue(tableSource.verifiedContextFingerprint(correct).isPresent());
+        assertTrue(tableSource.verifiedContextFingerprint(wrongPage).isEmpty());
     }
 
     @Test
@@ -207,6 +217,15 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
                 ids.versionId(), "table", "预算", "项目\n星河", 1.0, new TableLocator("预算", 1, 2, 1, 1));
         var tableSource = new JdbcTableEvidenceSource(jdbc);
         assertEquals("星河", tableSource.load(ev).get(1).text());
+        var exact=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,ev.evidenceId(),ids.documentId(),ids.versionId(),
+                "table","投影文档","项目\n金额\n星河\n100",1,new TableLocator("投影文档",1,2,1,1));
+        assertTrue(tableSource.verifiedContextFingerprint(exact).isPresent());
+        var truncated=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,ev.evidenceId(),ids.documentId(),ids.versionId(),
+                "table","投影文档","项目",1,ev.locator());
+        assertTrue(tableSource.verifiedContextFingerprint(truncated).isEmpty());
+        var disguised=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,ev.evidenceId(),ids.documentId(),ids.versionId(),
+                "table","投影文档",exact.excerpt(),1,new MarkdownLocator(List.of("章节"),"table"));
+        assertTrue(tableSource.verifiedContextFingerprint(disguised).isEmpty());
         var wrongSpace = new com.yunjihai.rag.retrieval.domain.Evidence(UUID.randomUUID(), ev.evidenceId(),
                 ev.documentId(), ev.versionId(), ev.nodeId(), ev.title(), ev.excerpt(), ev.score(), ev.locator());
         assertThrows(IllegalStateException.class, () -> tableSource.load(wrongSpace));
@@ -261,6 +280,21 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
         jdbc.sql("UPDATE canonical_node SET body_text='星河项目备份保留60天。' WHERE version_id=:version AND node_id='body'")
                 .param("version",ids.versionId()).update();
         assertFalse(tableSource.hasStandaloneBackupContext(evidence));
+    }
+
+    @Test
+    void contextFingerprintIsStableAcrossDatabaseSessionTimeZones() throws Exception {
+        var ids=publishedDocument(spaceId,false,true,"text/markdown",4);
+        insertNode(ids.versionId(),"body","PARAGRAPH","星河项目备份保留30天。",null,1,null,null,0);
+        try(var connection=java.sql.DriverManager.getConnection(POSTGRES.getJdbcUrl(),POSTGRES.getUsername(),POSTGRES.getPassword());
+            var timezone=connection.createStatement();
+            var fingerprint=connection.prepareStatement("SELECT qa_document_context_fingerprint(?,?)")) {
+            fingerprint.setObject(1,ids.documentId()); fingerprint.setObject(2,ids.versionId());
+            timezone.execute("SET TIME ZONE 'UTC'");
+            String utc; try(var rows=fingerprint.executeQuery()) { rows.next(); utc=rows.getString(1); }
+            timezone.execute("SET TIME ZONE 'Asia/Shanghai'");
+            try(var rows=fingerprint.executeQuery()) { rows.next(); assertEquals(utc,rows.getString(1)); }
+        }
     }
 
     @Test
@@ -341,7 +375,7 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
         };
         com.yunjihai.rag.retrieval.RetrievalService retrieval=query -> new com.yunjihai.rag.retrieval.domain.EvidencePack(
                 query.requestId(),selected,false,Set.of(),new com.yunjihai.rag.retrieval.domain.RetrievalStats(10,0,10,10,8),Instant.now(),screening);
-        var qa=new com.yunjihai.rag.qa.GroundedQaService((actor,at)->Set.of(spaceId),retrieval,persistence,ignored->{},
+        var qa=new com.yunjihai.rag.qa.GroundedQaService((actor,at)->Set.of(spaceId),retrieval,persistence,new JdbcModelCallAuditAdapter(client),
                 ignored->"a".repeat(64),new com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer(Set.of()),chat,
                 new com.yunjihai.rag.qa.conflict.DeterministicEvidenceConflictDetector(new JdbcTableEvidenceSource(client)),
                 new com.yunjihai.rag.qa.ExactQuoteCitationSupportVerifier(),com.yunjihai.rag.qa.QaPolicy.defaults(),
@@ -349,6 +383,8 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
                 new com.yunjihai.rag.qa.evaluation.EvaluationTraceRegistry(),new com.yunjihai.rag.qa.conflict.BackupBudgetQuestionScopedPolicy(new JdbcTableEvidenceSource(client)));
         var answer=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actorId,question.value()));
         assertInstanceOf(com.yunjihai.rag.qa.domain.QaOutcome.Answered.class,answer);
+        assertEquals("qa-scoped-backup-budget-v2",client.sql("SELECT qa_policy_version FROM qa_model_call_audit WHERE request_id=:id")
+                .param("id",answer.requestId()).query(String.class).single());
         assertTrue(qa.find(answer.requestId(),actorId).isPresent());
         insertNode(backup.versionId(),"qualifier","PARAGRAPH","只用于测试环境",null,1,null,null,1);
         assertEquals(com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy.Scope.UNKNOWN,policy.classify(question,pair,List.of(a,b,sourceEvidence)));

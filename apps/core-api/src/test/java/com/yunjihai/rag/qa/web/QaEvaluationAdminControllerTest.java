@@ -90,15 +90,15 @@ class QaEvaluationAdminControllerTest {
             public void save(EvaluationRun r) { }
             public Optional<EvaluationRun> findRun(UUID id) { return RUN.equals(id)?Optional.of(run):Optional.empty(); }
         };
+        UUID stableClaimId=UUID.randomUUID();
         var persistence=(com.yunjihai.rag.qa.QaPersistencePort)java.lang.reflect.Proxy.newProxyInstance(
                 getClass().getClassLoader(),new Class<?>[]{com.yunjihai.rag.qa.QaPersistencePort.class},(proxy,method,args)->{
                     if(method.getName().equals("find"))return Optional.of(new com.yunjihai.rag.qa.domain.QaOutcome.Answered(request,"虚构声明",
-                            List.of(new com.yunjihai.rag.qa.domain.CitationClaim(UUID.randomUUID(),"虚构声明",List.of(evidence))),false));
+                            List.of(new com.yunjihai.rag.qa.domain.CitationClaim(stableClaimId,"虚构声明",List.of(evidence))),false));
                     throw new UnsupportedOperationException();
                 });
         boolean[] allowed={true};
-        var service=new EvaluationReviewService(repo,persistence,(id,actor,at)->allowed[0],
-                java.time.Clock.fixed(Instant.EPOCH,java.time.ZoneOffset.UTC),
+        var service=new EvaluationReviewService(repo,(id,actor)->allowed[0]?persistence.find(id,actor):Optional.empty(),
                 new com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer(Set.of()),value->"d".repeat(64));
         List<com.yunjihai.rag.audit.AuditCommand> events=new ArrayList<>();
         var controller=new QaEvaluationReviewController(service,roles(true),command->{ events.add(command); return null; });

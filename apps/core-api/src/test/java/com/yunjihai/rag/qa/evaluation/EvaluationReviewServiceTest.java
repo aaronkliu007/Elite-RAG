@@ -17,6 +17,7 @@ class EvaluationReviewServiceTest {
     private final UUID actor=UUID.randomUUID(), other=UUID.randomUUID(), datasetId=UUID.randomUUID();
     private final UUID caseId=UUID.randomUUID(), request=UUID.randomUUID(), runId=UUID.randomUUID();
     private final UUID document=UUID.randomUUID(), version=UUID.randomUUID(), evidence=UUID.randomUUID();
+    private final UUID claimId=UUID.randomUUID();
     private static String sha(String text) {
         try { return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
                 .digest(text.getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
@@ -45,10 +46,12 @@ class EvaluationReviewServiceTest {
             QaPersistencePort.class.getClassLoader(),new Class<?>[]{QaPersistencePort.class},(proxy,method,args)->{
                 if(method.getName().equals("find"))return args[0].equals(request)&&args[1].equals(actor)
                         ?Optional.of(new QaOutcome.Answered(request,"虚构声明",List.of(
-                                new CitationClaim(UUID.randomUUID(),"虚构声明",List.of(evidence))),false)):Optional.empty();
+                                new CitationClaim(claimId,"虚构声明",List.of(evidence))),false)):Optional.empty();
                 throw new UnsupportedOperationException(method.getName());
             });
     private final QaEvidenceAuthorizationPort authorization=(id,user,at)->allowed&&id.equals(request)&&user.equals(actor);
+    private final java.util.function.BiFunction<UUID,UUID,Optional<QaOutcome>> safeReader=(id,user)->
+            authorization.allAuthorized(id,user,clock.instant())?persistence.find(id,user):Optional.empty();
 
     private void setup(String recordedDigest,String questionHash) {
         var result=new EvaluationCaseResult(caseId,request,false,QaStatus.ANSWERED,null,1,1,1,0,0,0,questionHash==null?null:EvaluationReviewBinding.create(hasher,questionHash));
@@ -61,7 +64,7 @@ class EvaluationReviewServiceTest {
 
     @Test void exposesReviewedCandidateOnlyToOwnerWithCurrentAuthorization() {
         setup(EvaluationDatasetFingerprint.sha256(dataset),questionDigest);
-        var service=new EvaluationReviewService(repo,persistence,authorization,clock,sanitizer,hasher);
+        var service=new EvaluationReviewService(repo,safeReader,sanitizer,hasher);
         var review=service.find(runId,caseId,actor).orElseThrow();
         assertThat(review.question()).isEqualTo("虚构问题");
         assertThat(review.reviewQuestionDigest()).isEqualTo(questionDigest);
@@ -77,7 +80,7 @@ class EvaluationReviewServiceTest {
 
     @Test void refusesOldOrChangedDatasetAndMissingQuestionDigest() {
         setup("f".repeat(64),questionDigest);
-        var service=new EvaluationReviewService(repo,persistence,authorization,clock,sanitizer,hasher);
+        var service=new EvaluationReviewService(repo,safeReader,sanitizer,hasher);
         assertThat(service.find(runId,caseId,actor)).isEmpty();
         setup(EvaluationDatasetFingerprint.sha256(dataset),null);
         assertThat(service.find(runId,caseId,actor)).isEmpty();
@@ -86,7 +89,7 @@ class EvaluationReviewServiceTest {
     @Test void changedSanitizationCannotReuseOldReviewBinding() {
         setup(EvaluationDatasetFingerprint.sha256(dataset),questionDigest);
         var changed=new com.yunjihai.rag.qa.sanitization.RegexSensitiveContentSanitizer(Set.of("虚构"));
-        assertThat(new EvaluationReviewService(repo,persistence,authorization,clock,changed,hasher)
+        assertThat(new EvaluationReviewService(repo,safeReader,changed,hasher)
                 .find(runId,caseId,actor)).isEmpty();
     }
 
@@ -94,7 +97,8 @@ class EvaluationReviewServiceTest {
         setup(EvaluationDatasetFingerprint.sha256(dataset),questionDigest);
         var count=new java.util.concurrent.atomic.AtomicInteger();
         QaEvidenceAuthorizationPort revoked=(id,user,at)->count.incrementAndGet()==1;
-        assertThat(new EvaluationReviewService(repo,persistence,revoked,clock,sanitizer,hasher)
+        assertThat(new EvaluationReviewService(repo,(id,user)->revoked.allAuthorized(id,user,clock.instant())
+                ?persistence.find(id,user):Optional.empty(),sanitizer,hasher)
                 .find(runId,caseId,actor)).isEmpty();
         assertThat(count.get()).isEqualTo(2);
     }
@@ -105,7 +109,13 @@ class EvaluationReviewServiceTest {
                 "b".repeat(64),"c".repeat(64),"d".repeat(64));
         observation=new EvaluationRepository.Observation(Set.of(),Set.of(evidence),
                 Set.of(),Set.of(),Map.of(evidence,unexpected),null);
-        assertThat(new EvaluationReviewService(repo,persistence,authorization,clock,sanitizer,hasher).find(runId,caseId,actor)
+        assertThat(new EvaluationReviewService(repo,safeReader,sanitizer,hasher).find(runId,caseId,actor)
                 .orElseThrow().claims()).singleElement().satisfies(claim->assertThat(claim.eligible()).isFalse());
+    }
+
+    @Test void reviewedContextIsHiddenWhenSafeAnswerReaderRejectsTheOldPolicy() {
+        setup(EvaluationDatasetFingerprint.sha256(dataset),questionDigest);
+        java.util.function.BiFunction<UUID,UUID,Optional<QaOutcome>> denied=(id,user)->Optional.empty();
+        assertThat(new EvaluationReviewService(repo,denied,sanitizer,hasher).find(runId,caseId,actor)).isEmpty();
     }
 }

@@ -2,6 +2,8 @@ package com.yunjihai.rag.qa.web;
 
 import com.yunjihai.rag.access.AccessDeniedAsNotFoundException;
 import com.yunjihai.rag.qa.QaSourceAccessPort;
+import com.yunjihai.rag.qa.GroundedQaService;
+import com.yunjihai.rag.qa.domain.QaOutcome;
 import com.yunjihai.rag.retrieval.domain.*;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Profile;
@@ -18,18 +20,29 @@ import java.util.*;
 public class QaSourceController {
     private final QaSourceAccessPort sources;
     private final Clock clock;
+    private final java.util.function.BiFunction<UUID,UUID,Optional<QaOutcome>> safeAnswerReader;
 
-    public QaSourceController(QaSourceAccessPort sources,Clock clock) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public QaSourceController(QaSourceAccessPort sources,Clock clock,GroundedQaService qa) {
+        this(sources,clock,Objects.requireNonNull(qa)::find);
+    }
+
+    QaSourceController(QaSourceAccessPort sources,Clock clock,
+                       java.util.function.BiFunction<UUID,UUID,Optional<QaOutcome>> safeAnswerReader) {
         this.sources=Objects.requireNonNull(sources);
         this.clock=Objects.requireNonNull(clock);
+        this.safeAnswerReader=Objects.requireNonNull(safeAnswerReader);
     }
 
     @GetMapping("/{evidenceId}")
+    @org.springframework.transaction.annotation.Transactional
     public QaDtos.SourceResponse get(
             Authentication authentication,
             @PathVariable UUID requestId,
             @PathVariable UUID evidenceId) {
         UUID actorId=QaController.userId(authentication);
+        if(safeAnswerReader.apply(requestId,actorId).filter(QaOutcome.Answered.class::isInstance).isEmpty())
+            throw new AccessDeniedAsNotFoundException();
         var source=sources.findAuthorized(requestId,evidenceId,actorId,clock.instant())
                 .orElseThrow(AccessDeniedAsNotFoundException::new);
         String documentPath="/api/v1/documents/"+source.documentId();

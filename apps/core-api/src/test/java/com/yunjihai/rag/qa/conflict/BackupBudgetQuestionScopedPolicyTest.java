@@ -30,6 +30,7 @@ class BackupBudgetQuestionScopedPolicyTest {
         var a=table("100"); var b=table("120");
         var pair=new DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),b.evidenceId(),EvidenceConflictDetector.ConflictKind.STRUCTURED_TABLE);
         var policy=new BackupBudgetQuestionScopedPolicy(provenTables());
+        assertThat(policy.version()).isEqualTo("backup-budget-v2");
         var backup=new Evidence(SPACE,UUID.randomUUID(),UUID.randomUUID(),UUID.randomUUID(),"backup","制度",
                 "星河项目备份保留30天。",1,new MarkdownLocator(List.of("章节"),"backup"));
         assertThat(policy.classify(QaQuestion.normalize("星河项目的备份保留多久？"),pair,List.of(a,b,backup)))
@@ -67,6 +68,12 @@ class BackupBudgetQuestionScopedPolicyTest {
                 List.of(new GroundedClaim(UUID.randomUUID(),"备份保留30天",List.of(new EvidenceSupport(id,spacedSubject)))));
         assertThat(policy.verifyAnswer(QaQuestion.normalize("星河项目的备份保留多久？"),otherAnswer,
                 new EvidenceBundle(List.of(otherSubject),spacedSubject.length()))).isEqualTo(QuestionScopedConflictPolicy.AnswerRelevance.UNKNOWN);
+        String superscript="星河项目备份保留³⁰天。";
+        var unusual=new QaEvidence(id,SPACE,item.documentId(),item.versionId(),"n","制度",superscript,1,item.locator());
+        var unusualAnswer=new CandidateAnswer(CandidateAnswer.Decision.ANSWER,"备份保留³⁰天",
+                List.of(new GroundedClaim(UUID.randomUUID(),"备份保留³⁰天",List.of(new EvidenceSupport(id,superscript)))));
+        assertThat(policy.verifyAnswer(QaQuestion.normalize("星河项目的备份保留多久？"),unusualAnswer,
+                new EvidenceBundle(List.of(unusual),superscript.length()))).isEqualTo(QuestionScopedConflictPolicy.AnswerRelevance.UNKNOWN);
     }
 
     @Test void refusesWhenOtherCandidatesConflictWithTheRequestedFrequencyOrBudgetTitleLinksTheTopics() {

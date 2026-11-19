@@ -137,6 +137,9 @@ final class QaTestHarness {
             return value==null||!value.state.actorId().equals(actor)
                     ?Optional.empty():Optional.ofNullable(value.outcome);
         }
+        public synchronized Optional<String> answerPolicyVersion(UUID id,UUID actor) {
+            return find(id,actor).isPresent()?Optional.of("qa-policy-v1"):Optional.empty();
+        }
         public synchronized Optional<Instant> completedAt(UUID id,UUID actor) {
             Entry value=values.get(id);
             return value==null||!value.state.actorId().equals(actor)

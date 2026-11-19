@@ -13,6 +13,12 @@ public interface QuestionScopedConflictPolicy {
 
     Scope classify(QaQuestion question, DeterministicEvidenceConflictDetector.ConflictPair pair,
                    List<Evidence> authorizedScreeningCandidates);
+    default Scope classifyAll(QaQuestion question,List<DeterministicEvidenceConflictDetector.ConflictPair> pairs,
+                              List<Evidence> authorizedScreeningCandidates) {
+        if(pairs==null || pairs.isEmpty())return Scope.UNKNOWN;
+        for(var pair:pairs)if(classify(question,pair,authorizedScreeningCandidates)!=Scope.UNRELATED)return Scope.UNKNOWN;
+        return Scope.UNRELATED;
+    }
     AnswerRelevance verifyAnswer(QaQuestion question, CandidateAnswer answer, EvidenceBundle evidence);
     default boolean enabled() { return true; }
     /** Stable, non-sensitive identifier; change it whenever the policy or its rules change. */

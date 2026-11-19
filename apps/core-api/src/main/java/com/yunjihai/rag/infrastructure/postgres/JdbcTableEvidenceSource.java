@@ -15,6 +15,32 @@ public final class JdbcTableEvidenceSource implements TableEvidenceSource {
     private final JdbcClient jdbc;
     public JdbcTableEvidenceSource(JdbcClient jdbc) { this.jdbc = Objects.requireNonNull(jdbc); }
 
+    public java.util.Optional<String> verifiedContextFingerprint(Evidence evidence) {
+        var fingerprint=jdbc.sql("""
+                SELECT qa_document_context_fingerprint(d.id,n.version_id) FROM document d
+                JOIN document_version v ON v.id=d.current_published_version_id AND v.document_id=d.id
+                JOIN canonical_node n ON n.version_id=v.id
+                WHERE d.id=:document AND d.space_id=:space AND d.title=:title AND NOT d.archived
+                  AND v.id=:version AND v.status='PUBLISHED' AND v.parse_status='SUCCEEDED'
+                  AND n.node_id=:node AND (n.kind='TABLE')=:isTable
+                  AND n.body_text=:excerpt
+                """).param("document",evidence.documentId()).param("space",evidence.spaceId())
+                .param("title",evidence.title()).param("version",evidence.versionId())
+                .param("node",evidence.nodeId()).param("isTable",evidence.locator() instanceof com.yunjihai.rag.retrieval.domain.TableLocator)
+                .param("excerpt",evidence.excerpt())
+                .query(String.class).optional();
+        if(fingerprint.isEmpty())return java.util.Optional.empty();
+        long count=jdbc.sql("SELECT count(*) FROM (SELECT 1 FROM canonical_node WHERE version_id=:version LIMIT 513) nodes")
+                .param("version",evidence.versionId()).query(Long.class).single();
+        if(count>512)return java.util.Optional.empty();
+        var canonical=new JdbcRetrievalProjectionSource(jdbc).load(evidence.spaceId(),evidence.documentId(),0);
+        if(!canonical.indexable() || !evidence.versionId().equals(canonical.versionId()) || !evidence.title().equals(canonical.title()))
+            return java.util.Optional.empty();
+        boolean matches=canonical.nodes().stream().anyMatch(node->node.nodeId().equals(evidence.nodeId())
+                && node.bodyText().equals(evidence.excerpt()) && node.locator().equals(evidence.locator()));
+        return matches ? fingerprint : java.util.Optional.empty();
+    }
+
     @Override public boolean hasStandaloneBudgetContext(Evidence evidence) {
         var nodes=loadContext(evidence);
         if(nodes.isEmpty() || nodes.size()>32)return false;

@@ -104,8 +104,21 @@ class GroundedQaAcceptanceTest {
         UUID evidenceId = response.citations().getFirst().evidenceIds().getFirst();
         var source = environment.sources.get(
                 environment.authentication(scenario.reader()), response.requestId(), evidenceId);
+        assertThat(org.springframework.aop.support.AopUtils.isAopProxy(environment.sources)).isTrue();
         assertThat(source.documentId()).isNotNull();
         assertThat(source.location().coordinates()).isNotEmpty();
+
+        var owner=org.springframework.jdbc.core.simple.JdbcClient.create(new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                LocalFoundationInfrastructure.jdbcUrl(),LocalFoundationInfrastructure.MIGRATION_USER,LocalFoundationInfrastructure.MIGRATION_PASSWORD));
+        owner.sql("UPDATE qa_model_call_audit SET qa_policy_version='qa-scoped-revoked-v1' WHERE request_id=:id")
+                .param("id",response.requestId()).update();
+        try {
+            assertThatThrownBy(() -> environment.sources.get(environment.authentication(scenario.reader()),response.requestId(),evidenceId))
+                    .isExactlyInstanceOf(AccessDeniedAsNotFoundException.class);
+        } finally {
+            owner.sql("UPDATE qa_model_call_audit SET qa_policy_version='qa-policy-v1' WHERE request_id=:id")
+                    .param("id",response.requestId()).update();
+        }
 
         UUID citedSpace = environment.jdbc.sql("""
                 SELECT space_id FROM qa_evidence_snapshot

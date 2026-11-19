@@ -1,7 +1,5 @@
 package com.yunjihai.rag.qa.evaluation;
 
-import com.yunjihai.rag.qa.QaEvidenceAuthorizationPort;
-import com.yunjihai.rag.qa.QaPersistencePort;
 import com.yunjihai.rag.qa.QuestionDigestPort;
 import com.yunjihai.rag.qa.domain.QaOutcome;
 import com.yunjihai.rag.qa.domain.QaQuestion;
@@ -9,21 +7,18 @@ import com.yunjihai.rag.qa.sanitization.SensitiveContentSanitizer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Clock;
 import java.util.*;
+import java.util.function.BiFunction;
 
 /** Review data remains accessible only to the original actor and while all sources are authorized. */
 public final class EvaluationReviewService {
     private final EvaluationRepository repository;
-    private final QaPersistencePort persistence;
-    private final QaEvidenceAuthorizationPort authorization;
-    private final Clock clock;
+    private final BiFunction<UUID,UUID,Optional<QaOutcome>> safeAnswerReader;
     private final SensitiveContentSanitizer sanitizer;
     private final QuestionDigestPort hasher;
-    public EvaluationReviewService(EvaluationRepository repository,QaPersistencePort persistence,
-            QaEvidenceAuthorizationPort authorization,Clock clock,SensitiveContentSanitizer sanitizer,QuestionDigestPort hasher) {
-        this.repository=Objects.requireNonNull(repository); this.persistence=Objects.requireNonNull(persistence);
-        this.authorization=Objects.requireNonNull(authorization); this.clock=Objects.requireNonNull(clock);
+    public EvaluationReviewService(EvaluationRepository repository,BiFunction<UUID,UUID,Optional<QaOutcome>> safeAnswerReader,
+            SensitiveContentSanitizer sanitizer,QuestionDigestPort hasher) {
+        this.repository=Objects.requireNonNull(repository); this.safeAnswerReader=Objects.requireNonNull(safeAnswerReader);
         this.sanitizer=Objects.requireNonNull(sanitizer); this.hasher=Objects.requireNonNull(hasher);
     }
     public Optional<ReviewContext> find(UUID runId,UUID caseId,UUID actor) {
@@ -44,9 +39,8 @@ public final class EvaluationReviewService {
             if(!MessageDigest.isEqual(EvaluationReviewBinding.create(hasher,digest).getBytes(StandardCharsets.US_ASCII),
                     result.reviewBinding().getBytes(StandardCharsets.US_ASCII)))return Optional.empty();
         } catch(RuntimeException failure) { return Optional.empty(); }
-        var outcome=persistence.find(result.requestId(),actor).orElse(null);
+        var outcome=safeAnswerReader.apply(result.requestId(),actor).orElse(null);
         if(!(outcome instanceof QaOutcome.Answered answer))return Optional.empty();
-        if(!authorization.allAuthorized(result.requestId(),actor,clock.instant()))return Optional.empty();
         var observation=repository.observe(result.requestId());
         List<ReviewClaim> claims=new ArrayList<>();
         for(var claim:answer.claims()) {
@@ -63,7 +57,7 @@ public final class EvaluationReviewService {
             claims.add(new ReviewClaim(claim.claimId(),claim.text(),claim.evidenceIds(),List.copyOf(refs),eligible));
         }
         // Recheck immediately before returning sensitive question and answer content.
-        if(!authorization.allAuthorized(result.requestId(),actor,clock.instant()))return Optional.empty();
+        if(safeAnswerReader.apply(result.requestId(),actor).filter(answer::equals).isEmpty())return Optional.empty();
         return Optional.of(new ReviewContext(caseId,result.requestId(),item.question(),digest,List.copyOf(claims)));
     }
     public record ReviewContext(UUID caseId,UUID requestId,String question,String reviewQuestionDigest,List<ReviewClaim> claims) { }

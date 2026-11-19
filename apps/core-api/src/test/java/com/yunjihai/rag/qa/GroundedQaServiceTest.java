@@ -279,6 +279,22 @@ class GroundedQaServiceTest {
     }
 
     @Test
+    void previouslyScopedAnswerIsHiddenAfterTheApprovedPolicyIsDisabled() {
+        var harness=new Harness(); harness.pack=typedConflictPack(2);
+        harness.answer=answer(id(100),"证据　正文 0");
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; harness.scopedPolicy=policy;
+        var service=harness.service();
+        assertThat(service.ask(command("星河备份多久？"))).isInstanceOf(QaOutcome.Answered.class);
+        assertThat(service.find(id(1),id(2))).isPresent();
+        var audit=harness.audits.getFirst(); harness.audits.clear();
+        assertThat(service.find(id(1),id(2))).isEmpty();
+        harness.audits.add(audit);
+        harness.scopedPolicy=QuestionScopedConflictPolicy.strict();
+        assertThat(harness.service().find(id(1),id(2))).isEmpty();
+    }
+
+    @Test
     void unsupportedDetectorAndEvidenceIdentityConflictCannotBeResolvedByPolicy() {
         var unknownDetector=new Harness(); unknownDetector.pack=typedConflictPack(2);
         unknownDetector.conflictDetector=ignored->true;
@@ -326,6 +342,17 @@ class GroundedQaServiceTest {
         policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT;
         policy.policyVersion="包含中文或空格"; harness.scopedPolicy=policy;
         assertThat(harness.service().ask(command("星河备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
+        assertThat(harness.modelCalls).hasValue(0);
+    }
+
+    @Test
+    void scopedPolicyCannotResolveAQuestionWhoseIdentityChangesUnderCompatibilityNormalization() {
+        var harness=new Harness(); harness.pack=typedConflictPack(2);
+        harness.answer=answer(id(100),"证据　正文 0");
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; harness.scopedPolicy=policy;
+        assertThat(harness.service().ask(command("星河²项目的备份保留多久？")))
                 .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.CONFLICTING_EVIDENCE,false));
         assertThat(harness.modelCalls).hasValue(0);
     }
@@ -900,6 +927,10 @@ class GroundedQaServiceTest {
             @Override
             public Optional<QaOutcome> find(UUID requestId, UUID actorId) {
                 return Optional.ofNullable(persistedOutcome);
+            }
+
+            @Override public Optional<String> answerPolicyVersion(UUID requestId,UUID actorId) {
+                return audits.stream().map(ModelCallAuditPort.ModelCallAudit::qaPolicyVersion).findFirst();
             }
         }
     }

@@ -18,7 +18,7 @@ public final class BackupBudgetQuestionScopedPolicy implements QuestionScopedCon
     private final TableEvidenceSource tables;
 
     public BackupBudgetQuestionScopedPolicy(TableEvidenceSource tables) { this.tables=Objects.requireNonNull(tables); }
-    @Override public String version() { return "backup-budget-v1"; }
+    @Override public String version() { return "backup-budget-v2"; }
 
     @Override public Scope classify(QaQuestion question, DeterministicEvidenceConflictDetector.ConflictPair pair, List<Evidence> candidates) {
         if(question==null || pair==null || candidates==null)return Scope.UNKNOWN;
@@ -65,7 +65,7 @@ public final class BackupBudgetQuestionScopedPolicy implements QuestionScopedCon
                         || !normalize(item.title()).matches("(?:制度|(?:[0-9]+_)?"+Pattern.quote(project)+"(?:数据)?备份制度)")
                         || location.headingPath().stream().anyMatch(heading ->
                                 !normalize(heading).matches("(?:章节|备份制度|数据备份制度)")))return false;
-                String text=normalize(item.excerpt());
+                String text=normalizeSource(item.excerpt());
                 var source=sourcePattern(project).matcher(text);
                 if(!source.matches())return false;
                 String found=source.group(backup?"backup":"drill");
@@ -102,7 +102,7 @@ public final class BackupBudgetQuestionScopedPolicy implements QuestionScopedCon
         for(var support:claim.supports()) {
             var matches=evidence.evidence().stream().filter(item->item.evidenceId().equals(support.evidenceId())).toList();
             if(matches.size()!=1)return AnswerRelevance.UNKNOWN;
-            var text=normalize(matches.getFirst().excerpt()); var source=sourcePattern.matcher(text);
+            var text=normalizeSource(matches.getFirst().excerpt()); var source=sourcePattern.matcher(text);
             if(!source.matches())return AnswerRelevance.UNKNOWN;
             boolean backup=q.group(2).startsWith("的"); String extracted=source.group(backup?"backup":"drill");
             var sentences=text.split("。");
@@ -114,4 +114,5 @@ public final class BackupBudgetQuestionScopedPolicy implements QuestionScopedCon
         return AnswerRelevance.RELEVANT;
     }
     private static String normalize(String value) { return Normalizer.normalize(value,Normalizer.Form.NFKC).strip(); }
+    private static String normalizeSource(String value) { return value.strip().replace('，', ','); }
 }

@@ -76,6 +76,35 @@ public class WorkerRuntimeConfiguration {
                 new com.yunjihai.rag.infrastructure.postgres.JdbcTableEvidenceSource(jdbc));
     }
 
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name="rag.qa.question-scoped-conflicts.reviewed-manifest")
+    public QuestionScopedConflictPolicy reviewedQuestionScopePolicy(
+            org.springframework.jdbc.core.simple.JdbcClient jdbc, QuestionDigestPort digests,
+            @Value("${rag.qa.question-scoped-conflicts.reviewed-manifest}") String manifestPath) {
+        try {
+            var path=java.nio.file.Path.of(manifestPath);
+            if(!path.isAbsolute() || java.nio.file.Files.size(path)>524_288)throw new IllegalArgumentException();
+            byte[] bytes=java.nio.file.Files.readAllBytes(path);
+            if(bytes.length==0 || bytes.length>524_288)throw new IllegalArgumentException();
+            var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+            mapper.enable(com.fasterxml.jackson.core.JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
+            var signed=mapper.readValue(bytes,com.yunjihai.rag.qa.conflict.ReviewedQuestionScopePolicy.SignedManifest.class);
+            if(signed.payload()==null || signed.signature()==null || !signed.signature().matches("[0-9a-f]{64}"))throw new IllegalArgumentException();
+            String expected=digests.digest("manifest:"+signed.payload());
+            if(!java.security.MessageDigest.isEqual(expected.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+                    signed.signature().getBytes(java.nio.charset.StandardCharsets.US_ASCII)))throw new IllegalArgumentException();
+            byte[] payload=java.util.Base64.getDecoder().decode(signed.payload());
+            if(payload.length==0 || payload.length>262_144)throw new IllegalArgumentException();
+            var manifest=mapper.readValue(payload,com.yunjihai.rag.qa.conflict.ReviewedQuestionScopePolicy.Manifest.class);
+            String fingerprint=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+            var source=new com.yunjihai.rag.infrastructure.postgres.JdbcTableEvidenceSource(jdbc);
+            return new com.yunjihai.rag.qa.conflict.ReviewedQuestionScopePolicy("reviewed-"+fingerprint.substring(0,32),
+                    manifest.questions(),source::verifiedContextFingerprint,digests);
+        } catch(Exception invalid) {
+            throw new IllegalStateException("INVALID_REVIEW_MANIFEST");
+        }
+    }
+
     static QuestionScopedConflictPolicy selectScopedPolicy(boolean enabled,ObjectProvider<QuestionScopedConflictPolicy> policies) {
         if(!enabled)return QuestionScopedConflictPolicy.strict();
         var candidates=policies.stream().limit(2).toList();
@@ -151,10 +180,9 @@ public class WorkerRuntimeConfiguration {
     @Bean
     @ConditionalOnBean({GroundedQaService.class,EvaluationRepository.class,QuestionDigestPort.class})
     com.yunjihai.rag.qa.evaluation.EvaluationReviewService evaluationReviewService(
-            EvaluationRepository repository,QaPersistencePort persistence,QaEvidenceAuthorizationPort authorization,
-            Clock clock,SensitiveContentSanitizer sanitizer,QuestionDigestPort hasher) {
+            EvaluationRepository repository,GroundedQaService qa,SensitiveContentSanitizer sanitizer,QuestionDigestPort hasher) {
         return new com.yunjihai.rag.qa.evaluation.EvaluationReviewService(
-                repository,persistence,authorization,clock,sanitizer,hasher);
+                repository,qa::find,sanitizer,hasher);
     }
 
     @Bean
