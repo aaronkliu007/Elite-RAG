@@ -152,6 +152,12 @@ Invoke-RestMethod http://127.0.0.1:8080/actuator/health/readiness
 
 先在 PostgreSQL 撤销。最终鉴权立即生效，即使 OpenSearch 仍有旧投影也不会返回 Evidence；随后恢复事件消费以收敛索引。不得把“索引尚未更新”等同于“撤销尚未生效”。
 
+### 本地重排降级兜底
+
+`local` profile 在外部 Reranker 不可用、超时或返回无效结果时，默认对已授权候选启用本地词项排序，再选择提供给问答模型的片段；成功使用外部 Reranker 时不使用本地兜底。兜底不删除或新增筛查候选、不改变候选分数，仍报告 `RERANKER_UNAVAILABLE`，并保留冲突筛查及最终鉴权。可设置 `RAG_LOCAL_LEXICAL_RERANK_ENABLED=false` 在重启后恢复原始召回顺序。
+
+词项匹配不理解同义表达和业务语义，排序改变可能影响不同问题的证据选取；默认值仅供内部受控测试，尚需用真实业务样本评价，不能据此宣称检索或问答质量达标。完整候选及严格拒答策略保持不变。
+
 ## 9. 当前未完成项
 
 - 真实云端 Embedding/Reranker 供应商审批、密钥托管和受控环境联调。

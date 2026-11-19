@@ -161,6 +161,40 @@ class RerankingServiceTest {
     }
 
     @Test
+    void localProfileFallbackKeepsAnswerPassageWhenHeadingsFillDocumentLimit() throws Exception {
+        var defaults=new org.springframework.boot.env.YamlPropertySourceLoader().load("local",
+                new org.springframework.core.io.ClassPathResource("application-local.yml"));
+        var sources=new org.springframework.core.env.MutablePropertySources();
+        for(var source:defaults)sources.addLast(source);
+        var properties=new org.springframework.core.env.PropertySourcesPropertyResolver(sources);
+        boolean localEnabled=Boolean.TRUE.equals(properties.getProperty("rag.retrieval.local-rerank.enabled",Boolean.class));
+        var input=new ArrayList<>(scoredCandidates(10));
+        var document=input.getFirst().candidate().documentId();
+        String[] passages={"星河项目数据备份制度","说明：本文件为虚构测试资料。","业务说明","星河项目每天备份，备份保留30天。"};
+        for(int i=0;i<passages.length;i++) {
+            var source=input.get(i); var c=source.candidate();
+            var changed=new Candidate(c.spaceId(),c.candidateId(),document,c.versionId(),c.nodeId(),
+                    "星河项目数据备份制度",passages[i],c.locator(),c.source(),c.sourceRank(),c.sourceScore());
+            input.set(i,new ScoredCandidate(changed,source.score(),source.bestSourceRank(),source.sources()));
+        }
+        var executor=Executors.newSingleThreadExecutor();
+        try {
+            var ranked=new RerankingService((q,c)->{throw new IllegalStateException("unavailable");},executor,
+                    RetrievalPolicy.defaults(),localEnabled).rerank("星河项目的备份保留多久？",input);
+            var selected=new EvidenceSelectionService(RetrievalPolicy.defaults()).select(ranked.candidates(),8);
+            assertThat(selected).extracting(item->item.candidate().text()).contains("星河项目每天备份，备份保留30天。");
+            assertThat(ranked.candidates()).containsExactlyInAnyOrderElementsOf(input);
+            assertThat(ranked.degradationReasons()).contains(DegradationReason.RERANKER_UNAVAILABLE);
+            sources.addFirst(new org.springframework.core.env.MapPropertySource("override",
+                    java.util.Map.of("RAG_LOCAL_LEXICAL_RERANK_ENABLED","false")));
+            boolean overridden=Boolean.TRUE.equals(properties.getProperty("rag.retrieval.local-rerank.enabled",Boolean.class));
+            var originalOrder=new RerankingService((q,c)->{throw new IllegalStateException("unavailable");},executor,
+                    RetrievalPolicy.defaults(),overridden).rerank("星河项目的备份保留多久？",input);
+            assertThat(originalOrder.candidates()).containsExactlyElementsOf(input);
+        } finally { executor.shutdownNow(); }
+    }
+
+    @Test
     void localFallbackPreservesOriginalOrderWhenNoMeaningfulOverlap() {
         var input = scoredCandidates(3); var executor = Executors.newSingleThreadExecutor();
         try {
