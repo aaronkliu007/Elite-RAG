@@ -793,6 +793,61 @@ class Synthetic42CompleteScreeningDiagnosticTest {
     }
 
     @Test
+    @EnabledIfEnvironmentVariable(named="RAG_SYNTH_GENERAL_MODEL",matches="true")
+    void observesSixOrdinarySyntheticQuestionsWithOfficialModel() throws Exception {
+        try(var context=startSyntheticContext(true,false,false)) {
+            var jdbc=context.getBean(JdbcClient.class);
+            assertThat(jdbc.sql("SELECT count(*) FROM document WHERE archived=false AND current_published_version_id IS NOT NULL")
+                    .query(Long.class).single()).isEqualTo(18);
+            var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+            try(var input=getClass().getResourceAsStream("/synthetic42-reviewed-contexts.json")) {
+                var documents=mapper.readTree(java.util.Objects.requireNonNull(input)).path("文档");
+                assertThat(documents.size()).isEqualTo(18);
+                var fields=documents.fields();
+                while(fields.hasNext()) {
+                    var field=fields.next();
+                    var fingerprint=jdbc.sql("SELECT qa_document_context_fingerprint(id,current_published_version_id) FROM document WHERE title=:title AND NOT archived")
+                            .param("title",field.getKey()).query(String.class).single();
+                    assertThat(fingerprint).isEqualTo(field.getValue().asText());
+                }
+            }
+            UUID actor=jdbc.sql("SELECT id FROM app_user WHERE display_name=:name").param("name","模拟数据管理员").query(UUID.class).single();
+            var questions=new java.util.HashMap<String,String>();
+            var expectedTitles=new java.util.HashMap<String,String>();
+            try(var input=getClass().getResourceAsStream("/synthetic42-questions.json")) {
+                for(var item:mapper.readTree(java.util.Objects.requireNonNull(input)).path("cases"))
+                    questions.put(item.path("id").asText(),item.path("question").asText());
+            }
+            try(var input=getClass().getResourceAsStream("/synthetic42-literal-answer-spans.json")) {
+                for(var item:mapper.readTree(java.util.Objects.requireNonNull(input)).path("cases"))
+                    expectedTitles.put(item.path("id").asText(),item.path("title").asText());
+            }
+            var qa=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class);
+            int answered=0,expectedSource=0,inputTokens=0,outputTokens=0;
+            for(String id:java.util.List.of("Q01","Q02","Q03","Q04","Q07","Q08")) {
+                assertThat(questions).containsKey(id); assertThat(expectedTitles).containsKey(id);
+                var result=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,questions.get(id)));
+                boolean sourceMatched=false;
+                if(result instanceof com.yunjihai.rag.qa.domain.QaOutcome.Answered answer) {
+                    answered++;
+                    for(var claim:answer.claims())for(var evidence:claim.evidenceIds()) {
+                        var title=jdbc.sql("SELECT title FROM qa_evidence_snapshot WHERE request_id=:request AND evidence_id=:evidence")
+                                .param("request",answer.requestId()).param("evidence",evidence).query(String.class).single();
+                        if(title.equals(expectedTitles.get(id)))sourceMatched=true;
+                    }
+                    if(sourceMatched)expectedSource++;
+                }
+                var usage=jdbc.sql("SELECT input_tokens,output_tokens FROM qa_model_call_audit WHERE request_id=:id")
+                        .param("id",result.requestId()).query((rs,row)->new int[]{rs.getInt(1),rs.getInt(2)}).optional();
+                if(usage.isPresent()){inputTokens+=usage.get()[0];outputTokens+=usage.get()[1];}
+                System.out.println("SYNTH_ORDINARY_MODEL id="+id+" status="+result.status()+" expectedSource="+sourceMatched+" modelCalled="+usage.isPresent());
+            }
+            System.out.println("SYNTH_ORDINARY_SUMMARY total=6 answered="+answered+" expectedSource="+expectedSource
+                    +" inputTokens="+inputTokens+" outputTokens="+outputTokens);
+        }
+    }
+
+    @Test
     @EnabledIfEnvironmentVariable(named="RAG_SYNTH_REAL_MODEL",matches="true")
     void realModelShadowTrialUsesOnlyTheTwoApprovedSyntheticQuestions() throws Exception {
         try(var context=startSyntheticContext(true)) {
