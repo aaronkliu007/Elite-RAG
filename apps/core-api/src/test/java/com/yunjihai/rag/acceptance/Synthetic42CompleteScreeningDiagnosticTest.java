@@ -24,6 +24,28 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Isolated synthetic infrastructure only; no production data, models or credentials are logged. */
 @EnabledIfEnvironmentVariable(named="RAG_SYNTH_COMPLETE_REPLAY",matches="true")
 class Synthetic42CompleteScreeningDiagnosticTest {
+    private static volatile com.yunjihai.rag.qa.model.GroundedAnswerPrompt diagnosticPrompt;
+    private static volatile com.yunjihai.rag.qa.model.ModelGeneration diagnosticGeneration;
+
+    @org.springframework.context.annotation.Configuration(proxyBeanMethods=false)
+    static class SyntheticModelDiagnosticConfiguration {
+        @org.springframework.context.annotation.Bean
+        static org.springframework.beans.factory.config.BeanPostProcessor captureSyntheticModel() {
+            return new org.springframework.beans.factory.config.BeanPostProcessor() {
+                @Override public Object postProcessAfterInitialization(Object bean,String name) {
+                    if(!(bean instanceof com.yunjihai.rag.qa.model.ChatCompletionPort delegate)) return bean;
+                    return new com.yunjihai.rag.qa.model.ChatCompletionPort() {
+                        @Override public com.yunjihai.rag.qa.model.ModelCallDescriptor descriptor() { return delegate.descriptor(); }
+                        @Override public com.yunjihai.rag.qa.model.ModelGeneration generate(com.yunjihai.rag.qa.model.GroundedAnswerPrompt prompt) {
+                            var generation=delegate.generate(prompt);
+                            diagnosticPrompt=prompt; diagnosticGeneration=generation;
+                            return generation;
+                        }
+                    };
+                }
+            };
+        }
+    }
     @Test
     @EnabledIfEnvironmentVariable(named="RAG_SYNTH_MIGRATE",matches="true")
     void migratesOnlyTheVerifiedSyntheticDatabaseForPolicyAudit() throws Exception {
@@ -242,7 +264,16 @@ class Synthetic42CompleteScreeningDiagnosticTest {
             var qa=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class);
             int answered=0;
             for(var question:java.util.List.of("星河项目的备份保留多久？","星河项目多久组织一次恢复演练？")) {
+                diagnosticPrompt=null; diagnosticGeneration=null;
                 var result=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,question));
+                assertThat(diagnosticPrompt).isNotNull();
+                assertThat(diagnosticGeneration).isNotNull();
+                var candidate=diagnosticGeneration.answer();
+                var exact=new com.yunjihai.rag.qa.ExactQuoteCitationSupportVerifier().isSupported(candidate,diagnosticPrompt.evidence());
+                var review=context.getBean(com.yunjihai.rag.qa.conflict.QuestionScopedConflictPolicy.class)
+                        .verifyAnswer(diagnosticPrompt.question(),candidate,diagnosticPrompt.evidence());
+                System.out.println("SYNTH_REVIEWED_GATES id="+(question.contains("演练")?"Q06":"Q05")
+                        +" exact="+exact+" reviewed="+review+" claims="+candidate.claims().size());
                 if(result instanceof com.yunjihai.rag.qa.domain.QaOutcome.Answered answer) {
                     assertFixtureCitation(jdbc,answer);
                     assertThat(answer.answer()).contains(question.contains("演练")?"每月":"30天");
@@ -742,6 +773,7 @@ class Synthetic42CompleteScreeningDiagnosticTest {
         var builder=new SpringApplicationBuilder(RagApplication.class);
         if(includeSyntheticPolicy)builder.sources(SyntheticScopedPolicyConfiguration.class);
         boolean reviewed="true".equals(System.getenv("RAG_SYNTH_REVIEWED_TRIAL"));
+        if(realModel && reviewed)builder.sources(SyntheticModelDiagnosticConfiguration.class);
         if((builtinPolicy || reviewed) && !realModel)builder.sources(SyntheticChatOnlyConfiguration.class);
         java.nio.file.Path manifest=null;
         try {
