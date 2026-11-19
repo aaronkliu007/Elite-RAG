@@ -15,6 +15,52 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ReviewedManifestTests(unittest.TestCase):
+    def test_explicitly_reviewed_aliases_share_approved_sources_without_exposing_questions(self):
+        doc = "00000000-0000-0000-0000-000000000001"
+        version = "00000000-0000-0000-0000-000000000002"
+        item = {"question": "备份多久？", "questionAliases": [
+                    {"question": "备份保留多长时间？", "approvalId": version, "reviewed": True},
+                    {"question": "备份保留期限是多久？", "approvalId": doc, "reviewed": True}],
+                "approvalId": version, "allDocumentsReviewed": True,
+                "documents": [{"documentId": doc, "contextFingerprint": "a" * 64, "relation": "RELEVANT"}],
+                "claims": [{"documentId": doc, "versionId": version, "nodeId": "n", "text": "30天", "quote": "保留30天"}]}
+        result = MODULE.build_manifest({"questions": [item]}, b"k" * 32)
+        self.assertEqual(len(result["questions"]), 3)
+        self.assertEqual(len({entry["questionDigest"] for entry in result["questions"]}), 3)
+        self.assertEqual([entry["approvalId"] for entry in result["questions"]], [version, version, doc])
+        self.assertTrue(all(entry["documents"] == result["questions"][0]["documents"] for entry in result["questions"]))
+        self.assertNotIn("备份", str(result))
+        item["questionAliases"][1]["reviewed"] = False
+        with self.assertRaises(ValueError):
+            MODULE.build_manifest({"questions": [item]}, b"k" * 32)
+        item["questionAliases"][1]["reviewed"] = True
+        item["questionAliases"][1]["approvalId"] = "not-a-uuid"
+        with self.assertRaises(ValueError):
+            MODULE.build_manifest({"questions": [item]}, b"k" * 32)
+
+    def test_rejects_duplicate_or_excess_aliases_after_normalization(self):
+        doc = "00000000-0000-0000-0000-000000000001"
+        version = "00000000-0000-0000-0000-000000000002"
+        item = {"question": "备份多久？", "questionAliases": [{"question": "备份多久?", "approvalId": version, "reviewed": True}],
+                "approvalId": version, "allDocumentsReviewed": True,
+                "documents": [{"documentId": doc, "contextFingerprint": "a" * 64, "relation": "RELEVANT"}],
+                "claims": [{"documentId": doc, "versionId": version, "nodeId": "n", "text": "30天", "quote": "保留30天"}]}
+        with self.assertRaises(ValueError):
+            MODULE.build_manifest({"questions": [item]}, b"k" * 32)
+        item["questionAliases"] = [{"question": f"备份期限{i}？", "approvalId": version, "reviewed": True} for i in range(64)]
+        with self.assertRaises(ValueError):
+            MODULE.build_manifest({"questions": [item]}, b"k" * 32)
+        item["questionAliases"] = [{"question": "星河²项目的备份保留多久？", "approvalId": version, "reviewed": True}]
+        with self.assertRaises(ValueError):
+            MODULE.build_manifest({"questions": [item]}, b"k" * 32)
+        item["questionAliases"] = "备份期限多久？"
+        with self.assertRaises(ValueError):
+            MODULE.build_manifest({"questions": [item]}, b"k" * 32)
+        item["questionAliases"] = [{"question": "备份保留多长时间？", "approvalId": version, "reviewed": True}]
+        duplicate = dict(item, question="备份保留多长时间?", questionAliases=[])
+        with self.assertRaises(ValueError):
+            MODULE.build_manifest({"questions": [item, duplicate]}, b"k" * 32)
+
     def test_outputs_only_hmac_and_approved_metadata(self):
         key = b"k" * 32
         doc = "00000000-0000-0000-0000-000000000001"
@@ -39,6 +85,8 @@ class ReviewedManifestTests(unittest.TestCase):
             MODULE.build_manifest({"questions": [{"question": "星河²项目？", "allDocumentsReviewed": False}]}, b"k" * 32)
         with self.assertRaises(ValueError):
             MODULE._question("星河²项目的备份保留多久？")
+        with self.assertRaises(ValueError):
+            MODULE._question("‼" * 1001)
 
     def test_cli_uses_the_runtime_key_and_refuses_overwrite(self):
         doc = "00000000-0000-0000-0000-000000000001"

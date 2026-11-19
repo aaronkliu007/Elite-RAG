@@ -38,7 +38,31 @@ public final class JdbcTableEvidenceSource implements TableEvidenceSource {
             return java.util.Optional.empty();
         boolean matches=canonical.nodes().stream().anyMatch(node->node.nodeId().equals(evidence.nodeId())
                 && node.bodyText().equals(evidence.excerpt()) && node.locator().equals(evidence.locator()));
+        if(matches && evidence.locator() instanceof com.yunjihai.rag.retrieval.domain.TableLocator
+                && !containsCompleteTable(evidence))return java.util.Optional.empty();
         return matches ? fingerprint : java.util.Optional.empty();
+    }
+
+    /** Ensures text coverage and rejects ambiguous cells; semantic interpretation still needs separate review. */
+    private boolean containsCompleteTable(Evidence evidence) {
+        try {
+            var cells=load(evidence); var occupied=new java.util.HashSet<Long>();
+            for(var cell:cells)if(cell==null || cell.row()<0 || cell.column()<0 || cell.rowSpan()<1 || cell.columnSpan()<1
+                    || cell.text()==null || cell.text().codePoints().allMatch(cp->Character.isWhitespace(cp) || Character.isSpaceChar(cp))
+                    || cell.text().matches("(?s).*\\R.*"))return false;
+            for(var cell:cells) {
+                long rowEnd=(long)cell.row()+cell.rowSpan(),columnEnd=(long)cell.column()+cell.columnSpan();
+                if(rowEnd>Integer.MAX_VALUE || columnEnd>Integer.MAX_VALUE
+                        || (long)cell.rowSpan()*cell.columnSpan()>16384
+                        || occupied.size()+(long)cell.rowSpan()*cell.columnSpan()>16384)return false;
+                for(long row=cell.row();row<rowEnd;row++) for(long column=cell.column();column<columnEnd;column++)
+                    if(!occupied.add((row<<32)|column))return false;
+            }
+            var ordered=cells.stream().sorted(java.util.Comparator.comparingInt(CanonicalTableCell::row)
+                    .thenComparingInt(CanonicalTableCell::column)).toList();
+            return evidence.excerpt().equals(ordered.stream().map(CanonicalTableCell::text)
+                    .collect(java.util.stream.Collectors.joining("\n")));
+        } catch(RuntimeException invalid) { return false; }
     }
 
     @Override public boolean hasStandaloneBudgetContext(Evidence evidence) {

@@ -212,13 +212,15 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 4);
         insertNode(ids.versionId(), "table", "TABLE", "项目\n金额\n星河\n100", null, 1, null,
                 "[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"项目\"},"
-                + "{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"星河\"}]", 0);
+                + "{\"row\":0,\"column\":1,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"金额\"},"
+                + "{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"星河\"},"
+                + "{\"row\":1,\"column\":1,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"100\"}]", 0);
         var ev = new com.yunjihai.rag.retrieval.domain.Evidence(spaceId, UUID.randomUUID(), ids.documentId(),
                 ids.versionId(), "table", "预算", "项目\n星河", 1.0, new TableLocator("预算", 1, 2, 1, 1));
         var tableSource = new JdbcTableEvidenceSource(jdbc);
-        assertEquals("星河", tableSource.load(ev).get(1).text());
+        assertEquals("星河", tableSource.load(ev).get(2).text());
         var exact=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,ev.evidenceId(),ids.documentId(),ids.versionId(),
-                "table","投影文档","项目\n金额\n星河\n100",1,new TableLocator("投影文档",1,2,1,1));
+                "table","投影文档","项目\n金额\n星河\n100",1,new TableLocator("投影文档",1,2,1,2));
         assertTrue(tableSource.verifiedContextFingerprint(exact).isPresent());
         var truncated=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,ev.evidenceId(),ids.documentId(),ids.versionId(),
                 "table","投影文档","项目",1,ev.locator());
@@ -232,6 +234,40 @@ class JdbcRetrievalProjectionSourceIntegrationTest {
         jdbc.sql("UPDATE document SET current_published_version_id=NULL WHERE id=:id")
                 .param("id", ids.documentId()).update();
         assertThrows(IllegalStateException.class, () -> tableSource.load(ev));
+    }
+
+    @Test
+    void refusesToVerifyTableExcerptWhenCanonicalCellsContainOmittedFacts() {
+        var ids=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",1);
+        insertNode(ids.versionId(),"table","TABLE","研发预算",null,1,null,
+                "[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"金额\"},"
+                +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"100\"}]",0);
+        var locator=source.load(spaceId,ids.documentId(),SEQUENCE).nodes().getFirst().locator();
+        var evidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),ids.versionId(),
+                "table","投影文档","研发预算",1,locator);
+        assertTrue(new JdbcTableEvidenceSource(jdbc).verifiedContextFingerprint(evidence).isEmpty());
+    }
+
+    @Test
+    void refusesOverlappingMergedCellsAndAmbiguousCellBoundaries() {
+        String[][] cases={
+                {"预算\n项目","[{\"row\":0,\"column\":0,\"rowSpan\":2,\"columnSpan\":1,\"text\":\"预算\"},"
+                        +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"项目\"}]"},
+                {"预算\n金额\n100","[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"预算\\n金额\"},"
+                        +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"100\"}]"},
+                {"预算\n","[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"预算\"},"
+                        +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"\"}]"},
+                {"预算\n\u00a0\n100","[{\"row\":0,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"预算\"},"
+                        +"{\"row\":1,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"\u00a0\"},"
+                        +"{\"row\":2,\"column\":0,\"rowSpan\":1,\"columnSpan\":1,\"text\":\"100\"}]"}};
+        for(var item:cases) {
+            var ids=publishedDocument(spaceId,false,true,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",1);
+            insertNode(ids.versionId(),"table","TABLE",item[0],null,1,null,item[1],0);
+            var locator=source.load(spaceId,ids.documentId(),SEQUENCE).nodes().getFirst().locator();
+            var evidence=new com.yunjihai.rag.retrieval.domain.Evidence(spaceId,UUID.randomUUID(),ids.documentId(),ids.versionId(),
+                    "table","投影文档",item[0],1,locator);
+            assertTrue(new JdbcTableEvidenceSource(jdbc).verifiedContextFingerprint(evidence).isEmpty());
+        }
     }
 
     @Test

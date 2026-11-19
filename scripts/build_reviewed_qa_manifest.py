@@ -31,7 +31,10 @@ def _question(value):
     semantic = "".join(ch for ch in value if not ch.isspace() and not unicodedata.category(ch).startswith("P"))
     if unicodedata.normalize("NFKC", semantic) != semantic:
         raise ValueError("ambiguous question")
-    return " ".join(unicodedata.normalize("NFKC", value).split())
+    normalized = " ".join(unicodedata.normalize("NFKC", value).split())
+    if not normalized or len(normalized) > 2000:
+        raise ValueError("invalid normalized question")
+    return normalized
 
 
 def build_manifest(reviewed, key):
@@ -45,6 +48,16 @@ def build_manifest(reviewed, key):
         if not isinstance(item, dict) or item.get("allDocumentsReviewed") is not True:
             raise ValueError("review not approved")
         question = _question(item.get("question"))
+        aliases = item.get("questionAliases", [])
+        if not isinstance(aliases, list) or len(aliases) > 63:
+            raise ValueError("invalid question aliases")
+        variants = [(question, _uuid(item["approvalId"]))]
+        for alias in aliases:
+            if not isinstance(alias, dict) or alias.get("reviewed") is not True:
+                raise ValueError("alias not approved")
+            variants.append((_question(alias.get("question")), _uuid(alias.get("approvalId"))))
+        if len(output) + len(variants) > 64:
+            raise ValueError("too many reviewed questions")
         docs, claims = item.get("documents"), item.get("claims")
         if not isinstance(docs, list) or not 1 <= len(docs) <= 128 or not isinstance(claims, list) or not 1 <= len(claims) <= 128:
             raise ValueError("invalid review")
@@ -69,8 +82,9 @@ def build_manifest(reviewed, key):
                              "claimDigest": _digest(key, "claim:" + text), "quoteDigest": _digest(key, "quote:" + quote)})
         if len({(c["documentId"], c["versionId"], c["nodeId"], c["claimDigest"], c["quoteDigest"]) for c in approved}) != len(approved):
             raise ValueError("duplicate claim")
-        output.append({"questionDigest": _digest(key, "question:" + question), "approvalId": _uuid(item["approvalId"]),
-                       "allDocumentsReviewed": True, "documents": prepared, "claims": approved})
+        for variant, approval_id in variants:
+            output.append({"questionDigest": _digest(key, "question:" + variant), "approvalId": approval_id,
+                           "allDocumentsReviewed": True, "documents": prepared, "claims": approved})
     if len({item["questionDigest"] for item in output}) != len(output):
         raise ValueError("duplicate question")
     return {"questions": output}

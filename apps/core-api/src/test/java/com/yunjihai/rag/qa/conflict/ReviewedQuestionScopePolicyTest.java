@@ -83,4 +83,22 @@ class ReviewedQuestionScopePolicyTest {
         assertThat(policy.classifyAll(q,List.of(pair,pair),List.of(a,b,source))).isEqualTo(QuestionScopedConflictPolicy.Scope.UNRELATED);
         assertThat(calls).hasValue(3);
     }
+
+    @Test void acceptsOnlySeparatelyApprovedQuestionDigestsForTheSameEvidence() {
+        var a=item("预算100万元"); var b=item("预算120万元"); var source=item("备份保留30天。");
+        var docs=List.of(new ReviewedQuestionScopePolicy.DocumentReview(a.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.UNRELATED),
+                new ReviewedQuestionScopePolicy.DocumentReview(b.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.UNRELATED),
+                new ReviewedQuestionScopePolicy.DocumentReview(source.documentId(),HASH,ReviewedQuestionScopePolicy.Relation.RELEVANT));
+        var claim=new ReviewedQuestionScopePolicy.ClaimReview(source.documentId(),source.versionId(),source.nodeId(),
+                sha256("claim:备份保留30天"),sha256("quote:"+source.excerpt()));
+        var first=QaQuestion.normalize("备份保留多久？"); var alias=QaQuestion.normalize("备份保留多长时间？");
+        var reviews=List.of(new ReviewedQuestionScopePolicy.QuestionReview(sha256("question:"+first.value()),UUID.randomUUID(),true,docs,List.of(claim)),
+                new ReviewedQuestionScopePolicy.QuestionReview(sha256("question:"+alias.value()),UUID.randomUUID(),true,docs,List.of(claim)));
+        var policy=new ReviewedQuestionScopePolicy("review-v1",reviews,e->Optional.of(HASH),ReviewedQuestionScopePolicyTest::sha256);
+        var pair=new DeterministicEvidenceConflictDetector.ConflictPair(a.evidenceId(),b.evidenceId(),EvidenceConflictDetector.ConflictKind.TYPED_FACT);
+        for(var question:List.of(first,alias))assertThat(policy.classifyAll(question,List.of(pair),List.of(a,b,source)))
+                .isEqualTo(QuestionScopedConflictPolicy.Scope.UNRELATED);
+        assertThat(policy.classifyAll(QaQuestion.normalize("备份一定保留多久？"),List.of(pair),List.of(a,b,source)))
+                .isEqualTo(QuestionScopedConflictPolicy.Scope.UNKNOWN);
+    }
 }

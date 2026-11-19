@@ -205,7 +205,7 @@ class Synthetic42CompleteScreeningDiagnosticTest {
             UUID actor=jdbc.sql("SELECT id FROM app_user WHERE display_name=:name").param("name","模拟数据管理员").query(UUID.class).single();
             var qa=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class);
             com.yunjihai.rag.qa.domain.QaOutcome first=null;
-            for(var question:java.util.List.of("星河项目的备份保留多久？","星河项目多久组织一次恢复演练？")) {
+            for(var question:java.util.List.of("星河项目的备份保留多久？","星河项目多久组织一次恢复演练？","星河项目备份保留多长时间？")) {
                 var result=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,question));
                 assertThat(result).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Answered.class,answer->{
                     assertThat(answer.answer()).isEqualTo(question.contains("演练")?"每月组织一次恢复演练":"备份保留30天");
@@ -215,7 +215,11 @@ class Synthetic42CompleteScreeningDiagnosticTest {
                         .param("id",result.requestId()).query(String.class).single()).matches("qa-scoped-reviewed-[0-9a-f]{32}");
                 if(first==null)first=result;
             }
-            assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(2);
+            assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(3);
+            var unapproved=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,"星河项目备份保留多少天？"));
+            assertThat(unapproved).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
+                    refused->assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
+            assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(3);
             var budget=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,"星河项目研发预算究竟是多少？"));
             assertThat(budget).isInstanceOfSatisfying(com.yunjihai.rag.qa.domain.QaOutcome.Refused.class,
                     refused->assertThat(refused.reason()).isEqualTo(com.yunjihai.rag.qa.domain.RefusalReason.CONFLICTING_EVIDENCE));
@@ -232,7 +236,7 @@ class Synthetic42CompleteScreeningDiagnosticTest {
             } finally {
                 jdbc.sql("UPDATE document SET title=:title WHERE id=:id").param("title",changed.title()).param("id",changed.documentId()).update();
             }
-            assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(2);
+            assertThat(SyntheticScopedPolicyConfiguration.MODEL_CALLS).hasValue(3);
         }
     }
 
@@ -263,7 +267,9 @@ class Synthetic42CompleteScreeningDiagnosticTest {
             }
             var qa=context.getBean(com.yunjihai.rag.qa.GroundedQaService.class);
             int answered=0;
-            for(var question:java.util.List.of("星河项目的备份保留多久？","星河项目多久组织一次恢复演练？")) {
+            int repeats=Integer.parseInt(System.getenv().getOrDefault("RAG_SYNTH_REAL_REPEATS","1"));
+            if(repeats<1 || repeats>3)throw new IllegalStateException("INVALID_SYNTHETIC_REPEAT_COUNT");
+            for(int repeat=0;repeat<repeats;repeat++) for(var question:java.util.List.of("星河项目的备份保留多久？","星河项目多久组织一次恢复演练？")) {
                 diagnosticPrompt=null; diagnosticGeneration=null;
                 var result=qa.ask(new com.yunjihai.rag.qa.AskQuestionCommand(UUID.randomUUID(),actor,question));
                 assertThat(diagnosticPrompt).isNotNull();
@@ -285,10 +291,10 @@ class Synthetic42CompleteScreeningDiagnosticTest {
                         .param("id",result.requestId()).query((rs,row)->new Object[]{rs.getInt(1),rs.getInt(2),rs.getString(3)}).optional();
                 assertThat(audit).isPresent();
                 var usage=audit.orElseThrow();
-                System.out.println("SYNTH_REVIEWED_REAL id="+(question.contains("演练")?"Q06":"Q05")+" status="+result.status()
+                System.out.println("SYNTH_REVIEWED_REAL run="+(repeat+1)+" id="+(question.contains("演练")?"Q06":"Q05")+" status="+result.status()
                         +" inputTokens="+usage[0]+" outputTokens="+usage[1]+" modelResult="+usage[2]);
             }
-            System.out.println("SYNTH_REVIEWED_REAL_SUMMARY answered="+answered+" total=2");
+            System.out.println("SYNTH_REVIEWED_REAL_SUMMARY answered="+answered+" total="+(repeats*2));
         }
     }
 
@@ -319,7 +325,7 @@ class Synthetic42CompleteScreeningDiagnosticTest {
                     WHERE d.id=:id AND n.body_text LIKE '%备份保留30天%'
                     """).param("id",approvedSource).query((rs,row)->new Object[]{rs.getObject(1,UUID.class),rs.getString(2),rs.getString(3)}).single();
             var questions=new java.util.ArrayList<com.yunjihai.rag.qa.conflict.ReviewedQuestionScopePolicy.QuestionReview>();
-            for(var q:java.util.List.of("星河项目的备份保留多久?","星河项目多久组织一次恢复演练?")) {
+            for(var q:java.util.List.of("星河项目的备份保留多久?","星河项目多久组织一次恢复演练?","星河项目备份保留多长时间?")) {
                 boolean drill=q.contains("演练");
                 String sourceBody=(String)approvedNode[2];
                 String[] sentences=sourceBody.split("。");
@@ -540,6 +546,36 @@ class Synthetic42CompleteScreeningDiagnosticTest {
                     +" sourceSpecific="+sourceSpecific+" sourceSpecificSelected="+sourceSpecificSelected
                     +" targetFieldInCells="+sourceSpecificFieldInCells+" targetFieldInExcerpt="+sourceSpecificFieldInExcerpt
                     +" screeningUnavailable="+screeningFailures+" actualAnswerConflictRefusals="+actualConflictRefusals);
+        }
+    }
+
+    @Test
+    @EnabledIfEnvironmentVariable(named="RAG_SYNTH_RECORD_COMPLETENESS",matches="true")
+    void measuresWhetherNamedRecordQuestionsIncludeEveryCanonicalNode() {
+        try(var context=startSyntheticContext()) {
+            var jdbc=context.getBean(JdbcClient.class);
+            UUID actor=jdbc.sql("SELECT id FROM app_user WHERE display_name=:name").param("name","模拟数据管理员").query(UUID.class).single();
+            var spaces=context.getBean(AuthorizedSpaceScopePort.class).resolve(actor,Instant.now());
+            var retrieval=context.getBean(TrustedRetrievalService.class);
+            String[][] cases={{"Q09","星河项目预算记录甲记载多少？","05_星河项目预算记录甲"},
+                    {"Q10","星河预算记录甲是否注明审批日期？","05_星河项目预算记录甲"},
+                    {"Q11","星河项目预算记录乙记载多少？","06_星河项目预算记录乙"},
+                    {"Q12","星河预算记录乙是否注明版本号？","06_星河项目预算记录乙"}};
+            for(var item:cases) {
+                var doc=jdbc.sql("SELECT id,current_published_version_id FROM document WHERE title=:title AND NOT archived")
+                        .param("title",item[2]).query((rs,row)->new UUID[]{rs.getObject(1,UUID.class),rs.getObject(2,UUID.class)}).single();
+                var nodes=jdbc.sql("SELECT node_id FROM canonical_node WHERE version_id=:version ORDER BY stable_order")
+                        .param("version",doc[1]).query(String.class).list();
+                var pack=retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(),actor,spaces,item[1],Map.of(),10));
+                var selected=pack.evidence().stream().filter(e->e.documentId().equals(doc[0]) && e.versionId().equals(doc[1]))
+                        .map(e->e.nodeId()).collect(Collectors.toSet());
+                var screened=pack.conflictScreeningEvidence().stream().filter(e->e.documentId().equals(doc[0]) && e.versionId().equals(doc[1]))
+                        .map(e->e.nodeId()).collect(Collectors.toSet());
+                assertThat(nodes).isNotEmpty();
+                System.out.println("SYNTH_RECORD_COMPLETENESS id="+item[0]+" nodes="+nodes.size()
+                        +" selected="+selected.size()+" screened="+screened.size()
+                        +" selectedComplete="+selected.containsAll(nodes)+" screenedComplete="+screened.containsAll(nodes));
+            }
         }
     }
 
