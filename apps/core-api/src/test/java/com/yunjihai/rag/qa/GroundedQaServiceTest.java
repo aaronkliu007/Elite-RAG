@@ -322,6 +322,28 @@ class GroundedQaServiceTest {
     }
 
     @Test
+    void scopedAnswerMayUseExtraAsciiWhitespaceBetweenVerbatimClaimsButNoExtraContent() {
+        for (var extra : List.of("\n\n", " \r\n\t")) {
+            var harness=new Harness(); harness.pack=typedConflictPack(2);
+            var first="证据　正文 0"; var second="证据　正文 1";
+            var claims=List.of(new GroundedClaim(id(800),first,List.of(new EvidenceSupport(id(100),first))),
+                    new GroundedClaim(id(801),second,List.of(new EvidenceSupport(id(101),second))));
+            harness.answer=new CandidateAnswer(CandidateAnswer.Decision.ANSWER,first+extra+second,claims);
+            var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+            policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; harness.scopedPolicy=policy;
+            assertThat(harness.service().ask(command("星河备份多久？"))).isInstanceOf(QaOutcome.Answered.class);
+        }
+        var harness=new Harness(); harness.pack=typedConflictPack(2);
+        var text="证据　正文 0";
+        harness.answer=new CandidateAnswer(CandidateAnswer.Decision.ANSWER,text+"。",
+                List.of(new GroundedClaim(id(800),text,List.of(new EvidenceSupport(id(100),text)))));
+        var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;
+        policy.answer=QuestionScopedConflictPolicy.AnswerRelevance.RELEVANT; harness.scopedPolicy=policy;
+        assertThat(harness.service().ask(command("星河备份多久？")))
+                .isEqualTo(new QaOutcome.Refused(id(1),RefusalReason.UNSUPPORTED_CLAIM,false));
+    }
+
+    @Test
     void scopedConflictCannotProceedWhenFullScreeningSnapshotCannotBeSaved() {
         var harness=new Harness(); harness.pack=typedConflictPack(2); harness.rejectScreeningSave=true;
         var policy=new RecordingScopedPolicy(); policy.scope=QuestionScopedConflictPolicy.Scope.UNRELATED;

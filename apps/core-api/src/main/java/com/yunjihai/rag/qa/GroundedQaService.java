@@ -450,8 +450,20 @@ public final class GroundedQaService {
     }
 
     private static boolean hasLiteralScopedCitations(CandidateAnswer answer,EvidenceBundle evidence) {
-        String joined=answer.claims().stream().map(claim->claim.text()).collect(java.util.stream.Collectors.joining("\n"));
-        if(!joined.equals(answer.answer()))return false;
+        String body=answer.answer();
+        int position=0;
+        for(int i=0;i<answer.claims().size();i++) {
+            if(i>0) {
+                int start=position;
+                while(position<body.length() && (body.charAt(position)==' ' || body.charAt(position)=='\t'
+                        || body.charAt(position)=='\r' || body.charAt(position)=='\n')) position++;
+                if(position==start)return false;
+            }
+            String claim=answer.claims().get(i).text();
+            if(!body.startsWith(claim,position))return false;
+            position+=claim.length();
+        }
+        if(position!=body.length())return false;
         var known=evidence.evidence().stream().collect(java.util.stream.Collectors.toMap(item->item.evidenceId(),item->item));
         for(var claim:answer.claims()) {
             boolean claimQuoted=false;
