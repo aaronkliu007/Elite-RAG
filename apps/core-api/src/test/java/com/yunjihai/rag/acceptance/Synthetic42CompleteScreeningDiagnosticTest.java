@@ -588,6 +588,48 @@ class Synthetic42CompleteScreeningDiagnosticTest {
     }
 
     @Test
+    @EnabledIfEnvironmentVariable(named="RAG_SYNTH_SPAN_AUDIT",matches="true")
+    void comparesReferenceSourceLiteralSpansOnCurrentAuthorizedRetrieval() throws Exception {
+        try(var context=startSyntheticContext()) {
+            var jdbc=context.getBean(JdbcClient.class);
+            assertThat(jdbc.sql("SELECT count(*) FROM document WHERE archived=false AND current_published_version_id IS NOT NULL")
+                    .query(Long.class).single()).isEqualTo(18);
+            try(var hashes=getClass().getResourceAsStream("/synthetic42-source-sha256.json")) {
+                var expected=new com.fasterxml.jackson.databind.ObjectMapper().readValue(java.util.Objects.requireNonNull(hashes),
+                        new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>(){});
+                assertThat(jdbc.sql("SELECT sha256 FROM active_blob_reservation ORDER BY sha256").query(String.class).list())
+                        .containsExactlyElementsOf(expected);
+            }
+            UUID actor=jdbc.sql("SELECT id FROM app_user WHERE display_name=:name").param("name","模拟数据管理员").query(UUID.class).single();
+            var spaces=context.getBean(AuthorizedSpaceScopePort.class).resolve(actor,Instant.now());
+            var retrieval=context.getBean(TrustedRetrievalService.class);
+            var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+            var questions=new java.util.HashMap<String,String>();
+            try(var input=getClass().getResourceAsStream("/synthetic42-questions.json")) {
+                for(var item:mapper.readTree(java.util.Objects.requireNonNull(input)).path("cases"))
+                    questions.put(item.path("id").asText(),item.path("question").asText());
+            }
+            int count=0,found=0;
+            try(var input=getClass().getResourceAsStream("/synthetic42-literal-answer-spans.json")) {
+                var cases=mapper.readTree(java.util.Objects.requireNonNull(input)).path("cases");
+                assertThat(cases.size()).isEqualTo(37);
+                for(var item:cases) {
+                    String id=item.path("id").asText(),title=item.path("title").asText();
+                    String answer=item.path("answer").asText().replaceFirst("[。！？，；]+$", "");
+                    assertThat(questions).containsKey(id);
+                    var pack=retrieval.retrieve(new RetrievalQuery(UUID.randomUUID(),actor,spaces,questions.get(id),Map.of(),10));
+                    boolean matched=pack.evidence().stream().anyMatch(e->e.title().equals(title) && e.excerpt().contains(answer));
+                    if(matched)found++;
+                    count++;
+                    System.out.println("SYNTH_SPAN id="+id+" hit="+matched+" screened="+pack.conflictScreeningEvidence().size());
+                }
+            }
+            System.out.println("SYNTH_SPAN_SUMMARY cases="+count+" hits="+found);
+            assertThat(count).isEqualTo(37);
+        }
+    }
+
+    @Test
     @EnabledIfEnvironmentVariable(named="RAG_SYNTH_RECORD_COMPLETENESS",matches="true")
     void measuresWhetherNamedRecordQuestionsIncludeEveryCanonicalNode() {
         try(var context=startSyntheticContext()) {
