@@ -85,6 +85,24 @@ class JdbcLocalIdentityIntegrationTest {
     }
 
     @Test
+    void externalOrganizationUserWithoutLocalPasswordAppearsInDirectory() {
+        UUID user = UUID.randomUUID();
+        jdbc.sql("INSERT INTO app_user(id,external_id,display_name) VALUES (:id,'dingtalk:user:staff-1','钉钉员工')")
+                .param("id", user).update();
+        assertThat(administration.listUsers()).anySatisfy(account -> {
+            assertThat(account.id()).isEqualTo(user);
+            assertThat(account.displayName()).isEqualTo("钉钉员工");
+        });
+        assertThatThrownBy(() -> authentication.authenticate("dingtalk:user:staff-1", chars("any-password-123"), "10.0.0.2"))
+                .isInstanceOf(AuthenticationRejectedException.class);
+        assertThatThrownBy(() -> administration.resetPassword(user, chars("another-password-123"), UUID.randomUUID()))
+                .isInstanceOf(com.yunjihai.rag.identity.local.LocalIdentityValidationException.class);
+        assertThatThrownBy(() -> administration.setEnabled(user, false, UUID.randomUUID()))
+                .isInstanceOf(com.yunjihai.rag.identity.local.LocalIdentityValidationException.class);
+        assertThat(jdbc.sql("SELECT enabled FROM app_user WHERE id=:id").param("id", user).query(Boolean.class).single()).isTrue();
+    }
+
+    @Test
     void createsListsAndAuthenticatesLocalUser() {
         UUID actorId = UUID.randomUUID();
         var account = administration.createUser(

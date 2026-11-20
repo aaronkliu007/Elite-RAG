@@ -68,6 +68,37 @@ class SessionSecurityIntegrationTest {
     void resetState() {
         clock.set(START);
         versions.setEnabled(TestConfig.USER_ID, true);
+        TestConfig.REQUIRED.set(false);
+        TestConfig.HASH.set("correct-password");
+    }
+
+    @Test
+    void requiredPasswordChangeBlocksBusinessApisUntilPasswordIsChanged() throws Exception {
+        TestConfig.REQUIRED.set(true);
+        CsrfSession csrf = csrf();
+        var login = post("/api/v1/session/login", csrf.cookie(), csrf,
+                "{\"username\":\"alice\",\"password\":\"correct-password\"}");
+        assertThat(login.statusCode()).isEqualTo(200);
+        assertThat(objectMapper.readTree(login.body()).path("passwordChangeRequired").asBoolean()).isTrue();
+        String activeCookie = cookie(login);
+        assertThat(get("/api/v1/admin/users", activeCookie).statusCode()).isEqualTo(403);
+        assertThat(get("/%61pi/v1/admin/users", activeCookie).statusCode()).isIn(400, 403);
+        assertThat(get("/api/v1/session/me", activeCookie).statusCode()).isEqualTo(200);
+        assertThat(post("/api/v1/session/change-initial-password", activeCookie, null,
+                "{\"currentPassword\":\"correct-password\",\"newPassword\":\"a-new-password-2026\"}").statusCode()).isEqualTo(403);
+        assertThat(post("/api/v1/session/change-initial-password", activeCookie, csrf,
+                "{\"currentPassword\":\"wrong\",\"newPassword\":\"a-new-password-2026\"}").statusCode()).isEqualTo(400);
+        assertThat(post("/api/v1/session/change-initial-password", activeCookie, csrf,
+                "{\"currentPassword\":\"correct-password\",\"newPassword\":\"short\"}").statusCode()).isEqualTo(400);
+        var change = post("/api/v1/session/change-initial-password", activeCookie, csrf,
+                "{\"currentPassword\":\"correct-password\",\"newPassword\":\"a-new-password-2026\"}");
+        assertThat(change.statusCode()).isEqualTo(204);
+        assertThat(get("/api/v1/session/me", activeCookie).statusCode()).isEqualTo(401);
+        CsrfSession fresh = csrf();
+        var relogin = post("/api/v1/session/login", fresh.cookie(), fresh,
+                "{\"username\":\"alice\",\"password\":\"a-new-password-2026\"}");
+        assertThat(relogin.statusCode()).isEqualTo(200);
+        assertThat(objectMapper.readTree(relogin.body()).path("passwordChangeRequired").asBoolean()).isFalse();
     }
 
     @Test
@@ -84,6 +115,8 @@ class SessionSecurityIntegrationTest {
         var wrongPassword = post("/api/v1/session/login", csrf.cookie(), csrf,
                 "{\"username\":\"alice\",\"password\":\"wrong-password\"}");
         assertError(wrongPassword, 401, "UNAUTHORIZED");
+        assertThat(objectMapper.readTree(wrongPassword.body()).path("message").asText())
+                .isEqualTo("用户名或密码不正确，或账号暂时不可用");
 
         var login = post("/api/v1/session/login", csrf.cookie(), csrf,
                 "{\"username\":\"alice\",\"password\":\"correct-password\"}");
@@ -165,6 +198,8 @@ class SessionSecurityIntegrationTest {
     @Import({SecurityConfiguration.class, SessionController.class})
     static class TestConfig {
         private static final UUID USER_ID = UUID.fromString("0199c5f2-31c0-7000-8000-000000000001");
+        private static final java.util.concurrent.atomic.AtomicBoolean REQUIRED = new java.util.concurrent.atomic.AtomicBoolean();
+        private static final AtomicReference<String> HASH = new AtomicReference<>("correct-password");
 
         @Bean MutableClock clock() { return new MutableClock(START); }
         @Bean InMemorySessionVersionStore versions() { return new InMemorySessionVersionStore(); }
@@ -183,16 +218,15 @@ class SessionSecurityIntegrationTest {
             };
         }
         @Bean LocalCredentialStore credentials() {
-            LocalCredential credential = new LocalCredential(
-                    USER_ID, "alice", "correct-password", 0, null, null, START);
             return new LocalCredentialStore() {
                 @Override public Optional<LocalCredential> lockForAuthentication(String username) {
-                    return "alice".equals(username) ? Optional.of(credential) : Optional.empty();
+                    return "alice".equals(username) ? Optional.of(new LocalCredential(
+                            USER_ID, "alice", HASH.get(), 0, null, null, START, REQUIRED.get())) : Optional.empty();
                 }
                 @Override public void insert(LocalCredential value) { throw new UnsupportedOperationException(); }
                 @Override public void updateAuthenticationState(UUID userId, int failures, Instant window, Instant locked, Instant at) { }
                 @Override public void resetAuthenticationState(UUID userId, Instant at) { }
-                @Override public void replacePassword(UUID userId, String hash, Instant at) { throw new UnsupportedOperationException(); }
+                @Override public void replacePassword(UUID userId, String hash, Instant at) { HASH.set(hash); REQUIRED.set(false); }
             };
         }
         @Bean PasswordHasher passwordHasher() {

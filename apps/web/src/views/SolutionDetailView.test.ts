@@ -1,9 +1,13 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
-import { createPinia } from 'pinia'
+import { createPinia, setActivePinia } from 'pinia'
 
 import SolutionDetailView from './SolutionDetailView.vue'
+import App from '../App.vue'
+import { adminApi } from '../api/admin'
+import { useSessionStore } from '../stores/session'
+import { solutionsApi, type SolutionDetail } from '../api/solutions'
 
 const detail = {
   id: 'solution-1', spaceId: 'space-1', name: '测试方案', phase: 'REQUIREMENTS_DRAFT',
@@ -20,6 +24,46 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 })
 
 beforeEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+it('离开方案后迟到的详情不会继续请求反馈或核验', async () => {
+  let finish!: (value: SolutionDetail) => void
+  vi.spyOn(solutionsApi, 'get').mockReturnValue(new Promise((resolve) => { finish = resolve }))
+  const feedback = vi.spyOn(solutionsApi, 'feedbackMine').mockResolvedValue([])
+  const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/solutions/:solutionId', component: SolutionDetailView }] })
+  await router.push('/solutions/solution-1'); await router.isReady()
+  const wrapper = mount(SolutionDetailView, { global: { plugins: [createPinia(), router] } })
+  wrapper.unmount()
+  finish({ ...detail, phase: 'FINALIZED', finalizedVersionId: 'final-old' } as unknown as SolutionDetail)
+  await flushPromises()
+  expect(feedback).not.toHaveBeenCalled()
+})
+
+it('在同一页面切换方案时展示新方案，并对未保存修改进行确认', async () => {
+  vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(false)
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    if (String(input).endsWith('/solutions/solution-1')) return json(detail)
+    if (String(input).endsWith('/solutions/solution-2')) return json({ ...detail, id: 'solution-2', name: '第二个方案' })
+    throw new Error(String(input))
+  }))
+  const pinia = createPinia(); setActivePinia(pinia)
+  useSessionStore().establish({ userId: 'user-1', username: 'alice', displayName: '爱丽丝' })
+  const router = createRouter({ history: createMemoryHistory(), routes: [
+    { path: '/solutions/:solutionId', name: 'solution-detail', component: SolutionDetailView },
+    { path: '/', component: { template: '<div />' } },
+  ] })
+  await router.push('/solutions/solution-1'); await router.isReady()
+  const wrapper = mount(App, { global: { plugins: [pinia, router] } })
+  await flushPromises()
+  await wrapper.get('[name="requirement-text-0"]').setValue('未保存修改')
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true)
+  await router.push('/solutions/solution-2'); await flushPromises()
+  expect(router.currentRoute.value.params.solutionId).toBe('solution-1')
+  await router.push('/solutions/solution-2'); await flushPromises()
+  expect(confirm).toHaveBeenCalledTimes(2)
+  expect(wrapper.text()).toContain('第二个方案')
+  expect(wrapper.text()).not.toContain('测试方案')
+  wrapper.unmount()
+})
 
 it('已保存需求展示各类来源定位，并可打开文档以人工核对版本', async () => {
   const sources = [

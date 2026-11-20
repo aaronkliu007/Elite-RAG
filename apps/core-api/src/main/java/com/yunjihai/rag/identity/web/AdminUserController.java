@@ -6,7 +6,7 @@ import com.yunjihai.rag.api.idempotency.IdempotencyScope;
 import com.yunjihai.rag.api.idempotency.IdempotencyService;
 import com.yunjihai.rag.identity.local.UserAccount;
 import com.yunjihai.rag.identity.local.UserAdministrationService;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
@@ -30,7 +30,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/admin/users")
-@ConditionalOnBean({UserAdministrationService.class, RoleAssignmentService.class, IdempotencyService.class})
+@Profile("local")
 public class AdminUserController {
     private final UserAdministrationService users;
     private final RoleAssignmentService roles;

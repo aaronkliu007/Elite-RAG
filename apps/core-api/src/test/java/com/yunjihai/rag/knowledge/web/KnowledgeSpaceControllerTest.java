@@ -109,6 +109,17 @@ class KnowledgeSpaceControllerTest {
     }
 
     @Test
+    void onlySpaceAdministratorsCanSearchEnabledUserCandidates() {
+        var fixture = fixture();
+        assertThat(fixture.controller.searchMemberCandidates(authentication(SPACE_ADMIN), SPACE_ID, "新", 1, 20))
+                .extracting(KnowledgeSpaceController.MemberCandidate::username).containsExactly("reader");
+        assertThatThrownBy(() -> fixture.controller.searchMemberCandidates(authentication(EDITOR), SPACE_ID, "新", 1, 20))
+                .isInstanceOf(com.yunjihai.rag.access.AccessDeniedAsNotFoundException.class);
+        assertThatThrownBy(() -> fixture.controller.searchMemberCandidates(authentication(SPACE_ADMIN), SPACE_ID, " ", 1, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void allListPaginationIsLimitedToOneThroughOneHundred() {
         var fixture = fixture();
         assertThatThrownBy(() -> fixture.controller.list(authentication(ADMIN), 0, 20))

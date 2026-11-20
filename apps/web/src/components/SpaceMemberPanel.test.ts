@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { clearCsrfToken } from '../api/http'
+import { spacesApi, type SpaceMember } from '../api/spaces'
 import SpaceMemberPanel from './SpaceMemberPanel.vue'
 
 function json(body: unknown, status = 200) {
@@ -24,6 +25,35 @@ describe('空间成员管理面板', () => {
   beforeEach(() => {
     clearCsrfToken()
     vi.restoreAllMocks()
+  })
+
+  it('集中管理时按姓名选择用户并授予空间角色', async () => {
+    vi.spyOn(spacesApi, 'listMembers').mockResolvedValue([])
+    const grant = vi.spyOn(spacesApi, 'grantRole').mockResolvedValue({ ...member, roles: ['READER'] })
+    const wrapper = mount(SpaceMemberPanel, { props: { spaceId, users: [{ id: member.userId, username: member.username, displayName: member.displayName, enabled: true, createdAt: '', updatedAt: '' }] } })
+    await flushPromises()
+    await wrapper.get('select[name="memberUserId"]').setValue(member.userId)
+    await wrapper.get('[data-form="grant-member"]').trigger('submit')
+    await flushPromises()
+    expect(grant).toHaveBeenCalledWith(spaceId, member.userId, 'READER', expect.any(String))
+    expect(wrapper.text()).toContain(member.displayName)
+    expect(wrapper.find('input[placeholder="UUID"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('支持加载超过一百人的空间成员，失败时保留已有列表并重试', async () => {
+    const first: SpaceMember[] = Array.from({ length: 100 }, (_, i) => ({ ...member, userId: `user-${i}`, username: `user-${i}`, roles: ['EDITOR'] }))
+    const list = vi.spyOn(spacesApi, 'listMembers').mockResolvedValueOnce(first).mockRejectedValueOnce(new Error('网络中断'))
+      .mockResolvedValueOnce([{ ...member, userId: 'later', username: 'later', displayName: '后续成员', roles: ['READER'] }])
+    const wrapper = mount(SpaceMemberPanel, { props: { spaceId } })
+    await flushPromises()
+    await wrapper.get('[data-action="more-members"]').trigger('click'); await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('加载更多成员失败')
+    await wrapper.get('[data-action="more-members"]').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('后续成员')
+    expect(list.mock.calls.map(call => call[1])).toEqual([undefined, 2, 2])
+    expect(wrapper.find('[data-action="more-members"]').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('清楚呈现加载、空数据和失败重试状态', async () => {

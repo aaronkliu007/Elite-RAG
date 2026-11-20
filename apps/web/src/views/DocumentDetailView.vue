@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import { documentsApi, type KnowledgeDocument } from '../api/documents'
@@ -15,6 +15,8 @@ const notice = ref('')
 const keys = new Map<string, string>()
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let stopped = false
+let generation = 0
+let loadSequence = 0
 const latest = computed(() => document.value?.versions.at(-1))
 const message = (failure: unknown, fallback: string) => failure instanceof ApiRequestError ? failure.displayMessage : fallback
 
@@ -24,18 +26,38 @@ function schedulePoll() {
 }
 
 async function load(showLoading = true) {
+  const currentGeneration = generation
+  const currentLoad = ++loadSequence
+  const documentId = String(route.params.documentId)
   if (showLoading) loading.value = true
-  try { document.value = await documentsApi.get(String(route.params.documentId)); error.value = ''; schedulePoll() }
-  catch (failure) { error.value = message(failure, '文档加载失败') }
-  finally { loading.value = false }
+  try {
+    const response = await documentsApi.get(documentId)
+    if (currentGeneration !== generation || currentLoad !== loadSequence) return
+    document.value = response; error.value = ''; schedulePoll()
+  } catch (failure) {
+    if (currentGeneration !== generation || currentLoad !== loadSequence) return
+    if (failure instanceof ApiRequestError && [401, 403, 404].includes(failure.status)) {
+      document.value = null
+      clearTimeout(pollTimer)
+    } else schedulePoll()
+    error.value = message(failure, '文档加载失败')
+  } finally {
+    if (currentGeneration === generation && currentLoad === loadSequence) loading.value = false
+  }
 }
 
 async function mutate(operation: string, action: (key: string) => Promise<KnowledgeDocument>, success: string) {
   if (busy.value) return
+  const currentGeneration = generation
+  loadSequence++
   const key = keys.get(operation) ?? crypto.randomUUID(); keys.set(operation, key); busy.value = true; error.value = ''; notice.value = ''
-  try { document.value = await action(key); keys.delete(operation); notice.value = success; schedulePoll() }
-  catch (failure) { error.value = message(failure, '操作失败，请稍后重试'); if (failure instanceof ApiRequestError && failure.status < 500) keys.delete(operation) }
-  finally { busy.value = false }
+  try { const response = await action(key); if (currentGeneration !== generation) return; document.value = response; keys.delete(operation); notice.value = success; schedulePoll() }
+  catch (failure) {
+    if (currentGeneration !== generation) return
+    if (failure instanceof ApiRequestError && [401, 403, 404].includes(failure.status)) { document.value = null; clearTimeout(pollTimer) } else schedulePoll()
+    error.value = message(failure, '操作失败，请稍后重试'); if (failure instanceof ApiRequestError && failure.status < 500) keys.delete(operation)
+  }
+  finally { if (currentGeneration === generation) busy.value = false }
 }
 
 const withLatest = (callback: (documentId: string, versionId: string) => void) => { if (document.value && latest.value) callback(document.value.id, latest.value.id) }
@@ -43,8 +65,11 @@ function submitReview() { withLatest((id, version) => mutate('submit', (key) => 
 function reject(comment: string) { withLatest((id, version) => mutate(`reject:${comment}`, (key) => documentsApi.reject(id, version, comment, key), '已驳回修改。')) }
 function publish() { withLatest((id, version) => mutate('publish', (key) => documentsApi.publish(id, version, key), '当前版本已发布。')) }
 
-onMounted(() => load())
-onBeforeUnmount(() => { stopped = true; clearTimeout(pollTimer) })
+watch(() => route.params.documentId, () => {
+  generation++; clearTimeout(pollTimer); document.value = null; error.value = ''; notice.value = ''; busy.value = false; keys.clear()
+  void load()
+}, { immediate: true })
+onBeforeUnmount(() => { stopped = true; generation++; clearTimeout(pollTimer) })
 </script>
 
 <template>
@@ -69,6 +94,13 @@ onBeforeUnmount(() => { stopped = true; clearTimeout(pollTimer) })
       <strong>无法查看此文档</strong><span>{{ error }}</span>
     </div>
     <template v-else-if="document">
+      <p
+        v-if="typeof route.query.source === 'string' && route.query.source"
+        class="state"
+        data-source-location-note
+      >
+        请在解析内容预览中核对来源；当前页面不会自动定位到检索片段。
+      </p>
       <p
         v-if="notice"
         class="state success"

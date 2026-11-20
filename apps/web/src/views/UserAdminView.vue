@@ -1,20 +1,31 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 
 import { adminApi, type AdminUser } from '../api/admin'
 import { ApiRequestError } from '../api/http'
 import { useSessionStore } from '../stores/session'
+import DingTalkSyncPanel from '../components/DingTalkSyncPanel.vue'
 
 const session = useSessionStore()
 const users = ref<AdminUser[]>([])
 const loading = ref(true)
 const loadError = ref('')
+const moreError = ref('')
+const loadingMore = ref(false)
+const userPage = ref(1)
+const hasMoreUsers = ref(false)
 const mutationError = ref('')
 const pendingOperation = ref('')
 const resetUserId = ref('')
 const createForm = reactive({ username: '', displayName: '', password: '' })
 const resetPassword = ref('')
+const createPanelOpen = ref(false)
+const createUsernameInput = ref<HTMLInputElement | null>(null)
+const userQuery = ref('')
+const copyStatus = ref('')
+const filteredUsers = computed(() => { const term = userQuery.value.trim().toLocaleLowerCase('zh-CN'); return term ? users.value.filter(user => `${user.displayName} ${user.username}`.toLocaleLowerCase('zh-CN').includes(term)) : users.value })
 const operationKeys = new Map<string, string>()
+let userListGeneration = 0
 
 function message(error: unknown, fallback: string) {
   return error instanceof ApiRequestError ? error.displayMessage : fallback
@@ -30,17 +41,53 @@ function upsertUser(user: AdminUser) {
 function cannotDisableSelf(user: AdminUser) {
   return user.enabled && user.id === session.user?.userId
 }
+function isDingTalkUser(user: AdminUser) { return user.username.startsWith('dingtalk:user:') }
+async function copyUserId(user: AdminUser) {
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable')
+    await navigator.clipboard.writeText(user.id)
+    copyStatus.value = `已复制用户 ID：${user.displayName}`
+  } catch { copyStatus.value = '复制失败，请手动选择并复制用户 ID。' }
+}
 
 async function loadUsers() {
+  const generation = ++userListGeneration
+  loadingMore.value = false
   loading.value = true
   loadError.value = ''
+  moreError.value = ''
   try {
-    users.value = await adminApi.listUsers()
+    const result = await adminApi.listUsers()
+    if (generation !== userListGeneration) return
+    users.value = result
+    userPage.value = 1
+    hasMoreUsers.value = users.value.length === 100
   } catch (error) {
-    loadError.value = message(error, '加载用户失败，请稍后重试')
+    if (generation === userListGeneration) loadError.value = message(error, '加载用户失败，请稍后重试')
   } finally {
-    loading.value = false
+    if (generation === userListGeneration) loading.value = false
   }
+}
+
+async function loadMoreUsers() {
+  if (loadingMore.value || !hasMoreUsers.value) return
+  const generation = userListGeneration
+  loadingMore.value = true
+  moreError.value = ''
+  try {
+    const next = await adminApi.listUsers(userPage.value + 1)
+    if (generation !== userListGeneration) return
+    next.forEach(upsertUser)
+    userPage.value++
+    hasMoreUsers.value = next.length === 100
+  } catch (failure) {
+    if (generation !== userListGeneration) return
+    if (failure instanceof ApiRequestError && [401, 403, 404].includes(failure.status)) {
+      users.value = []
+      hasMoreUsers.value = false
+      loadError.value = message(failure, '无法加载用户')
+    } else moreError.value = message(failure, '加载更多用户失败，请重试')
+  } finally { if (generation === userListGeneration) loadingMore.value = false }
 }
 
 async function mutate<T>(operation: string, action: (key: string) => Promise<T>) {
@@ -65,6 +112,9 @@ async function mutate<T>(operation: string, action: (key: string) => Promise<T>)
   }
 }
 
+async function openCreateUser() { createPanelOpen.value = true; await nextTick(); createUsernameInput.value?.focus() }
+function closeCreateUser() { createForm.password = ''; createPanelOpen.value = false }
+
 async function createUser() {
   const created = await mutate('create-user', (key) => adminApi.createUser({ ...createForm }, key))
   createForm.password = ''
@@ -72,6 +122,7 @@ async function createUser() {
   upsertUser(created)
   createForm.username = ''
   createForm.displayName = ''
+  createPanelOpen.value = false
 }
 
 async function toggleUser(user: AdminUser) {
@@ -86,6 +137,7 @@ function openReset(userId: string) {
   resetPassword.value = ''
   mutationError.value = ''
 }
+function cancelReset() { resetUserId.value = ''; resetPassword.value = ''; mutationError.value = '' }
 
 async function submitReset() {
   const userId = resetUserId.value
@@ -96,21 +148,31 @@ async function submitReset() {
 }
 
 onMounted(loadUsers)
+onBeforeUnmount(() => { userListGeneration++ })
 </script>
 
 <template>
   <section class="admin-view">
-    <header class="page-header">
-      <div>
-        <p class="eyebrow">
-          系统管理
-        </p>
-        <h2>用户管理</h2>
-        <p>创建内部账号、控制登录状态并安全重置密码。</p>
-      </div>
+    <DingTalkSyncPanel @synced="loadUsers" />
+    <header
+      v-if="loading || loadError || users.length === 0"
+      class="page-header"
+    >
+      <button
+        class="button button-primary"
+        data-action="open-create-user"
+        type="button"
+        :aria-expanded="createPanelOpen"
+        aria-controls="create-user-panel"
+        @click="openCreateUser"
+      >
+        ＋ 新建用户
+      </button>
     </header>
 
     <form
+      v-show="createPanelOpen"
+      id="create-user-panel"
       class="create-card"
       data-form="create-user"
       @submit.prevent="createUser"
@@ -123,6 +185,7 @@ onMounted(loadUsers)
       </div>
       <div class="form-grid">
         <label>用户名<input
+          ref="createUsernameInput"
           v-model.trim="createForm.username"
           name="username"
           autocomplete="off"
@@ -148,6 +211,14 @@ onMounted(loadUsers)
           :disabled="Boolean(pendingOperation)"
         >
           {{ pendingOperation === 'create-user' ? '正在创建…' : '创建用户' }}
+        </button>
+        <button
+          class="button button-secondary"
+          type="button"
+          :disabled="Boolean(pendingOperation)"
+          @click="closeCreateUser"
+        >
+          收起
         </button>
       </div>
     </form>
@@ -194,9 +265,41 @@ onMounted(loadUsers)
       <div class="section-heading">
         <h3 id="user-list-title">
           用户列表
-        </h3><span>{{ users.length }} 人</span>
+        </h3>
+        <button
+          class="button button-primary"
+          data-action="open-create-user"
+          type="button"
+          :aria-expanded="createPanelOpen"
+          aria-controls="create-user-panel"
+          @click="openCreateUser"
+        >
+          ＋ 新建用户
+        </button>
       </div>
-      <div class="table-wrap">
+      <label class="user-search"><span class="sr-only">搜索已加载用户</span><input
+        v-model="userQuery"
+        type="search"
+        placeholder="搜索已加载的用户名或显示名"
+      ></label>
+      <p
+        v-if="copyStatus"
+        data-copy-status
+        role="status"
+      >
+        {{ copyStatus }}
+      </p>
+      <p
+        v-if="filteredUsers.length === 0"
+        class="search-empty"
+        role="status"
+      >
+        没有匹配的用户，请调整搜索条件。
+      </p>
+      <div
+        v-else
+        class="table-wrap"
+      >
         <table>
           <thead>
             <tr>
@@ -213,7 +316,7 @@ onMounted(loadUsers)
           </thead>
           <tbody>
             <tr
-              v-for="user in users"
+              v-for="user in filteredUsers"
               :key="user.id"
             >
               <td>
@@ -222,9 +325,11 @@ onMounted(loadUsers)
                   :title="user.displayName"
                 >{{ user.displayName }}</strong>
                 <span
+                  v-if="!isDingTalkUser(user)"
                   data-user-username
                   :title="user.username"
                 >{{ user.username }}</span>
+                <span v-else>钉钉成员</span>
                 <small :title="user.id">{{ user.id }}</small>
               </td>
               <td><span :class="['status-tag', { disabled: !user.enabled }]">{{ user.enabled ? '已启用' : '已停用' }}</span></td>
@@ -232,6 +337,14 @@ onMounted(loadUsers)
               <td>
                 <div class="row-actions">
                   <button
+                    data-action="copy-user-id"
+                    type="button"
+                    @click="copyUserId(user)"
+                  >
+                    复制用户 ID
+                  </button>
+                  <button
+                    v-if="!isDingTalkUser(user)"
                     data-action="toggle-user"
                     type="button"
                     :disabled="Boolean(pendingOperation) || cannotDisableSelf(user)"
@@ -241,6 +354,7 @@ onMounted(loadUsers)
                     {{ user.enabled ? '停用' : '启用' }}
                   </button>
                   <button
+                    v-if="!isDingTalkUser(user)"
                     data-action="show-reset"
                     type="button"
                     :disabled="Boolean(pendingOperation)"
@@ -271,12 +385,38 @@ onMounted(loadUsers)
                   >
                     确认重置
                   </button>
+                  <button
+                    class="button button-secondary compact"
+                    data-action="cancel-reset"
+                    type="button"
+                    :disabled="Boolean(pendingOperation)"
+                    @click="cancelReset"
+                  >
+                    取消
+                  </button>
                 </form>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
+      <p
+        v-if="moreError"
+        class="state-panel state-error"
+        role="alert"
+      >
+        {{ moreError }}
+      </p>
+      <button
+        v-if="hasMoreUsers"
+        class="button button-secondary"
+        data-action="more-users"
+        type="button"
+        :disabled="loadingMore || Boolean(pendingOperation)"
+        @click="loadMoreUsers"
+      >
+        {{ loadingMore ? '正在加载…' : moreError ? '重试加载更多' : '加载更多用户' }}
+      </button>
     </section>
   </section>
 </template>
@@ -318,4 +458,5 @@ td small { font-family: var(--font-mono); }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 @media (max-width: 1000px) { .form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .form-grid { grid-template-columns: 1fr; } .create-card, .table-card { padding: 17px; } }
+.user-search { display:block;max-width:360px;margin:0 0 16px; }.user-search input { width:100%;min-height:42px;padding:0 12px;border:1px solid var(--color-border);border-radius:var(--radius-control); }.search-empty { color:var(--color-muted);padding:20px 0; }.button-secondary { color:var(--color-primary);background:#fff; }.button-secondary:hover { background:#eef3ff; }.user-search input:focus-visible { outline:3px solid var(--color-focus);outline-offset:2px; }
 </style>

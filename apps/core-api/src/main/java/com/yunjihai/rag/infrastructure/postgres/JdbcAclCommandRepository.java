@@ -49,7 +49,13 @@ public final class JdbcAclCommandRepository implements AclCommandRepository {
     @Override
     public void grantSpace(UUID spaceId, PrincipalRef principal, Instant validUntil, Instant at) {
         requireArguments(spaceId, principal, at);
-        executeGrant(spaceId, null, "SPACE", principal, validUntil, at);
+        executeGrant(spaceId, null, "SPACE", principal, validUntil, at, "DIRECT");
+    }
+
+    @Override
+    public void grantSpaceRoleAccess(UUID spaceId, PrincipalRef principal, Instant at) {
+        requireArguments(spaceId, principal, at);
+        executeGrant(spaceId, null, "SPACE", principal, null, at, "SPACE_ROLE");
     }
 
     @Override
@@ -61,13 +67,19 @@ public final class JdbcAclCommandRepository implements AclCommandRepository {
             Instant at) {
         requireArguments(spaceId, principal, at);
         Objects.requireNonNull(documentId, "documentId must not be null");
-        executeGrant(spaceId, documentId, "DOCUMENT", principal, validUntil, at);
+        executeGrant(spaceId, documentId, "DOCUMENT", principal, validUntil, at, "DIRECT");
     }
 
     @Override
     public void revokeSpace(UUID spaceId, PrincipalRef principal, Instant at) {
         requireArguments(spaceId, principal, at);
-        executeRevoke(spaceId, null, "SPACE", principal, at);
+        executeRevoke(spaceId, null, "SPACE", principal, at, "DIRECT");
+    }
+
+    @Override
+    public void revokeSpaceRoleAccess(UUID spaceId, PrincipalRef principal, Instant at) {
+        requireArguments(spaceId, principal, at);
+        executeRevoke(spaceId, null, "SPACE", principal, at, "SPACE_ROLE");
     }
 
     @Override
@@ -78,7 +90,7 @@ public final class JdbcAclCommandRepository implements AclCommandRepository {
             Instant at) {
         requireArguments(spaceId, principal, at);
         Objects.requireNonNull(documentId, "documentId must not be null");
-        executeRevoke(spaceId, documentId, "DOCUMENT", principal, at);
+        executeRevoke(spaceId, documentId, "DOCUMENT", principal, at, null);
     }
 
     private void executeGrant(
@@ -87,24 +99,26 @@ public final class JdbcAclCommandRepository implements AclCommandRepository {
             String scope,
             PrincipalRef principal,
             Instant validUntil,
-            Instant at) {
+            Instant at,
+            String source) {
         String conflictTarget = "SPACE".equals(scope)
-                ? "(space_id, principal_type, principal_id) WHERE scope = 'SPACE' AND revoked_at IS NULL"
+                ? "(space_id, principal_type, principal_id, grant_source) WHERE scope = 'SPACE' AND revoked_at IS NULL"
                 : "(document_id, principal_type, principal_id) WHERE scope = 'DOCUMENT' AND revoked_at IS NULL";
         try {
             var statement = jdbc.sql("""
                             INSERT INTO acl_entry
                                 (id, space_id, document_id, scope, principal_type, principal_id,
-                                 expires_at, created_at, updated_at)
+                                 expires_at, created_at, updated_at, grant_source)
                             VALUES
                                 (:id, :spaceId, :documentId, :scope, :principalType, :principalId,
-                                 :expiresAt, :at, :at)
+                                 :expiresAt, :at, :at, :source)
                             ON CONFLICT %s
                             DO UPDATE SET expires_at = excluded.expires_at, updated_at = excluded.updated_at
                             """.formatted(conflictTarget))
                     .param("id", UuidV7.generate(at))
                     .param("spaceId", spaceId)
                     .param("scope", scope)
+                    .param("source", source)
                     .param("principalType", principal.type().name())
                     .param("principalId", principal.id())
                     .param("at", timestamp(at));
@@ -122,8 +136,10 @@ public final class JdbcAclCommandRepository implements AclCommandRepository {
             UUID documentId,
             String scope,
             PrincipalRef principal,
-            Instant at) {
+            Instant at,
+            String source) {
         String documentPredicate = documentId == null ? "document_id IS NULL" : "document_id = :documentId";
+        String sourcePredicate = source == null ? "" : " AND grant_source = :source";
         try {
             var statement = jdbc.sql("""
                             UPDATE acl_entry
@@ -133,8 +149,8 @@ public final class JdbcAclCommandRepository implements AclCommandRepository {
                               AND %s
                               AND principal_type = :principalType
                               AND principal_id = :principalId
-                              AND revoked_at IS NULL
-                            """.formatted(documentPredicate))
+                              AND revoked_at IS NULL %s
+                            """.formatted(documentPredicate, sourcePredicate))
                     .param("at", timestamp(at))
                     .param("spaceId", spaceId)
                     .param("scope", scope)
@@ -142,6 +158,9 @@ public final class JdbcAclCommandRepository implements AclCommandRepository {
                     .param("principalId", principal.id());
             if (documentId != null) {
                 statement = statement.param("documentId", documentId);
+            }
+            if (source != null) {
+                statement = statement.param("source", source);
             }
             statement.update();
         } catch (DataAccessException failure) {

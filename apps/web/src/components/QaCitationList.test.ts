@@ -39,6 +39,8 @@ describe('问答引用列表', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/qa/questions/request-1/sources/20000000-0000-7000-8000-000000000001')
     expect(open).toHaveBeenCalledWith('/api/v1/documents/30000000-0000-7000-8000-000000000001/preview', '_blank', 'noopener,noreferrer')
     expect(wrapper.get('[data-source-title]').attributes('title')).toContain('制造行业解决方案')
+    expect(wrapper.get('[data-source-preview]').attributes('href')).toBe('/api/v1/documents/30000000-0000-7000-8000-000000000001/preview')
+    expect(wrapper.get('[data-source-preview]').attributes('rel')).toBe('noopener noreferrer')
     expect(wrapper.get('[data-citation-claim]').attributes('title')).toBe(citations[0]?.text)
   })
 
@@ -78,6 +80,7 @@ describe('问答引用列表', () => {
     await wrapper.get('[data-source-action]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-source-title]').exists()).toBe(false)
+    expect(wrapper.find('[data-source-preview]').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('曾授权的来源标题')
     expect(wrapper.get('[role="alert"]').text()).toBe('来源不存在或你已无权访问')
     expect(fetchMock).toHaveBeenCalledTimes(2)

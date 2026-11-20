@@ -12,17 +12,30 @@ import SolutionListView from '../views/SolutionListView.vue'
 import SolutionDetailView from '../views/SolutionDetailView.vue'
 import SpaceDetailView from '../views/SpaceDetailView.vue'
 import UploadView from '../views/UploadView.vue'
+import WorkbenchView from '../views/WorkbenchView.vue'
 import UserAdminView from '../views/UserAdminView.vue'
+import ChangePasswordView from '../views/ChangePasswordView.vue'
+import PermissionAdminView from '../views/PermissionAdminView.vue'
 
 export function createAppRouter(history: RouterHistory = createWebHistory()) {
   const router = createRouter({
     history,
     routes: [
       {
+        path: '/change-password',
+        name: 'change-password',
+        component: ChangePasswordView,
+      },
+      {
         path: '/login',
         name: 'login',
         component: LoginView,
         meta: { public: true },
+      },
+      {
+        path: '/workbench',
+        name: 'workbench',
+        component: WorkbenchView,
       },
       {
         path: '/',
@@ -81,6 +94,11 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
         component: UserAdminView,
         meta: { systemAdmin: true },
       },
+      {
+        path: '/admin/permissions',
+        name: 'permission-admin',
+        component: PermissionAdminView,
+      },
     ],
   })
 
@@ -89,13 +107,15 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
     await session.bootstrap()
     if (to.meta.public) {
       if (to.name === 'login' && session.authenticated) {
-        return safeRedirect(to.query.redirect) ?? { name: 'knowledge-home' }
+        return safeRedirect(to.query.redirect) ?? { name: 'workbench' }
       }
       return true
     }
     if (!session.authenticated) {
       return { name: 'login', query: { redirect: to.fullPath } }
     }
+    if (session.passwordChangeRequired && to.name !== 'change-password') return { name: 'change-password' }
+    if (!session.passwordChangeRequired && to.name === 'change-password') return { name: 'workbench' }
     if (to.meta.systemAdmin) {
       try {
         if (!(await adminApi.canManageUsers())) return { name: 'knowledge-home' }

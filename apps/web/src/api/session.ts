@@ -4,6 +4,7 @@ export interface SessionUser {
   userId: string
   username: string
   displayName: string
+  passwordChangeRequired?: boolean
 }
 
 export const sessionApi = {
@@ -17,4 +18,7 @@ export const sessionApi = {
     },
   ),
   logout: () => apiRequest<void>('/api/v1/session/logout', { method: 'POST' }),
+  changeInitialPassword: (currentPassword: string, newPassword: string) => apiRequest<void>(
+    '/api/v1/session/change-initial-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) },
+  ),
 }

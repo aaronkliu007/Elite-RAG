@@ -80,6 +80,34 @@ class JdbcOrganizationIntegrationTest {
     }
 
     @Test
+    void scopedDingtalkMemberBecomesSelectableAndInheritsDepartmentPrincipal() {
+        var scoped = new JdbcOrganizationReconciliationAdapter(jdbc, "dingtalk:");
+        new TransactionTemplate(transactions).executeWithoutResult(status -> scoped.reconcile(snapshot(
+                List.of(department("dingtalk:dept:1", null), department("dingtalk:dept:2", "dingtalk:dept:1")),
+                List.of(user("dingtalk:user:u1", true, "dingtalk:dept:2")))));
+        UUID userId = id("app_user", "dingtalk:user:u1"), root = id("org_unit", "dingtalk:dept:1");
+        assertTrue(new JdbcUserAccountStore(jdbc).findById(userId).isPresent());
+        var principals = new com.yunjihai.rag.access.EffectivePrincipalSet(new JdbcPrincipalMembershipRepository(jdbc)).forUser(userId);
+        assertTrue(principals.contains(new com.yunjihai.rag.access.PrincipalRef(com.yunjihai.rag.access.PrincipalType.DEPARTMENT, root)));
+    }
+
+    @Test
+    void dingtalkSnapshotDoesNotDisableLocalAccountsOrDeleteTheirMemberships() {
+        var localUser = UUID.randomUUID(); var localDepartment = UUID.randomUUID();
+        jdbc.sql("INSERT INTO app_user(id,external_id,display_name) VALUES (:id,'local:admin','管理员')").param("id", localUser).update();
+        jdbc.sql("INSERT INTO org_unit(id,external_id,name) VALUES (:id,'manual:dept','本地部门')").param("id", localDepartment).update();
+        jdbc.sql("INSERT INTO org_membership(user_id,org_unit_id,snapshot_at) VALUES (:u,:d,:at)")
+                .param("u",localUser).param("d",localDepartment).param("at",CAPTURED.atOffset(java.time.ZoneOffset.UTC)).update();
+        var scoped = new JdbcOrganizationReconciliationAdapter(jdbc, "dingtalk:");
+        new TransactionTemplate(transactions).executeWithoutResult(status -> scoped.reconcile(snapshot(
+                List.of(department("dingtalk:root", null)), List.of(user("dingtalk:alice", true, "dingtalk:root")))));
+        assertTrue(jdbc.sql("SELECT enabled FROM app_user WHERE id=:id").param("id",localUser).query(Boolean.class).single());
+        assertTrue(jdbc.sql("SELECT enabled FROM org_unit WHERE id=:id").param("id",localDepartment).query(Boolean.class).single());
+        assertEquals(1L,jdbc.sql("SELECT count(*) FROM org_membership WHERE user_id=:id").param("id",localUser).query(Long.class).single());
+        assertThrows(InvalidOrganizationSnapshotException.class, () -> scoped.reconcile(snapshot(List.of(department("local:bad", null)),List.of())));
+    }
+
+    @Test
     void completeSnapshotAtomicallyUpsertsUsersDepartmentsAndMemberships() {
         service.synchronize(snapshot(List.of(department("root", null), department("team", "root")),
                 List.of(user("alice", true, "team"))));

@@ -93,7 +93,12 @@ public class ApiExceptionHandler {
         return response(HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", "请求参数校验失败", request, fields);
     }
 
-    @ExceptionHandler({AuthenticationException.class, AuthenticationRejectedException.class})
+    @ExceptionHandler(AuthenticationRejectedException.class)
+    ResponseEntity<ApiError> loginRejected(AuthenticationRejectedException failure, HttpServletRequest request) {
+        return response(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "用户名或密码不正确，或账号暂时不可用", request, Map.of());
+    }
+
+    @ExceptionHandler(AuthenticationException.class)
     ResponseEntity<ApiError> unauthorized(Exception failure, HttpServletRequest request) {
         return response(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "请先登录", request, Map.of());
     }

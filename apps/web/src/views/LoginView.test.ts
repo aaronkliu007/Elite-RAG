@@ -6,6 +6,7 @@ import { createMemoryHistory } from 'vue-router'
 import { clearCsrfToken } from '../api/http'
 import { createAppRouter } from '../router'
 import LoginView from './LoginView.vue'
+import ChangePasswordView from './ChangePasswordView.vue'
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -18,6 +19,60 @@ describe('登录页', () => {
   beforeEach(() => {
     clearCsrfToken()
     vi.restoreAllMocks()
+  })
+
+  it('初始密码登录后强制改密，完成后重新登录', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      calls.push(path)
+      if (path.endsWith('/csrf')) return json({ headerName: 'X-CSRF-TOKEN', parameterName: '_csrf', token: 'csrf' })
+      if (path.endsWith('/login')) return json({ userId: 'u1', username: 'admin', displayName: '管理员', passwordChangeRequired: true })
+      if (path.endsWith('/change-initial-password')) return new Response(null, { status: 204 })
+      return json({ code: 'UNAUTHORIZED', message: '请先登录' }, 401)
+    }))
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/login?redirect=/upload')
+    await router.isReady()
+    const login = mount(LoginView, { global: { plugins: [pinia, router] } })
+    await login.get('input[name="username"]').setValue('admin')
+    await login.get('input[name="password"]').setValue('admin')
+    await login.get('form').trigger('submit')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/change-password')
+    await router.push('/upload')
+    expect(router.currentRoute.value.path).toBe('/change-password')
+    const form = mount(ChangePasswordView, { global: { plugins: [pinia, router] } })
+    const inputs = form.findAll('input')
+    await inputs[0]!.setValue('admin')
+    await inputs[1]!.setValue('new-password-2026')
+    await inputs[2]!.setValue('new-password-2026')
+    await form.get('form').trigger('submit')
+    await flushPromises()
+    expect(calls).toContain('/api/v1/session/change-initial-password')
+    expect(router.currentRoute.value.path).toBe('/login')
+  })
+
+  it('无原路由时登录后进入工作台', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith('/csrf')) return json({ headerName: 'X-CSRF-TOKEN', parameterName: '_csrf', token: 'csrf' })
+      if (path.endsWith('/login')) return json({ userId: 'u1', username: 'alice', displayName: '爱丽丝' })
+      return json({ code: 'UNAUTHORIZED', message: '请先登录' }, 401)
+    }))
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/login')
+    await router.isReady()
+    const wrapper = mount(LoginView, { global: { plugins: [pinia, router] } })
+    await wrapper.get('input[name="username"]').setValue('alice')
+    await wrapper.get('input[name="password"]').setValue('password')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/workbench')
   })
 
   it('使用密码管理器语义、防重复提交并在成功后返回原路由', async () => {

@@ -11,6 +11,37 @@ function json(body: unknown, status = 200) {
 describe('全文检索页', () => {
   beforeEach(() => { clearCsrfToken(); vi.restoreAllMocks() })
 
+  it('可加载后续有检索权限的知识空间', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('page=2')) return json([{ id: 'later', name: '后续空间', allowedActions: ['SEARCH'] }])
+      return json(Array.from({ length: 100 }, (_, i) => ({ id: `s${i}`, name: `空间${i}`, allowedActions: ['SEARCH'] })))
+    }))
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    await wrapper.get('[data-action="more-search-spaces"]').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('后续空间')
+    await wrapper.get('[name="spaceId"]').setValue('later')
+    expect((wrapper.get('[name="spaceId"]').element as HTMLSelectElement).value).toBe('later')
+    wrapper.unmount()
+  })
+
+  it('空间加载失败后允许重试，空权限时给出明确提示', async () => {
+    let attempt = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      attempt++
+      return attempt === 1
+        ? json({ code: 'SERVICE_UNAVAILABLE', message: '空间服务不可用', traceId: 'space-error', fieldErrors: {} }, 503)
+        : json([])
+    }))
+    const wrapper = mount(SearchView)
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('空间服务不可用')
+    await wrapper.get('[data-action="retry-spaces"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('暂无可检索的知识空间')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+  })
+
   it('显示降级提示和四类可跳转来源定位', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
@@ -41,6 +72,9 @@ describe('全文检索页', () => {
     expect(wrapper.text()).toContain('架构 / 部署')
     expect(wrapper.findAll('a[data-source-link]')).toHaveLength(4)
     expect(wrapper.text()).not.toContain('90%')
+    await wrapper.get('[name="queryText"]').setValue('预算')
+    expect(wrapper.get('[data-result-query]').text()).toContain('部署方案')
+    expect(wrapper.get('[data-result-query]').text()).not.toContain('预算')
   })
 
   it('呈现加载、空结果和服务失败状态', async () => {

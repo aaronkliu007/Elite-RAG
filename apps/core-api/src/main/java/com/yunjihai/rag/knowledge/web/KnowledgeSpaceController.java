@@ -114,6 +114,29 @@ public class KnowledgeSpaceController {
                 .toList();
     }
 
+    @GetMapping("/{spaceId}/member-candidates")
+    public List<MemberCandidate> searchMemberCandidates(
+            Authentication authentication, @PathVariable UUID spaceId,
+            @RequestParam String q, @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+        requireManageMembers(userId(authentication), spaceId);
+        PageBounds bounds = PageBounds.of(page, pageSize);
+        if (q == null || q.isBlank() || q.strip().length() > 128) {
+            throw new IllegalArgumentException("请输入有效的用户搜索条件");
+        }
+        String term = q.strip().toLowerCase(java.util.Locale.ROOT);
+        return users.listUsers().stream()
+                .filter(UserAccount::enabled)
+                .filter(user -> user.username().toLowerCase(java.util.Locale.ROOT).contains(term)
+                        || user.displayName().toLowerCase(java.util.Locale.ROOT).contains(term))
+                .sorted(java.util.Comparator.comparing(UserAccount::username))
+                .skip(bounds.offset()).limit(pageSize)
+                .map(user -> new MemberCandidate(user.id(), user.username(), user.displayName()))
+                .toList();
+    }
+
+    public record MemberCandidate(UUID userId, String username, String displayName) { }
+
     @PostMapping("/{spaceId}/members")
     public MemberView grantMember(
             Authentication authentication,

@@ -42,6 +42,7 @@ async function load() {
   error.value = ''
   result.value = null
   reviewCaseId.value = ''
+  filter.value = 'all'
   try {
     result.value = await apiRequest<EvaluationRun>(`/api/admin/qa/evaluation-runs/${encodeURIComponent(runId.value.trim())}`)
   } catch (failure) {
@@ -59,11 +60,6 @@ function resultText(item: CaseResult) {
 
 <template>
   <section class="evaluation-view">
-    <header>
-      <p class="eyebrow">
-        系统管理
-      </p><h2>问答评测结果</h2><p>查看质量门禁和逐案例诊断，结果不包含问题、回答或证据正文。</p>
-    </header>
     <form
       class="query-card"
       @submit.prevent="load"
@@ -103,6 +99,9 @@ function resultText(item: CaseResult) {
         aria-label="评测门禁"
       >
         <h3>{{ result.assessment.passed ? '当前门禁通过' : '当前门禁未通过' }}</h3>
+        <p data-result-run>
+          评测运行编号：{{ result.runId }}
+        </p>
         <p>数据集版本：{{ result.datasetVersion }}</p>
         <p v-if="result.assessment.failures.length">
           未通过项：{{ result.assessment.failures.map(f => failures[f] ?? f).join('、') }}

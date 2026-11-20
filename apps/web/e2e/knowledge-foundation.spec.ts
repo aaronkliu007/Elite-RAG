@@ -62,6 +62,140 @@ test.beforeEach(async ({ page }) => {
   await mockSession(page)
 })
 
+test('知识空间文档查看入口在桌面和手机宽度均无需横向滚动', async ({ page }) => {
+  await mockSpaces(page)
+  await page.route(/\/api\/v1\/admin\/users\?page=1&pageSize=1$/, (route) => route.fulfill({ status: 403, json: apiError('无管理权限', 'FORBIDDEN') }))
+  await page.route(/\/api\/v1\/knowledge-spaces\/space-1\/documents\?page=1&pageSize=100$/, (route) => route.fulfill({ json: [documentDetail()] }))
+  for (const width of [1366, 1280, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/')
+    await expect(page.getByRole('heading', { name: '知识空间', exact: true })).toHaveCount(0)
+    await expect(page.locator('.document-toolbar').getByRole('link', { name: '上传文档' })).toBeVisible()
+    const action = page.getByRole('link', { name: '查看', exact: true }).first()
+    await expect(action).toBeVisible()
+    const bounds = await action.boundingBox()
+    expect(bounds).not.toBeNull()
+    expect(bounds!.x).toBeGreaterThanOrEqual(0)
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }
+})
+
+test('下拉切换空间并让文档列表使用主内容宽度', async ({ page }) => {
+  await mockSpaces(page, [space, { ...space, id: 'space-2', name: '研发知识空间' }])
+  await page.route(/\/api\/v1\/admin\/users\?page=1&pageSize=1$/, (route) => route.fulfill({ status: 403, json: apiError('无管理权限', 'FORBIDDEN') }))
+  await page.route(/\/api\/v1\/knowledge-spaces\/space-[12]\/documents\?page=1&pageSize=100$/, (route) => route.fulfill({
+    json: [{ ...documentDetail(), title: route.request().url().includes('/space-2/') ? '研发文档' : '交付文档' }],
+  }))
+  for (const width of [1366, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/')
+    const selector = page.getByRole('combobox', { name: '知识空间', exact: true })
+    await expect(selector).toBeVisible()
+    await expect(page.getByText('交付文档', { exact: true })).toBeVisible()
+    await selector.selectOption('space-2')
+    await expect(page.getByText('研发文档', { exact: true })).toBeVisible()
+    await expect(page.getByText('交付文档', { exact: true })).toHaveCount(0)
+    await expect(page.locator('.space-list')).toHaveCount(0)
+    const content = await page.locator('.home-view').boundingBox()
+    const documents = await page.getByRole('region', { name: '文档列表' }).boundingBox()
+    expect(documents!.width / content!.width).toBeGreaterThan(0.97)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }
+})
+
+test('核心页面保持紧凑且方案列表优先展示', async ({ page }) => {
+  await mockSpaces(page)
+  await page.route(/\/api\/v1\/admin\/users\?page=1&pageSize=1$/, (route) => route.fulfill({ status: 403, json: apiError('无管理权限', 'FORBIDDEN') }))
+  await page.route(/\/api\/v1\/knowledge-spaces\/space-1\/solutions\?page=1&pageSize=20$/, (route) => route.fulfill({ json: [{
+    id: 'solution-1', spaceId: 'space-1', name: '交付方案', phase: 'REQUIREMENTS_DRAFT', revision: 1,
+    createdAt: '2026-09-24T10:00:00Z', updatedAt: '2026-09-24T10:00:00Z',
+  }] }))
+  for (const width of [1366, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await page.goto('/upload')
+    await expect(page.getByRole('region', { name: '上传文档' })).toBeVisible()
+    await expect(page.getByRole('link', { name: '返回知识空间' })).toHaveCount(0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.goto('/spaces/space-1/solutions')
+    const list = page.getByRole('region', { name: '方案列表' })
+    const form = page.locator('[data-form="create-solution"]')
+    await expect(list).toBeVisible()
+    await expect(form).toBeVisible()
+    expect((await list.boundingBox())!.y).toBeLessThan((await form.boundingBox())!.y)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  }
+})
+
+test('主导航页面不重复占用标题区，保留主要操作', async ({ page }) => {
+  await mockSpaces(page)
+  await page.route(/\/api\/v1\/admin\/users\?page=1&pageSize=1$/, (route) => route.fulfill({ status: 403, json: apiError('无管理权限', 'FORBIDDEN') }))
+  await page.route(/\/api\/v1\/knowledge-spaces\/space-1\/solutions\?page=1&pageSize=20$/, (route) => route.fulfill({ json: [] }))
+  const cases = [
+    { path: '/workbench', absent: '让知识更容易找到和使用', action: '开始提问' },
+    { path: '/search', absent: '全文检索', action: '检索' },
+    { path: '/qa', absent: '知识问答', action: '提交问题' },
+  ]
+  for (const item of cases) {
+    await page.goto(item.path)
+    await expect(page.getByRole('heading', { name: item.absent, exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: item.action })).toBeVisible()
+  }
+  await page.goto('/spaces/space-1/solutions')
+  await expect(page.getByRole('heading', { name: '方案工作台', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '方案列表' })).toBeVisible()
+})
+
+test('空间管理员可从页面顶部直达成员管理', async ({ page }) => {
+  await mockSpaces(page, [{ ...space, allowedActions: [...space.allowedActions, 'MANAGE_ACL'] }])
+  await page.route(/\/api\/v1\/admin\/users\?page=1&pageSize=1$/, (route) => route.fulfill({ status: 403, json: apiError('无管理权限', 'FORBIDDEN') }))
+  await page.route(/\/api\/v1\/knowledge-spaces\/space-1\/documents\?page=1&pageSize=100$/, (route) => route.fulfill({
+    json: Array.from({ length: 20 }, (_, index) => ({ ...documentDetail(), id: `document-${index}`, title: `交付文档 ${index}` })),
+  }))
+  await page.route(/\/api\/v1\/knowledge-spaces\/space-1\/members\?page=1&pageSize=100$/, (route) => route.fulfill({ json: [] }))
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await page.goto('/spaces/space-1')
+  await page.getByRole('link', { name: '管理成员与角色' }).click()
+  await expect(page).toHaveURL(/#space-members$/)
+  await expect(page.locator('#space-members')).toBeInViewport()
+})
+
+test('管理员在桌面和手机查看长用户名并取消密码重置', async ({ page }) => {
+  await page.route(/\/api\/v1\/admin\/users\?page=1&pageSize=(1|100)$/, (route) => route.fulfill({ json: [{
+    id: 'user-2', username: 'long-username-without-breaks-for-administrator-layout-check',
+    displayName: '企业解决方案与技术交付协作中心的长名字测试用户', enabled: true,
+    createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-01T00:00:00Z',
+  }] }))
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.goto('/admin/users')
+  await expect(page.getByRole('button', { name: '复制用户 ID' })).toBeVisible()
+  await page.getByRole('button', { name: '重置密码' }).click()
+  await page.locator('input[name="resetPassword"]').fill('example-password-123')
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.locator('input[name="resetPassword"]')).toHaveCount(0)
+  await page.setViewportSize({ width: 390, height: 844 })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+})
+
+test('工作台在桌面和手机可导航，并将问题安全转交问答页', async ({ page }) => {
+  await mockSpaces(page)
+  await page.route(/\/api\/v1\/admin\/users\?page=1&pageSize=1$/, (route) => route.fulfill({ status: 403, json: apiError('无管理权限', 'FORBIDDEN') }))
+  await page.setViewportSize({ width: 1366, height: 900 })
+  await page.goto('/workbench')
+  await expect(page.getByText(space.name)).toBeVisible()
+  await page.setViewportSize({ width: 390, height: 844 })
+  const toggle = page.getByRole('button', { name: '打开导航' })
+  await toggle.click()
+  await expect(page.getByRole('navigation', { name: '主导航' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(toggle).toBeFocused()
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+  await page.getByLabel('输入问题').fill('交付规范有哪些？')
+  await page.getByRole('button', { name: '开始提问' }).click()
+  await expect(page).toHaveURL(/\/qa$/)
+  await expect(page.locator('textarea[name="question"]')).toHaveValue('交付规范有哪些？')
+})
+
 test('撤销权限后直链返回统一的不可发现结果', async ({ page }) => {
   await page.route(/\/api\/v1\/documents\/secret-document$/, (route) => route.fulfill({
     status: 404,
@@ -162,7 +296,7 @@ test('解析轮询完成后可发布，且 1366px 与宽屏下主操作不被遮
   await expect(publish).toBeEnabled()
   await publish.click()
   await expect(page.getByText('当前版本已发布。')).toBeVisible()
-  await expect(page.getByText('V1 · PUBLISHED')).toBeVisible()
+  await expect(page.getByText('V1 · 已发布')).toBeVisible()
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1366)
   await page.screenshot({ path: test.info().outputPath('document-review-1366.png'), fullPage: true })
 
@@ -205,7 +339,7 @@ test('登录用户可从导航执行降级检索并跳转到精确来源', async
   }))
 
   await page.goto('/search')
-  await expect(page.getByRole('navigation', { name: '主导航' }).getByText('全文检索')).toBeVisible()
+  await expect(page.getByRole('navigation', { name: '主导航' }).getByText('知识检索')).toBeVisible()
   await page.locator('input[name="queryText"]').fill('制造业运维方案')
   await page.getByRole('button', { name: '检索', exact: true }).click()
 
@@ -262,7 +396,7 @@ test('知识问答展示降级回答、引用，并在再次鉴权后打开来�
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1366)
   await page.screenshot({ path: test.info().outputPath('qa-answered-degraded-1366.png'), fullPage: true })
   await page.setViewportSize({ width: 1600, height: 1000 })
-  await expect(page.getByRole('heading', { name: '知识问答' })).toBeVisible()
+  await expect(page.getByLabel('你的问题')).toBeVisible()
   await expect(page.locator('body')).toHaveJSProperty('scrollWidth', 1600)
   await page.screenshot({ path: test.info().outputPath('qa-answered-degraded-wide.png'), fullPage: true })
 })

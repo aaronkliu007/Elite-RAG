@@ -9,7 +9,12 @@ public record SessionPrincipal(
         String username,
         String displayName,
         long sessionVersion,
-        Instant issuedAt) implements Principal {
+        Instant issuedAt,
+        boolean passwordChangeRequired) implements Principal {
+
+    public SessionPrincipal(UUID userId, String username, String displayName, long sessionVersion, Instant issuedAt) {
+        this(userId, username, displayName, sessionVersion, issuedAt, false);
+    }
 
     @Override
     public String getName() {

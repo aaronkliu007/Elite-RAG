@@ -97,6 +97,8 @@ class JdbcRoleAssignmentIntegrationTest {
     void clearDatabase() {
         ownerJdbc.sql("DELETE FROM audit_event").update();
         jdbc.sql("DELETE FROM acl_entry").update();
+        jdbc.sql("DELETE FROM org_membership").update();
+        jdbc.sql("DELETE FROM org_unit").update();
         jdbc.sql("DELETE FROM space_role_assignment").update();
         jdbc.sql("DELETE FROM system_role_assignment").update();
         jdbc.sql("DELETE FROM knowledge_space").update();
@@ -142,6 +144,68 @@ class JdbcRoleAssignmentIntegrationTest {
         assertThat(activeUserAclCount(USER_ID)).isZero();
         assertThat(count("acl_entry", "principal_id = '" + USER_ID + "' AND revoked_at IS NOT NULL"))
                 .isEqualTo(1);
+    }
+
+    @Test
+    void directAndRoleGrantsRemainIndependentWhenEitherIsRevoked() {
+        var acl = context.getBean(JdbcAclCommandRepository.class);
+        var principal = new PrincipalRef(PrincipalType.USER, USER_ID);
+        acl.grantSpace(SPACE_ID, principal, AT.plusSeconds(3600), AT);
+        roles.grantSpaceRole(ACTOR_ID, SPACE_ID, USER_ID, SpaceRole.READER, AT.plusSeconds(1));
+        assertThat(activeUserAclCount(USER_ID)).isEqualTo(2);
+        roles.revokeSpaceRole(ACTOR_ID, SPACE_ID, USER_ID, SpaceRole.READER, AT.plusSeconds(2));
+        assertThat(acl.isWithinSpaceScope(SPACE_ID, principal, AT.plusSeconds(3))).isTrue();
+        assertThat(activeUserAclCount(USER_ID)).isEqualTo(1);
+        roles.grantSpaceRole(ACTOR_ID, SPACE_ID, USER_ID, SpaceRole.READER, AT.plusSeconds(4));
+        acl.revokeSpace(SPACE_ID, principal, AT.plusSeconds(5));
+        assertThat(acl.isWithinSpaceScope(SPACE_ID, principal, AT.plusSeconds(6))).isTrue();
+        assertThat(activeUserAclCount(USER_ID)).isEqualTo(1);
+    }
+
+    @Test
+    void legacyGrantIsRetainedForReviewWhenRoleIsRevoked() {
+        jdbc.sql("""
+                INSERT INTO acl_entry (id, space_id, scope, principal_type, principal_id, grant_source)
+                VALUES (:id, :space, 'SPACE', 'USER', :user, 'LEGACY_UNKNOWN')
+                """).param("id", UUID.randomUUID()).param("space", SPACE_ID).param("user", USER_ID).update();
+        roles.grantSpaceRole(ACTOR_ID, SPACE_ID, USER_ID, SpaceRole.READER, AT);
+        roles.revokeSpaceRole(ACTOR_ID, SPACE_ID, USER_ID, SpaceRole.READER, AT.plusSeconds(1));
+        assertThat(activeUserAclCount(USER_ID)).isEqualTo(1);
+        assertThat(jdbc.sql("SELECT grant_source FROM acl_entry WHERE principal_id = :user AND revoked_at IS NULL")
+                .param("user", USER_ID).query(String.class).single()).isEqualTo("LEGACY_UNKNOWN");
+    }
+
+    @Test
+    void permissionOverviewReturnsSourcesIndividually() {
+        context.getBean(JdbcAclCommandRepository.class).grantSpace(SPACE_ID, new PrincipalRef(PrincipalType.USER, USER_ID), null, AT);
+        roles.grantSpaceRole(ACTOR_ID, SPACE_ID, USER_ID, SpaceRole.READER, AT);
+        var grants = new JdbcPermissionGrantQuery(jdbc).listForSpace(SPACE_ID, 0, 100);
+        assertThat(grants).extracting(com.yunjihai.rag.access.PermissionGrantQuery.Grant::source)
+                .containsExactlyInAnyOrder("DIRECT", "SPACE_ROLE");
+    }
+
+    @Test
+    void effectivePermissionsIncludeActiveAncestorDepartmentAndRespectExpiryAndDisabledAccount() {
+        UUID parent = UUID.randomUUID(), child = UUID.randomUUID();
+        jdbc.sql("INSERT INTO local_credential (user_id, username_normalized, password_hash) VALUES (:u, 'member', 'test-hash')")
+                .param("u", USER_ID).update();
+        jdbc.sql("INSERT INTO org_unit (id, external_id, name) VALUES (:id, 'parent', '上级部门')").param("id", parent).update();
+        jdbc.sql("INSERT INTO org_unit (id, external_id, name, parent_id) VALUES (:id, 'child', '子部门', :parent)")
+                .param("id", child).param("parent", parent).update();
+        jdbc.sql("INSERT INTO org_membership (user_id, org_unit_id, snapshot_at) VALUES (:u, :d, :at)")
+                .param("u", USER_ID).param("d", child).param("at", timestamp(AT)).update();
+        var acl = context.getBean(JdbcAclCommandRepository.class);
+        acl.grantSpace(SPACE_ID, new PrincipalRef(PrincipalType.DEPARTMENT, parent), AT.plusSeconds(30), AT);
+        var service = new com.yunjihai.rag.access.EffectiveUserPermissionService(new JdbcPermissionGrantQuery(jdbc),
+                new com.yunjihai.rag.access.EffectivePrincipalSet(new JdbcPrincipalMembershipRepository(jdbc)),
+                new JdbcUserAccountStore(jdbc), store, Clock.fixed(AT.plusSeconds(1), ZoneOffset.UTC));
+        var result = service.forUser(SPACE_ID, USER_ID);
+        assertThat(result.spaceReadable()).isTrue();
+        assertThat(result.grants()).singleElement().satisfies(g -> {
+            assertThat(g.inherited()).isTrue(); assertThat(g.grant().displayName()).isEqualTo("上级部门");
+        });
+        jdbc.sql("UPDATE app_user SET enabled=false WHERE id=:u").param("u", USER_ID).update();
+        assertThat(service.forUser(SPACE_ID, USER_ID).spaceReadable()).isFalse();
     }
 
     @Test

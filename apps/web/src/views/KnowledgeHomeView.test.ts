@@ -1,0 +1,103 @@
+import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+import { adminApi } from '../api/admin'
+import { ApiRequestError } from '../api/http'
+import { knowledgeApi, type KnowledgeDocumentSummary } from '../api/knowledge'
+import { spacesApi } from '../api/spaces'
+import KnowledgeHomeView from './KnowledgeHomeView.vue'
+
+describe('知识空间首页', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('文档列表 404 时提示可能的空间权限或空间状态，并给出处理办法', async () => {
+    vi.spyOn(spacesApi, 'listSpaces').mockResolvedValue([{ id: 'a', name: '研发空间', description: '', revision: 1, createdBy: 'u', createdAt: '', allowedActions: [] }])
+    vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(false)
+    vi.spyOn(knowledgeApi, 'listDocuments').mockRejectedValue(new ApiRequestError('资源不存在或无权访问', 404, 'NOT_FOUND', 'trace', {}))
+    const wrapper = mount(KnowledgeHomeView, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('无法加载文档：该空间可能已不存在，或你没有访问权限。请联系空间管理员确认。')
+    expect(wrapper.text()).not.toContain('追踪 ID')
+    expect(wrapper.find('[data-action="retry-documents"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+  it('创建空间失败后仅相同内容沿用请求标识', async () => {
+    vi.spyOn(spacesApi, 'listSpaces').mockResolvedValue([])
+    vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(true)
+    const create = vi.spyOn(spacesApi, 'createSpace').mockRejectedValue(new Error('网络中断'))
+    const wrapper = mount(KnowledgeHomeView, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    await wrapper.get('[data-action="open-create-space"]').trigger('click')
+    await wrapper.get('[name="spaceName"]').setValue('研发空间')
+    await wrapper.get('[name="spaceDescription"]').setValue('研发知识')
+    await wrapper.get('[data-form="create-space"]').trigger('submit'); await flushPromises()
+    await wrapper.get('[data-form="create-space"]').trigger('submit'); await flushPromises()
+    await wrapper.get('[name="spaceDescription"]').setValue('交付知识')
+    await wrapper.get('[data-form="create-space"]').trigger('submit'); await flushPromises()
+    expect(create.mock.calls[0]?.[2]).toBe(create.mock.calls[1]?.[2])
+    expect(create.mock.calls[2]?.[2]).not.toBe(create.mock.calls[1]?.[2])
+    wrapper.unmount()
+  })
+  it('支持继续加载超过一百个知识空间和文档', async () => {
+    const space = (id: string) => ({ id, name: `空间${id}`, description: '', revision: 1, createdBy: 'u', createdAt: '', allowedActions: [] })
+    vi.spyOn(spacesApi, 'listSpaces').mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => space(String(i)))).mockResolvedValueOnce([space('more')])
+    vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(false)
+    const item = (id: string) => ({ id, title: `文档${id}`, ownerName: '', lifecycleStatus: 'DRAFT' as const, parseStatus: 'PENDING' as const, updatedAt: '2026-01-01' })
+    vi.spyOn(knowledgeApi, 'listDocuments').mockResolvedValueOnce(Array.from({ length: 100 }, (_, i) => item(String(i)))).mockResolvedValueOnce([item('more')])
+    const wrapper = mount(KnowledgeHomeView, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    await wrapper.get('[data-action="more-spaces"]').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('空间more')
+    await wrapper.get('[data-action="more-documents"]').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('文档more')
+    wrapper.unmount()
+  })
+  it('文档加载失败时保留空间列表并允许重试', async () => {
+    vi.spyOn(spacesApi, 'listSpaces').mockResolvedValue([{ id: 'a', name: '研发空间', description: '', revision: 1, createdBy: 'u', createdAt: '', allowedActions: [] }])
+    vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(false)
+    vi.spyOn(knowledgeApi, 'listDocuments').mockRejectedValueOnce(new Error('文档服务不可用')).mockResolvedValueOnce([])
+    const wrapper = mount(KnowledgeHomeView, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    expect(wrapper.find('[name="knowledge-space"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('文档服务不可用')
+    await wrapper.get('[data-action="retry-documents"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('当前空间暂无可见文档')
+  })
+
+  it('快速切换空间时，较晚返回的旧请求不会覆盖当前文档', async () => {
+    const space = (id: string) => ({ id, name: `空间${id}`, description: '', revision: 1, createdBy: 'u', createdAt: '', allowedActions: [] })
+    vi.spyOn(spacesApi, 'listSpaces').mockResolvedValue([space('a'), space('b')])
+    vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(false)
+    let finishA!: (documents: KnowledgeDocumentSummary[]) => void
+    let finishB!: (documents: KnowledgeDocumentSummary[]) => void
+    const delayedA = new Promise<KnowledgeDocumentSummary[]>((resolve) => { finishA = resolve })
+    const delayedB = new Promise<KnowledgeDocumentSummary[]>((resolve) => { finishB = resolve })
+    vi.spyOn(knowledgeApi, 'listDocuments').mockResolvedValueOnce([]).mockReturnValueOnce(delayedA).mockReturnValueOnce(delayedB)
+    const wrapper = mount(KnowledgeHomeView, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    const selector = wrapper.get('[name="knowledge-space"]')
+    await selector.setValue('a')
+    await selector.setValue('b')
+    const document = (title: string) => ({ id: title, title, ownerName: '', lifecycleStatus: 'DRAFT' as const, parseStatus: 'PENDING' as const, updatedAt: '' })
+    finishB([document('空间B文档')])
+    await flushPromises()
+    finishA([document('空间A旧文档')])
+    await flushPromises()
+    expect(wrapper.text()).toContain('空间B文档')
+    expect(wrapper.text()).not.toContain('空间A旧文档')
+  })
+  it('空间切换位于文档工具栏，文档区域不再为列表预留侧栏', async () => {
+    const space = (id: string) => ({ id, name: `空间${id}`, description: '', revision: 1, createdBy: 'u', createdAt: '', allowedActions: [] })
+    vi.spyOn(spacesApi, 'listSpaces').mockResolvedValue([space('a'), space('b')])
+    vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(false)
+    const list = vi.spyOn(knowledgeApi, 'listDocuments').mockResolvedValue([])
+    const wrapper = mount(KnowledgeHomeView, { global: { stubs: { RouterLink: true } } })
+    await flushPromises()
+    expect(wrapper.find('.space-list').exists()).toBe(false)
+    const selector = wrapper.get('.document-toolbar [name="knowledge-space"]')
+    await selector.setValue('b')
+    await flushPromises()
+    expect(list).toHaveBeenLastCalledWith('b')
+    expect((selector.element as HTMLSelectElement).value).toBe('b')
+  })
+})

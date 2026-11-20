@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 
 import { ApiRequestError, clearCsrfToken, configureUnauthorizedHandler } from '../api/http'
 import { sessionApi, type SessionUser } from '../api/session'
+import { takeQuestionDraft } from '../qaDraft'
 
 export type { SessionUser } from '../api/session'
 
@@ -13,6 +14,7 @@ export const useSessionStore = defineStore('session', () => {
   let bootstrapRequest: Promise<void> | null = null
 
   const authenticated = computed(() => user.value !== null)
+  const passwordChangeRequired = computed(() => user.value?.passwordChangeRequired === true)
 
   function establish(currentUser: SessionUser) {
     user.value = currentUser
@@ -21,6 +23,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   function revoke() {
+    takeQuestionDraft()
     user.value = null
   }
 
@@ -63,9 +66,16 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  async function changeInitialPassword(currentPassword: string, newPassword: string) {
+    await sessionApi.changeInitialPassword(currentPassword, newPassword)
+    revoke()
+    clearCsrfToken()
+  }
+
   return {
     user,
     authenticated,
+    passwordChangeRequired,
     initialized,
     bootstrapError,
     establish,
@@ -73,5 +83,6 @@ export const useSessionStore = defineStore('session', () => {
     bootstrap,
     login,
     logout,
+    changeInitialPassword,
   }
 })

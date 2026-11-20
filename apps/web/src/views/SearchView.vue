@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { ApiRequestError } from '../api/http'
 import { searchApi, type SearchResponse } from '../api/search'
@@ -10,8 +10,15 @@ import SearchResults from '../components/SearchResults.vue'
 const spaces = ref<KnowledgeSpace[]>([])
 const spaceId = ref('')
 const queryText = ref('')
+const resultQuery = ref('')
 const result = ref<SearchResponse | null>(null)
 const loadingSpaces = ref(true)
+const spacesError = ref('')
+const moreSpacesError = ref('')
+const loadingMoreSpaces = ref(false)
+const hasMoreSpaces = ref(false)
+const spacePage = ref(1)
+let spaceGeneration = 0
 const searching = ref(false)
 const error = ref('')
 const scope = ref<'space' | 'document'>('space')
@@ -26,25 +33,51 @@ let documentRequest = 0
 const message = (failure: unknown, fallback: string) => failure instanceof ApiRequestError ? failure.displayMessage : fallback
 
 async function loadSpaces() {
+  const generation = ++spaceGeneration
+  loadingSpaces.value = true
+  spacesError.value = ''
   try {
-    spaces.value = (await spacesApi.listSpaces()).filter((space) => space.allowedActions.includes('SEARCH'))
+    const page = await spacesApi.listSpaces()
+    if (generation !== spaceGeneration) return
+    spaces.value = page.filter((space) => space.allowedActions.includes('SEARCH'))
+    hasMoreSpaces.value = page.length === 100
+    spacePage.value = 1
     spaceId.value ||= spaces.value[0]?.id ?? ''
   } catch (failure) {
-    error.value = message(failure, '加载知识空间失败')
+    if (generation === spaceGeneration) spacesError.value = message(failure, '加载知识空间失败')
   } finally {
-    loadingSpaces.value = false
+    if (generation === spaceGeneration) loadingSpaces.value = false
   }
+}
+
+async function loadMoreSpaces() {
+  if (!hasMoreSpaces.value || loadingMoreSpaces.value) return
+  const generation = spaceGeneration
+  loadingMoreSpaces.value = true
+  moreSpacesError.value = ''
+  try {
+    const page = await spacesApi.listSpaces(spacePage.value + 1)
+    if (generation !== spaceGeneration) return
+    const known = new Set(spaces.value.map(item => item.id))
+    spaces.value.push(...page.filter(item => item.allowedActions.includes('SEARCH') && !known.has(item.id)))
+    spacePage.value++; hasMoreSpaces.value = page.length === 100
+    spaceId.value ||= spaces.value[0]?.id ?? ''
+  } catch (failure) {
+    if (generation === spaceGeneration) moreSpacesError.value = message(failure, '加载更多空间失败，请重试')
+  } finally { if (generation === spaceGeneration) loadingMoreSpaces.value = false }
 }
 
 async function search() {
   if (!spaceId.value || !queryText.value.trim() || searching.value
     || (scope.value === 'document' && (!documentId.value || loadingDocuments.value))) return
   searching.value = true
+  const submittedQuery = queryText.value.trim()
   error.value = ''
   result.value = null
   try {
-    result.value = await searchApi.search(spaceId.value, queryText.value.trim(), 10,
+    result.value = await searchApi.search(spaceId.value, submittedQuery, 10,
       scope.value === 'document' ? documentId.value : undefined)
+    resultQuery.value = submittedQuery
   } catch (failure) {
     error.value = message(failure, '检索失败，请稍后重试')
   } finally {
@@ -88,15 +121,33 @@ watch([spaceId,scope],()=>{
 watch(documentId,()=>{ result.value=null })
 
 onMounted(loadSpaces)
+onBeforeUnmount(() => { spaceGeneration++; documentRequest++ })
 </script>
 
 <template>
   <section class="search-view">
-    <header>
-      <p class="eyebrow">
-        组织知识检索
-      </p><h2>全文检索</h2><p>结果在返回前会再次执行权限过滤。</p>
-    </header>
+    <div
+      v-if="spacesError"
+      class="state state-error"
+      role="alert"
+    >
+      {{ spacesError }}
+      <button
+        type="button"
+        class="more-button"
+        data-action="retry-spaces"
+        @click="loadSpaces"
+      >
+        重新加载空间
+      </button>
+    </div>
+    <div
+      v-else-if="!loadingSpaces && spaces.length === 0"
+      class="state"
+      role="status"
+    >
+      {{ hasMoreSpaces ? '已加载的空间中暂无检索权限，可继续加载后续空间。' : '暂无可检索的知识空间，请联系管理员申请权限。' }}
+    </div>
     <form @submit.prevent="search">
       <label>知识空间<select
         v-model="spaceId"
@@ -107,6 +158,16 @@ onMounted(loadSpaces)
         :key="space.id"
         :value="space.id"
       >{{ space.name }}</option></select></label>
+      <button
+        v-if="hasMoreSpaces"
+        type="button"
+        class="more-button"
+        data-action="more-search-spaces"
+        :disabled="loadingMoreSpaces || searching"
+        @click="loadMoreSpaces"
+      >
+        {{ loadingMoreSpaces ? '正在加载…' : moreSpacesError ? '重试加载空间' : '加载更多空间' }}
+      </button>
       <label>检索范围<select
         v-model="scope"
         name="scope"
@@ -151,6 +212,13 @@ onMounted(loadSpaces)
       </button>
     </form>
     <div
+      v-if="moreSpacesError"
+      class="state state-error"
+      role="alert"
+    >
+      {{ moreSpacesError }}
+    </div>
+    <div
       v-if="documentsError"
       class="state state-error"
       role="alert"
@@ -177,6 +245,13 @@ onMounted(loadSpaces)
     >
       {{ error }}
     </div>
+    <p
+      v-if="result"
+      class="scope-note result-query"
+      data-result-query
+    >
+      以下结果对应：{{ resultQuery }}
+    </p>
     <div
       v-if="result?.degraded"
       class="state state-warning"
@@ -201,6 +276,6 @@ onMounted(loadSpaces)
 .search-view { display: grid; gap: 22px; min-width: 0; } header h2 { margin: 4px 0 8px; font-size: clamp(26px, 3vw, 36px); } header p:last-child { margin: 0; color: var(--color-muted); } .eyebrow { margin: 0; color: var(--color-accent); font-size: 12px; font-weight: 800; letter-spacing: .12em; }
 form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: #fff; box-shadow: var(--shadow-panel); } label, .document-field { flex: 1 1 180px; min-width: 0; } label { display: grid; gap: 7px; color: var(--color-muted); font-size: 13px; font-weight: 700; } .document-field { display: flex; align-items: end; gap: 6px; } .document-field label { flex: 1; } .query-field { flex: 2 1 260px; } input, select { width: 100%; min-width: 0; min-height: 44px; padding: 0 12px; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: #fff; color: var(--color-ink); font: inherit; } .more-button { min-height: 44px; padding: 0 10px; border: 1px solid var(--color-border); border-radius: var(--radius-control); color: var(--color-ink); background: #fff; cursor: pointer; white-space: nowrap; } .scope-note { color: var(--color-muted); font-size: 13px; line-height: 1.5; }
 .button { min-height: 44px; padding: 0 20px; border: 1px solid var(--color-primary); border-radius: var(--radius-control); font-weight: 750; appearance: none; } .button-primary { color: #fff; background: var(--color-primary); -webkit-text-fill-color: #fff; } .button:disabled, .more-button:disabled { opacity: .52; cursor: not-allowed; } .button:focus-visible, .more-button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
-.state { display: grid; gap: 5px; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); color: var(--color-muted); background: #fff; } .state-error { border-color: #edb8c0; color: #8d2633; background: #fff8f8; } .state-warning { border-color: #ead18c; color: #7a4a00; background: #fff9e8; }
+.result-query { margin: 0; overflow-wrap: anywhere; } .state { display: grid; gap: 5px; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-panel); color: var(--color-muted); background: #fff; } .state-error { border-color: #edb8c0; color: #8d2633; background: #fff8f8; } .state-warning { border-color: #ead18c; color: #7a4a00; background: #fff9e8; }
 @media (max-width: 760px) { form { align-items: stretch; flex-direction: column; } label, .document-field, .query-field { flex: auto; width: 100%; } }
 </style>

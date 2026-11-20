@@ -27,7 +27,7 @@ async function submit() {
   try {
     await session.login(username.value, password.value)
     password.value = ''
-    await router.replace(safeRedirect(route.query.redirect) ?? '/')
+    await router.replace(session.passwordChangeRequired ? '/change-password' : safeRedirect(route.query.redirect) ?? '/workbench')
   } catch (error) {
     submitError.value = error instanceof ApiRequestError
       ? error.displayMessage
@@ -88,6 +88,12 @@ async function submit() {
           required
         >
       </label>
+      <p
+        v-if="route.query.passwordChanged === '1'"
+        role="status"
+      >
+        密码已修改，请使用新密码登录。
+      </p>
       <p
         v-if="visibleError"
         class="login-error"

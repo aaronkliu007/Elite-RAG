@@ -10,5 +10,10 @@ public record LocalCredential(
         int failedAttempts,
         Instant failureWindowStartedAt,
         Instant lockedUntil,
-        Instant passwordChangedAt) {
+        Instant passwordChangedAt,
+        boolean passwordChangeRequired) {
+    public LocalCredential(UUID userId, String normalizedUsername, String passwordHash, int failedAttempts,
+                           Instant failureWindowStartedAt, Instant lockedUntil, Instant passwordChangedAt) {
+        this(userId, normalizedUsername, passwordHash, failedAttempts, failureWindowStartedAt, lockedUntil, passwordChangedAt, false);
+    }
 }

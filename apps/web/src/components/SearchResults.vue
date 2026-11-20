@@ -7,7 +7,7 @@ function locatorLabel(locator: SourceLocator) {
   if (locator.type === 'PAGE') return `PDF 第 ${locator.pageNumber} 页`
   if (locator.type === 'SLIDE') return `PPT 第 ${locator.slideNumber} 页`
   if (locator.type === 'TABLE') return `${locator.tableName}：第 ${locator.startRow}–${locator.endRow} 行，第 ${locator.startColumn}–${locator.endColumn} 列`
-  return locator.headingPath.join(' / ') || locator.nodeId
+  return locator.headingPath.join(' / ') || '文档片段'
 }
 </script>
 

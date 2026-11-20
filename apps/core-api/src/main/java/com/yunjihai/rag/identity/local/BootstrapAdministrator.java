@@ -40,7 +40,7 @@ public class BootstrapAdministrator implements ApplicationRunner {
             throw new IllegalStateException("缺少引导管理员配置，且系统中不存在系统管理员");
         }
         char[] password = properties.password().toCharArray();
-        var account = users.createUser(
+        var account = users.createBootstrapUser(
                 properties.username(), properties.displayName(), password,
                 com.yunjihai.rag.common.UuidV7.generate(clock.instant()));
         roles.grantSystemRole(

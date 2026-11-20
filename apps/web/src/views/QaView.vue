@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { ApiRequestError } from '../api/http'
 import { qaApi, type QaQuestionResponse } from '../api/qa'
 import QaAnswerPanel from '../components/QaAnswerPanel.vue'
+import { takeQuestionDraft } from '../qaDraft'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,6 +16,7 @@ const error = ref('')
 const result = ref<QaQuestionResponse | null>(null)
 const pendingKey = ref('')
 const pendingQuestion = ref('')
+let requestGeneration = 0
 
 function failureMessage(failure: unknown) {
   return failure instanceof ApiRequestError ? failure.displayMessage : '问答服务暂时不可用，请稍后重试'
@@ -22,57 +24,62 @@ function failureMessage(failure: unknown) {
 
 async function ask() {
   const normalized = question.value.trim()
-  if (!normalized || submitting.value) return
+  if (!normalized || submitting.value || restoring.value) return
   if (!pendingKey.value || pendingQuestion.value !== normalized) {
     pendingKey.value = crypto.randomUUID()
     pendingQuestion.value = normalized
   }
   submitting.value = true
+  const generation = ++requestGeneration
   error.value = ''
   result.value = null
   try {
-    result.value = await qaApi.ask(normalized, pendingKey.value)
+    const response = await qaApi.ask(normalized, pendingKey.value)
+    if (generation !== requestGeneration) return
+    result.value = response
     pendingKey.value = ''
     pendingQuestion.value = ''
     await router.replace({ path: '/qa', query: { requestId: result.value.requestId } })
   } catch (failure) {
-    error.value = failureMessage(failure)
+    if (generation === requestGeneration) error.value = failureMessage(failure)
   } finally {
     submitting.value = false
   }
 }
 
 async function restore(requestId: string) {
+  const generation = ++requestGeneration
   restoring.value = true
   error.value = ''
+  result.value = null
   try {
-    result.value = await qaApi.get(requestId)
+    const response = await qaApi.get(requestId)
+    if (generation === requestGeneration) result.value = response
   } catch (failure) {
-    error.value = failureMessage(failure)
+    if (generation === requestGeneration) error.value = failureMessage(failure)
   } finally {
-    restoring.value = false
+    if (generation === requestGeneration) restoring.value = false
   }
 }
 
 onMounted(() => {
-  const requestId = typeof route.query.requestId === 'string' ? route.query.requestId : ''
-  if (requestId) void restore(requestId)
+  question.value = takeQuestionDraft()
 })
+onBeforeUnmount(() => { requestGeneration++ })
+watch(() => route.query.requestId, (value) => {
+  const requestId = typeof value === 'string' ? value : ''
+  if (requestId && result.value?.requestId !== requestId) void restore(requestId)
+  else if (!requestId) {
+    requestGeneration++
+    restoring.value = false
+    result.value = null
+    error.value = ''
+  }
+}, { immediate: true })
 </script>
 
 <template>
   <section class="qa-view">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">
-          组织知识问答
-        </p>
-        <h1>知识问答</h1>
-        <p>只依据已发布且你有权访问的全部知识空间，无法验证时严格拒答。</p>
-      </div>
-      <span class="trust-badge">权限内回答 · 来源可追溯</span>
-    </header>
-
     <form @submit.prevent="ask">
       <label for="qa-question">你的问题</label>
       <textarea
@@ -85,12 +92,12 @@ onMounted(() => {
         :disabled="submitting"
       />
       <div class="form-footer">
-        <span>系统会自动检索你当前有权访问的知识，不会扩大权限范围。</span>
+        <span>仅检索有权访问的已发布知识；无法验证时拒答。</span>
         <button
           class="button button-primary"
           data-action="ask"
           type="submit"
-          :disabled="!question.trim() || submitting"
+          :disabled="!question.trim() || submitting || restoring"
         >
           {{ submitting ? '正在查找依据…' : '提交问题' }}
         </button>

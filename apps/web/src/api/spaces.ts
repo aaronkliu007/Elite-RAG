@@ -20,11 +20,44 @@ export interface SpaceMember {
   roles: SpaceRole[]
 }
 
+export interface MemberCandidate {
+  userId: string
+  username: string
+  displayName: string
+}
+
+export interface PermissionGrant {
+  id: string
+  principalType: string
+  principalId: string
+  username: string | null
+  displayName: string | null
+  source: string
+  expiresAt: string | null
+}
+
+export interface EffectiveUserPermission {
+  userId: string
+  username: string
+  displayName: string
+  enabled: boolean
+  spaceReadable: boolean
+  systemAdmin: boolean
+  spaceRoles: SpaceRole[]
+  grants: Array<{ grant: PermissionGrant, inherited: boolean, effective: boolean }>
+}
+
 function idempotencyHeaders(idempotencyKey: string) {
   return { 'Idempotency-Key': idempotencyKey }
 }
 
 export const spacesApi = {
+  effectiveUserPermissions: (spaceId: string, userId: string) =>
+    apiRequest<EffectiveUserPermission>(`/api/v1/knowledge-spaces/${encodeURIComponent(spaceId)}/users/${encodeURIComponent(userId)}/effective-permissions`),
+  listPermissionGrants: (spaceId: string, page = 1) =>
+    apiRequest<PermissionGrant[]>(`/api/v1/knowledge-spaces/${encodeURIComponent(spaceId)}/permission-grants?page=${page}&pageSize=100`),
+  searchCandidates: (spaceId: string, query: string, page = 1) =>
+    apiRequest<MemberCandidate[]>(`/api/v1/knowledge-spaces/${encodeURIComponent(spaceId)}/member-candidates?q=${encodeURIComponent(query)}&page=${page}&pageSize=20`),
   listSpaces: (page = 1, pageSize = 100) =>
     apiRequest<KnowledgeSpace[]>(`/api/v1/knowledge-spaces?page=${page}&pageSize=${pageSize}`),
 

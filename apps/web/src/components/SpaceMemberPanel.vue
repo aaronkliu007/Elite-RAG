@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { ApiRequestError } from '../api/http'
-import { spacesApi, type SpaceMember, type SpaceRole } from '../api/spaces'
+import type { AdminUser } from '../api/admin'
+import { spacesApi, type MemberCandidate, type SpaceMember, type SpaceRole } from '../api/spaces'
 
-const props = defineProps<{ spaceId: string }>()
+const props = defineProps<{ spaceId: string, users?: AdminUser[], searchUsers?: boolean }>()
+const emit = defineEmits<{ changed: [] }>()
 
 const roleOptions: Array<{ value: SpaceRole, label: string }> = [
   { value: 'SPACE_ADMIN', label: '空间管理员' },
@@ -19,14 +21,47 @@ const roleLabels: Record<SpaceRole, string> = Object.fromEntries(
 const members = ref<SpaceMember[]>([])
 const loading = ref(true)
 const loadError = ref('')
+const moreError = ref('')
+const loadingMore = ref(false)
+const memberPage = ref(1)
+const hasMoreMembers = ref(false)
+let listGeneration = 0
 const mutationError = ref('')
 const pendingOperation = ref('')
 const memberUserId = ref('')
+const memberSearch = ref('')
+const candidates = ref<MemberCandidate[]>([])
+const candidatePage = ref(1)
+const candidateHasMore = ref(false)
+const candidateLoading = ref(false)
+const candidateError = ref('')
+let candidateQuery = ''
+let candidateGeneration = 0
 const memberRole = ref<SpaceRole>('READER')
 const operationKeys = new Map<string, string>()
 
 function message(error: unknown, fallback: string) {
   return error instanceof ApiRequestError ? error.displayMessage : fallback
+}
+
+async function searchCandidates(more = false) {
+  const query = more ? candidateQuery : memberSearch.value.trim()
+  if (!query || candidateLoading.value) return
+  const generation = ++candidateGeneration
+  const page = more ? candidatePage.value + 1 : 1
+  candidateLoading.value = true
+  candidateError.value = ''
+  if (!more) { candidates.value = []; memberUserId.value = ''; candidateQuery = query }
+  try {
+    const result = await spacesApi.searchCandidates(props.spaceId, query, page)
+    if (generation !== candidateGeneration) return
+    candidates.value = more ? [...candidates.value, ...result] : result
+    candidatePage.value = page
+    candidateHasMore.value = result.length === 20
+    if (candidates.value.length === 0) candidateError.value = '没有找到匹配的启用用户。'
+  } catch (failure) {
+    if (generation === candidateGeneration) candidateError.value = message(failure, '搜索用户失败，请重试。')
+  } finally { if (generation === candidateGeneration) candidateLoading.value = false }
 }
 
 function upsertMember(member: SpaceMember) {
@@ -41,15 +76,42 @@ function upsertMember(member: SpaceMember) {
 }
 
 async function loadMembers() {
+  const generation = ++listGeneration
+  loadingMore.value = false
   loading.value = true
   loadError.value = ''
+  moreError.value = ''
   try {
-    members.value = await spacesApi.listMembers(props.spaceId)
+    const result = await spacesApi.listMembers(props.spaceId)
+    if (generation !== listGeneration) return
+    members.value = result
+    memberPage.value = 1
+    hasMoreMembers.value = result.length === 100
   } catch (error) {
-    loadError.value = message(error, '加载空间成员失败，请稍后重试')
+    if (generation === listGeneration) loadError.value = message(error, '加载空间成员失败，请稍后重试')
   } finally {
-    loading.value = false
+    if (generation === listGeneration) loading.value = false
   }
+}
+
+async function loadMoreMembers() {
+  if (loadingMore.value || !hasMoreMembers.value) return
+  const generation = listGeneration
+  loadingMore.value = true
+  moreError.value = ''
+  try {
+    const result = await spacesApi.listMembers(props.spaceId, memberPage.value + 1)
+    if (generation !== listGeneration) return
+    result.forEach(upsertMember)
+    memberPage.value++
+    hasMoreMembers.value = result.length === 100
+  } catch (error) {
+    if (generation !== listGeneration) return
+    if (error instanceof ApiRequestError && [401, 403, 404].includes(error.status)) {
+      members.value = []; hasMoreMembers.value = false
+      loadError.value = message(error, '无法加载空间成员')
+    } else moreError.value = message(error, '加载更多成员失败，请重试')
+  } finally { if (generation === listGeneration) loadingMore.value = false }
 }
 
 async function mutate(
@@ -85,6 +147,7 @@ async function grantRole() {
     spacesApi.grantRole(props.spaceId, userId, role, key))
   if (!member) return
   upsertMember(member)
+  emit('changed')
   memberUserId.value = ''
   memberRole.value = 'READER'
 }
@@ -92,10 +155,11 @@ async function grantRole() {
 async function revokeRole(member: SpaceMember, role: SpaceRole) {
   const updated = await mutate(`revoke:${member.userId}:${role}`, (key) =>
     spacesApi.revokeRole(props.spaceId, member.userId, role, key))
-  if (updated) upsertMember(updated)
+  if (updated) { upsertMember(updated); emit('changed') }
 }
 
 onMounted(loadMembers)
+onBeforeUnmount(() => { listGeneration++; candidateGeneration++ })
 </script>
 
 <template>
@@ -105,13 +169,12 @@ onMounted(loadMembers)
   >
     <div class="section-heading">
       <div>
-        <p class="eyebrow">
-          权限配置
-        </p>
         <h3 id="member-panel-title">
           成员与角色管理
         </h3>
-        <p>输入内部用户 ID 并授予最小必要角色。</p>
+        <p v-if="!users">
+          输入内部用户 ID 并授予最小必要角色。
+        </p>
       </div>
     </div>
 
@@ -120,7 +183,43 @@ onMounted(loadMembers)
       data-form="grant-member"
       @submit.prevent="grantRole"
     >
-      <label>用户 ID<input
+      <label v-if="searchUsers && !users">搜索用户<input
+        v-model="memberSearch"
+        name="memberSearch"
+        placeholder="输入姓名或账号"
+        @keydown.enter.prevent="searchCandidates()"
+      ></label>
+      <button
+        v-if="searchUsers && !users"
+        data-action="search-candidates"
+        type="button"
+        :disabled="!memberSearch.trim() || candidateLoading"
+        @click="searchCandidates()"
+      >
+        搜索
+      </button>
+      <label v-if="users || searchUsers">用户<select
+        v-model="memberUserId"
+        name="memberUserId"
+        required
+      >
+        <option
+          value=""
+          disabled
+        >选择用户</option>
+        <option
+          v-for="user in users"
+          :key="user.id"
+          :value="user.id"
+          :disabled="!user.enabled"
+        >{{ user.displayName }}（{{ user.username }}）{{ user.enabled ? '' : ' · 已停用' }}</option>
+        <option
+          v-for="candidate in candidates"
+          :key="candidate.userId"
+          :value="candidate.userId"
+        >{{ candidate.displayName }}（{{ candidate.username }}）</option>
+      </select></label>
+      <label v-else>用户 ID<input
         v-model="memberUserId"
         name="memberUserId"
         autocomplete="off"
@@ -145,6 +244,21 @@ onMounted(loadMembers)
         {{ pendingOperation.startsWith('grant:') ? '正在授予…' : '授予角色' }}
       </button>
     </form>
+
+    <p
+      v-if="candidateError"
+      role="status"
+    >
+      {{ candidateError }}
+    </p>
+    <button
+      v-if="candidateHasMore"
+      type="button"
+      :disabled="candidateLoading"
+      @click="searchCandidates(true)"
+    >
+      加载更多用户
+    </button>
 
     <div
       v-if="mutationError"
@@ -242,6 +356,23 @@ onMounted(loadMembers)
         </tbody>
       </table>
     </div>
+    <p
+      v-if="moreError"
+      class="state-panel state-error compact-state"
+      role="alert"
+    >
+      {{ moreError }}
+    </p>
+    <button
+      v-if="hasMoreMembers && !loading && !loadError"
+      class="button"
+      data-action="more-members"
+      type="button"
+      :disabled="loadingMore || Boolean(pendingOperation)"
+      @click="loadMoreMembers"
+    >
+      {{ loadingMore ? '正在加载…' : moreError ? '重试加载更多' : '加载更多成员' }}
+    </button>
   </section>
 </template>
 

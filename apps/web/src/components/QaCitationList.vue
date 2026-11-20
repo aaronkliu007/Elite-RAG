@@ -87,6 +87,12 @@ async function openSource(evidenceId: string) {
                 :title="authorized[evidenceId]?.displayName"
               >{{ authorized[evidenceId]?.displayName }}</strong>
               <small>{{ locationLabel(authorized[evidenceId]!) }}</small>
+              <a
+                data-source-preview
+                :href="authorized[evidenceId]?.previewUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+              >打开预览</a>
             </span>
             <span
               v-if="errors[evidenceId]"
@@ -117,6 +123,7 @@ async function openSource(evidenceId: string) {
 .source-meta { display: grid; min-width: 0; flex: 1 1 180px; }
 .source-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .source-meta small { color: var(--color-muted); }
+.source-meta a { color: var(--color-primary); font-weight: 700; overflow-wrap: anywhere; }
 .source-error { min-width: 0; color: #8d2633; font-size: 13px; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .citation-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

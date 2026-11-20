@@ -27,15 +27,26 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
     public static final int MAX_EXTERNAL_ID_LENGTH = 255;
     private static final int ROWS_PER_STATEMENT = 500;
     private final JdbcClient jdbc;
+    private final String sourcePrefix;
 
     public JdbcOrganizationReconciliationAdapter(JdbcClient jdbc) {
+        this(jdbc, null);
+    }
+
+    public JdbcOrganizationReconciliationAdapter(JdbcClient jdbc, String sourcePrefix) {
         this.jdbc = Objects.requireNonNull(jdbc);
+        if (sourcePrefix != null && sourcePrefix.isBlank()) throw new IllegalArgumentException("组织来源前缀不能为空");
+        this.sourcePrefix = sourcePrefix;
     }
 
     @Override
     @Transactional
     public ReconciliationResult reconcile(OrganizationSnapshot snapshot) {
         validate(snapshot);
+        if (sourcePrefix != null && (snapshot.departments().stream().anyMatch(d -> !d.externalId().startsWith(sourcePrefix))
+                || snapshot.users().stream().anyMatch(u -> !u.externalId().startsWith(sourcePrefix)))) {
+            throw new InvalidOrganizationSnapshotException("组织快照包含非当前来源的标识");
+        }
         try {
             // The lock lasts through OrganizationSyncService.disable, so two imports cannot interleave.
             jdbc.sql("SELECT pg_advisory_xact_lock(20260929, 3)").query((rs, row) -> 1).single();
@@ -152,7 +163,9 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
 
     private void replaceMemberships(OrganizationSnapshot snapshot, Map<String, UUID> userIds,
                                     Map<String, UUID> departmentIds) {
-        jdbc.sql("DELETE FROM org_membership").update();
+        if (sourcePrefix == null) jdbc.sql("DELETE FROM org_membership").update();
+        else jdbc.sql("DELETE FROM org_membership WHERE user_id IN (SELECT id FROM app_user WHERE left(external_id, length(:prefix)) = :prefix)")
+                .param("prefix", sourcePrefix).update();
         var batch = new ValueBatch();
         OffsetDateTime capturedAt = OffsetDateTime.ofInstant(snapshot.capturedAt(), ZoneOffset.UTC);
         for (var user : snapshot.users()) {
@@ -174,15 +187,21 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
     }
 
     private void disableMissingUsers() {
-        jdbc.sql("UPDATE app_user AS target SET enabled = false, updated_at = now() "
+        var statement = jdbc.sql("UPDATE app_user AS target SET enabled = false, updated_at = now() "
                 + "WHERE enabled AND NOT EXISTS (SELECT 1 FROM rag_org_snapshot_ids AS snapshot "
-                + "WHERE snapshot.kind = 'U' AND snapshot.external_id = target.external_id)").update();
+                + "WHERE snapshot.kind = 'U' AND snapshot.external_id = target.external_id)"
+                + (sourcePrefix == null ? "" : " AND left(target.external_id, length(:prefix)) = :prefix"));
+        if (sourcePrefix != null) statement = statement.param("prefix", sourcePrefix);
+        statement.update();
     }
 
     private void disableMissingDepartments() {
-        jdbc.sql("UPDATE org_unit AS target SET enabled = false, updated_at = now() "
+        var statement = jdbc.sql("UPDATE org_unit AS target SET enabled = false, updated_at = now() "
                 + "WHERE enabled AND NOT EXISTS (SELECT 1 FROM rag_org_snapshot_ids AS snapshot "
-                + "WHERE snapshot.kind = 'D' AND snapshot.external_id = target.external_id)").update();
+                + "WHERE snapshot.kind = 'D' AND snapshot.external_id = target.external_id)"
+                + (sourcePrefix == null ? "" : " AND left(target.external_id, length(:prefix)) = :prefix"));
+        if (sourcePrefix != null) statement = statement.param("prefix", sourcePrefix);
+        statement.update();
     }
 
     private Map<String, UUID> ids(String table) {
@@ -196,7 +215,10 @@ public class JdbcOrganizationReconciliationAdapter implements OrganizationReconc
 
     private Map<String, UUID> enabledUserIdsByExternalId() {
         var result = new HashMap<String, UUID>();
-        jdbc.sql("SELECT external_id, id FROM app_user WHERE enabled").query((rs, row) -> {
+        var statement = jdbc.sql("SELECT external_id, id FROM app_user WHERE enabled"
+                + (sourcePrefix == null ? "" : " AND left(external_id, length(:prefix)) = :prefix"));
+        if (sourcePrefix != null) statement = statement.param("prefix", sourcePrefix);
+        statement.query((rs, row) -> {
             result.put(rs.getString("external_id"), rs.getObject("id", UUID.class));
             return 1;
         }).list();

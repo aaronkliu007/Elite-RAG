@@ -1,4 +1,12 @@
 import { documentsApi, type DocumentStatus, type ParseStatus } from './documents'
+import { ApiRequestError } from './http'
+
+export function documentLoadError(failure: unknown, fallback: string): string {
+  if (failure instanceof ApiRequestError && failure.status === 404) {
+    return '无法加载文档：该空间可能已不存在，或你没有访问权限。请联系空间管理员确认。'
+  }
+  return failure instanceof ApiRequestError ? failure.displayMessage : failure instanceof Error ? failure.message : fallback
+}
 
 export interface KnowledgeDocumentSummary {
   id: string
@@ -10,8 +18,8 @@ export interface KnowledgeDocumentSummary {
 }
 
 export const knowledgeApi = {
-  async listDocuments(spaceId: string): Promise<KnowledgeDocumentSummary[]> {
-    return (await documentsApi.list(spaceId)).map((document) => {
+  async listDocuments(spaceId: string, page = 1, pageSize = 100): Promise<KnowledgeDocumentSummary[]> {
+    return (await documentsApi.list(spaceId, page, pageSize)).map((document) => {
       const latest = document.versions.at(-1)
       return {
         id: document.id,

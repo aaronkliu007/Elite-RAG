@@ -58,17 +58,30 @@ public class UserAdministrationService {
 
     @Transactional
     public UserAccount createUser(String username, String displayName, char[] password, UUID actorId) {
+        return createUserInternal(username, displayName, password, actorId, false);
+    }
+
+    @Transactional
+    public UserAccount createBootstrapUser(String username, String displayName, char[] password, UUID actorId) {
+        return createUserInternal(username, displayName, password, actorId, true);
+    }
+
+    private UserAccount createUserInternal(String username, String displayName, char[] password, UUID actorId, boolean bootstrap) {
         Objects.requireNonNull(password);
         try {
             String normalizedUsername = UsernameNormalizer.normalize(username);
             String normalizedDisplayName = normalizeDisplayName(displayName);
-            validatePassword(password);
+            boolean defaultBootstrap = bootstrap && "admin".equals(normalizedUsername)
+                    && Arrays.equals(password, new char[]{'a','d','m','i','n'});
+            if (!defaultBootstrap) {
+                validatePassword(password);
+            }
             Instant now = clock.instant();
             UserAccount account = new UserAccount(
                     UuidV7.generate(now), normalizedUsername, normalizedDisplayName, true, 0, now, now);
             accounts.insert(account, "LOCAL", normalizedUsername);
             credentials.insert(new LocalCredential(
-                    account.id(), normalizedUsername, passwordHasher.hash(password), 0, null, null, now));
+                    account.id(), normalizedUsername, passwordHasher.hash(password), 0, null, null, now, bootstrap));
             audit(actorId, AuditAction.USER_CREATE, account.id(), Map.of());
             return account;
         } finally {
@@ -81,9 +94,8 @@ public class UserAdministrationService {
         Objects.requireNonNull(userId);
         Objects.requireNonNull(actorId);
         Instant now = clock.instant();
-        if (accounts.findById(userId).isEmpty()) {
-            throw new UserAccountNotFoundException();
-        }
+        var account = accounts.findById(userId).orElseThrow(UserAccountNotFoundException::new);
+        requireLocalAccount(account);
         if (!enabled && userId.equals(actorId)) {
             throw new LocalIdentityValidationException("不能停用当前登录用户");
         }
@@ -97,9 +109,8 @@ public class UserAdministrationService {
     public void resetPassword(UUID userId, char[] password, UUID actorId) {
         Objects.requireNonNull(password);
         try {
-            if (accounts.findById(userId).isEmpty()) {
-                throw new UserAccountNotFoundException();
-            }
+            var account = accounts.findById(userId).orElseThrow(UserAccountNotFoundException::new);
+            requireLocalAccount(account);
             validatePassword(password);
             Instant now = clock.instant();
             credentials.replacePassword(userId, passwordHasher.hash(password), now);
@@ -113,6 +124,12 @@ public class UserAdministrationService {
     @Transactional(readOnly = true)
     public List<UserAccount> listUsers() {
         return List.copyOf(accounts.list());
+    }
+
+    private static void requireLocalAccount(UserAccount account) {
+        if (account.username().startsWith("dingtalk:user:")) {
+            throw new LocalIdentityValidationException("钉钉成员的状态和身份由钉钉管理");
+        }
     }
 
     private static String normalizeDisplayName(String displayName) {

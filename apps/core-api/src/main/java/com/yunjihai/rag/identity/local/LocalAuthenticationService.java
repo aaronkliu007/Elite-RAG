@@ -19,6 +19,7 @@ public class LocalAuthenticationService {
     private final PasswordHasher passwordHasher;
     private final Clock clock;
     private final String dummyHash;
+    private final com.yunjihai.rag.audit.AuditSink audit;
 
     public LocalAuthenticationService(
             UserAccountStore accounts,
@@ -27,12 +28,19 @@ public class LocalAuthenticationService {
             PasswordHasher passwordHasher,
             Clock clock,
             String dummyHash) {
+        this(accounts, credentials, sourceRateLimiter, passwordHasher, clock, dummyHash, com.yunjihai.rag.audit.AuditSink.noop());
+    }
+
+    public LocalAuthenticationService(UserAccountStore accounts, LocalCredentialStore credentials,
+            LoginSourceRateLimiter sourceRateLimiter, PasswordHasher passwordHasher, Clock clock, String dummyHash,
+            com.yunjihai.rag.audit.AuditSink audit) {
         this.accounts = Objects.requireNonNull(accounts);
         this.credentials = Objects.requireNonNull(credentials);
         this.sourceRateLimiter = Objects.requireNonNull(sourceRateLimiter);
         this.passwordHasher = Objects.requireNonNull(passwordHasher);
         this.clock = Objects.requireNonNull(clock);
         this.dummyHash = Objects.requireNonNull(dummyHash);
+        this.audit = Objects.requireNonNull(audit);
     }
 
     @Transactional(noRollbackFor = AuthenticationRejectedException.class)
@@ -73,7 +81,7 @@ public class LocalAuthenticationService {
             }
             credentials.resetAuthenticationState(account.id(), now);
             sourceRateLimiter.reset(sourceIp);
-            return new AuthenticationResult(account.id(), account.username(), account.displayName());
+            return new AuthenticationResult(account.id(), account.username(), account.displayName(), credential.passwordChangeRequired());
         } finally {
             Arrays.fill(password, '\0');
         }
@@ -81,6 +89,35 @@ public class LocalAuthenticationService {
 
     private boolean isLocked(LocalCredential credential, Instant now) {
         return credential.lockedUntil() != null && now.isBefore(credential.lockedUntil());
+    }
+
+    @Transactional
+    public void changeInitialPassword(java.util.UUID userId, String username, char[] currentPassword, char[] newPassword,
+                                      com.yunjihai.rag.identity.SessionRevocationService sessions) {
+        if (currentPassword == null || newPassword == null) {
+            if (currentPassword != null) Arrays.fill(currentPassword, '\0');
+            if (newPassword != null) Arrays.fill(newPassword, '\0');
+            throw new LocalIdentityValidationException("当前密码和新密码不能为空");
+        }
+        try {
+            var credential = credentials.lockForAuthentication(UsernameNormalizer.normalize(username))
+                    .orElseThrow(AuthenticationRejectedException::new);
+            if (!credential.userId().equals(userId) || !credential.passwordChangeRequired()
+                    || !passwordHasher.matches(currentPassword, credential.passwordHash())) {
+                throw new LocalIdentityValidationException("当前密码不正确或无需修改初始密码");
+            }
+            if (newPassword.length < 12 || newPassword.length > 128 || passwordHasher.matches(newPassword, credential.passwordHash())) {
+                throw new LocalIdentityValidationException("新密码须为 12 到 128 个字符，且不能与原密码相同");
+            }
+            credentials.replacePassword(userId, passwordHasher.hash(newPassword), clock.instant());
+            sessions.revokeAll(userId);
+            audit.record(new com.yunjihai.rag.audit.AuditCommand(userId,
+                    com.yunjihai.rag.audit.AuditAction.PASSWORD_CHANGE, "USER", userId,
+                    com.yunjihai.rag.audit.AuditOutcome.SUCCEEDED, java.util.Map.of()));
+        } finally {
+            Arrays.fill(currentPassword, '\0');
+            Arrays.fill(newPassword, '\0');
+        }
     }
 
     private void recordAccountFailure(LocalCredential credential, Instant now) {

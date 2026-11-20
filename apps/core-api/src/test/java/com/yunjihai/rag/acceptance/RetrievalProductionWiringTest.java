@@ -95,6 +95,8 @@ class RetrievalProductionWiringTest {
     private static URI modelEndpoint;
     private static final List<String> MODEL_REQUEST_BODIES =
             java.util.Collections.synchronizedList(new ArrayList<>());
+    private static final java.util.concurrent.atomic.AtomicBoolean EMBEDDING_UNAVAILABLE =
+            new java.util.concurrent.atomic.AtomicBoolean();
 
     @BeforeAll
     static void startInfrastructure() throws Exception {
@@ -290,6 +292,40 @@ class RetrievalProductionWiringTest {
                     .doesNotContain("13800138000");
             assertThat(readSource(generation, "version-wiring:node-1").path("embedding").size())
                     .isEqualTo(3);
+
+            var filter = new RetrievalFilter(
+                    Set.of(spaceId), Set.of(new PrincipalRef(PrincipalType.USER, principalId)),
+                    true, Instant.parse("2026-10-10T09:00:00Z"), Map.of());
+            var combined = context.getBean(HybridRecallService.class).recall("联系方式", filter);
+            assertThat(combined.degradationReasons()).isEmpty();
+            assertThat(combined.lexicalCount()).isEqualTo(1);
+            assertThat(combined.vectorCount()).isEqualTo(1);
+            assertThat(combined.candidates()).hasSize(1);
+            assertThat(combined.candidates().getFirst().sources())
+                    .containsExactlyInAnyOrder(RecallSource.LEXICAL, RecallSource.VECTOR);
+
+            var unauthorized = new RetrievalFilter(
+                    Set.of(spaceId), Set.of(new PrincipalRef(PrincipalType.USER, UUID.randomUUID())),
+                    true, Instant.parse("2026-10-10T09:00:00Z"), Map.of());
+            var denied = context.getBean(HybridRecallService.class).recall("联系方式", unauthorized);
+            assertThat(denied.degradationReasons()).isEmpty();
+            assertThat(denied.candidates()).isEmpty();
+
+            EMBEDDING_UNAVAILABLE.set(true);
+            try {
+                var degraded = context.getBean(HybridRecallService.class).recall("联系方式", filter);
+                assertThat(degraded.degradationReasons()).contains(DegradationReason.VECTOR_UNAVAILABLE);
+                assertThat(degraded.lexicalCount()).isEqualTo(1);
+                assertThat(degraded.candidates()).hasSize(1);
+                assertThat(degraded.candidates().getFirst().sources()).containsExactly(RecallSource.LEXICAL);
+            } finally {
+                EMBEDDING_UNAVAILABLE.set(false);
+            }
+            var recovered = context.getBean(HybridRecallService.class).recall("联系方式", filter);
+            assertThat(recovered.degradationReasons()).isEmpty();
+            assertThat(recovered.candidates()).hasSize(1);
+            assertThat(recovered.candidates().getFirst().sources())
+                    .containsExactlyInAnyOrder(RecallSource.LEXICAL, RecallSource.VECTOR);
         }
     }
 
@@ -359,6 +395,11 @@ class RetrievalProductionWiringTest {
     private static void embeddingResponse(HttpExchange exchange) throws IOException {
         String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         MODEL_REQUEST_BODIES.add(requestBody);
+        if (EMBEDDING_UNAVAILABLE.get()) {
+            exchange.sendResponseHeaders(503, -1);
+            exchange.close();
+            return;
+        }
         int size = JSON.readTree(requestBody).path("input").size();
         var data = JSON.createArrayNode();
         for (int index = 0; index < size; index++) {

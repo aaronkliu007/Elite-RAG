@@ -15,6 +15,7 @@ public enum AuditAction {
     USER_ENABLE,
     USER_DISABLE,
     PASSWORD_RESET,
+    PASSWORD_CHANGE,
     LOGIN_SUCCESS,
     LOGIN_FAILURE,
     ROLE_CHANGE,

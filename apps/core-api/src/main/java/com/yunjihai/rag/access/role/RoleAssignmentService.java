@@ -67,7 +67,7 @@ public class RoleAssignmentService {
             boolean firstRole = roles.activeSpaceRoles(userId, spaceId).isEmpty();
             roles.grantSpaceRole(spaceId, userId, role, actorId, at);
             if (firstRole) {
-                acl.grantSpace(spaceId, user(userId), null, at);
+                acl.grantSpaceRoleAccess(spaceId, user(userId), at);
             }
             record(actorId, "KNOWLEDGE_SPACE", spaceId, "SPACE_ROLE_GRANT:" + role, userId);
             projections.spaceAclChanged(spaceId, at);
@@ -82,7 +82,7 @@ public class RoleAssignmentService {
             authorization.require(actorId, spaceId, null, KnowledgeWriteAuthorization.Action.MANAGE_ACL);
             roles.revokeSpaceRole(spaceId, userId, role, actorId, at);
             if (roles.activeSpaceRoles(userId, spaceId).isEmpty()) {
-                acl.revokeSpace(spaceId, user(userId), at);
+                acl.revokeSpaceRoleAccess(spaceId, user(userId), at);
             }
             record(actorId, "KNOWLEDGE_SPACE", spaceId, "SPACE_ROLE_REVOKE:" + role, userId);
             projections.spaceAclChanged(spaceId, at);

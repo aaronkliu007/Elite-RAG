@@ -575,6 +575,18 @@ public class PostgresAdapterConfiguration {
     }
 
     @Bean
+    JdbcPermissionGrantQuery jdbcPermissionGrantQuery(JdbcClient jdbc) {
+        return new JdbcPermissionGrantQuery(jdbc);
+    }
+
+    @Bean
+    com.yunjihai.rag.access.EffectiveUserPermissionService effectiveUserPermissionService(
+            com.yunjihai.rag.access.PermissionGrantQuery grants,
+            EffectivePrincipalSet principals, UserAccountStore users, RoleAssignmentStore roles, Clock clock) {
+        return new com.yunjihai.rag.access.EffectiveUserPermissionService(grants, principals, users, roles, clock);
+    }
+
+    @Bean
     JdbcIngestionJobRepository jdbcIngestionJobRepository(JdbcClient jdbc) {
         return new JdbcIngestionJobRepository(jdbc);
     }
@@ -655,12 +667,13 @@ public class PostgresAdapterConfiguration {
             LocalCredentialStore credentials,
             LoginSourceRateLimiter sourceRateLimiter,
             PasswordHasher passwordHasher,
-            Clock clock) {
+            Clock clock,
+            AuditService audit) {
         char[] dummyPassword = "dummy-password-never-used".toCharArray();
         try {
             return new LocalAuthenticationService(
                     accounts, credentials, sourceRateLimiter, passwordHasher, clock,
-                    passwordHasher.hash(dummyPassword));
+                    passwordHasher.hash(dummyPassword), audit);
         } finally {
             java.util.Arrays.fill(dummyPassword, '\0');
         }

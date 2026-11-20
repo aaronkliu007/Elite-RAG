@@ -9,6 +9,10 @@ public interface AclCommandRepository {
 
     void grantSpace(UUID spaceId, PrincipalRef principal, Instant validUntil, Instant at);
 
+    default void grantSpaceRoleAccess(UUID spaceId, PrincipalRef principal, Instant at) {
+        grantSpace(spaceId, principal, null, at);
+    }
+
     void grantDocument(
             UUID spaceId,
             UUID documentId,
@@ -17,6 +21,10 @@ public interface AclCommandRepository {
             Instant at);
 
     void revokeSpace(UUID spaceId, PrincipalRef principal, Instant at);
+
+    default void revokeSpaceRoleAccess(UUID spaceId, PrincipalRef principal, Instant at) {
+        revokeSpace(spaceId, principal, at);
+    }
 
     void revokeDocument(UUID spaceId, UUID documentId, PrincipalRef principal, Instant at);
 }

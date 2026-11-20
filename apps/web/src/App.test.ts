@@ -1,9 +1,11 @@
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createMemoryHistory } from 'vue-router'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 import App from './App.vue'
+import { adminApi } from './api/admin'
+import { useSessionStore } from './stores/session'
 import { clearCsrfToken } from './api/http'
 import { createAppRouter } from './router'
 
@@ -18,6 +20,21 @@ describe('认证应用骨架', () => {
   beforeEach(() => {
     clearCsrfToken()
     vi.restoreAllMocks()
+  })
+
+  it('空间方案列表只高亮方案工作台，不误高亮知识空间', async () => {
+    vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(false)
+    const pinia = createPinia(); setActivePinia(pinia)
+    useSessionStore().establish({ userId: 'u', username: 'u', displayName: '测试用户' })
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/spaces/:spaceId/solutions', component: { template: '<div />' } },
+      { path: '/', component: { template: '<div />' } },
+    ] })
+    await router.push('/spaces/a/solutions'); await router.isReady()
+    const wrapper = shallowMount(App, { global: { plugins: [pinia, router] } })
+    expect(wrapper.get('router-link-stub[to="/"]').classes()).not.toContain('current-section')
+    expect(wrapper.get('router-link-stub[to="/solutions"]').classes()).toContain('current-section')
+    wrapper.unmount()
   })
 
   it('启动时先加载 CSRF 和当前会话，并显示真实用户与退出操作', async () => {
@@ -48,6 +65,39 @@ describe('认证应用骨架', () => {
     expect(wrapper.find('router-link-stub[to="/qa"]').exists()).toBe(true)
     expect(wrapper.get('button[data-action="logout"]').text()).toBe('退出登录')
     expect(wrapper.text()).not.toContain('钉钉')
+    wrapper.unmount()
+  })
+
+  it('管理员可在主导航中找到用户管理和问答评测', async () => {
+    vi.spyOn(adminApi, 'canManageUsers').mockResolvedValue(true)
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useSessionStore().establish({ userId: 'admin', username: 'admin', displayName: '管理员' })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    const wrapper = shallowMount(App, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+    expect(wrapper.find('router-link-stub[to="/admin/users"]').exists()).toBe(true)
+    expect(wrapper.find('router-link-stub[to="/admin/evaluations"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('权限检查失败时显示可重试提示，成功后显示管理员入口', async () => {
+    vi.spyOn(adminApi, 'canManageUsers').mockRejectedValueOnce(new Error('unavailable')).mockResolvedValue(true)
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    useSessionStore().establish({ userId: 'admin', username: 'admin', displayName: '管理员' })
+    const router = createAppRouter(createMemoryHistory())
+    await router.push('/')
+    await router.isReady()
+    const wrapper = shallowMount(App, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+    expect(wrapper.find('router-link-stub[to="/admin/users"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('管理权限暂时无法确认')
+    await wrapper.get('button[data-action="retry-admin-capability"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('router-link-stub[to="/admin/users"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

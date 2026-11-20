@@ -10,6 +10,11 @@ const spaces = [{
 }]
 
 describe('真实空间文档上传表单', () => {
+  it('尚有空间未加载时，不误报没有上传权限', () => {
+    const wrapper = mount(UploadPanel, { props: { spaces: [], moreSpacesAvailable: true } })
+    expect(wrapper.text()).toContain('继续加载后续空间')
+    expect(wrapper.text()).not.toContain('没有可上传的知识空间')
+  })
   it('空间、标题、密级和文件齐全后提交后端支持的字段', async () => {
     const wrapper = mount(UploadPanel, { props: { spaces } })
     const submit = wrapper.get('[data-testid="upload-submit"]')
@@ -31,6 +36,13 @@ describe('真实空间文档上传表单', () => {
       spaceId: 'space-1', title: '制造行业解决方案', classification: '内部',
       tags: ['制造', '运维'], file,
     })
+  })
+
+  it('仅预选当前有上传权限的目标空间', () => {
+    const allowed = mount(UploadPanel, { props: { spaces, initialSpaceId: 'space-1' } })
+    expect((allowed.get('[name="spaceId"]').element as HTMLSelectElement).value).toBe('space-1')
+    const denied = mount(UploadPanel, { props: { spaces: [{ ...spaces[0], allowedActions: ['VIEW'] }], initialSpaceId: 'space-1' } })
+    expect((denied.get('[name="spaceId"]').element as HTMLSelectElement).value).toBe('')
   })
 
   it('没有可创建文档的空间时保持禁用并给出权限说明', () => {

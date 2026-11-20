@@ -26,7 +26,7 @@ public final class JdbcLocalCredentialStore implements LocalCredentialStore {
         try {
             return jdbc.sql("""
                             SELECT user_id, username_normalized, password_hash, failed_attempts,
-                                   failure_window_started_at, locked_until, password_changed_at
+                                   failure_window_started_at, locked_until, password_changed_at, password_change_required
                             FROM local_credential
                             WHERE username_normalized = :username
                             FOR UPDATE
@@ -46,10 +46,10 @@ public final class JdbcLocalCredentialStore implements LocalCredentialStore {
                             INSERT INTO local_credential
                                 (user_id, username_normalized, password_hash, failed_attempts,
                                  failure_window_started_at, locked_until, password_changed_at,
-                                 created_at, updated_at)
+                                 created_at, updated_at, password_change_required)
                             VALUES (:userId, :username, :passwordHash, :failures,
                                     :windowStartedAt, :lockedUntil, :passwordChangedAt,
-                                    :passwordChangedAt, :passwordChangedAt)
+                                    :passwordChangedAt, :passwordChangedAt, :passwordChangeRequired)
                             """)
                     .param("userId", credential.userId())
                     .param("username", credential.normalizedUsername())
@@ -58,6 +58,7 @@ public final class JdbcLocalCredentialStore implements LocalCredentialStore {
                     .param("windowStartedAt", utcNullable(credential.failureWindowStartedAt()))
                     .param("lockedUntil", utcNullable(credential.lockedUntil()))
                     .param("passwordChangedAt", utc(credential.passwordChangedAt()))
+                    .param("passwordChangeRequired", credential.passwordChangeRequired())
                     .update();
         } catch (DataAccessException failure) {
             var translated = PostgresPersistenceExceptionTranslator.translate(failure);
@@ -103,6 +104,7 @@ public final class JdbcLocalCredentialStore implements LocalCredentialStore {
                                 failure_window_started_at = NULL,
                                 locked_until = NULL,
                                 password_changed_at = :at,
+                                password_change_required = false,
                                 updated_at = :at
                             WHERE user_id = :userId
                             """)
@@ -142,7 +144,8 @@ public final class JdbcLocalCredentialStore implements LocalCredentialStore {
                 row.getInt("failed_attempts"),
                 window == null ? null : window.toInstant(),
                 locked == null ? null : locked.toInstant(),
-                row.getObject("password_changed_at", OffsetDateTime.class).toInstant());
+                row.getObject("password_changed_at", OffsetDateTime.class).toInstant(),
+                row.getBoolean("password_change_required"));
     }
 
     private static void requireChanged(int changed) {

@@ -3,6 +3,24 @@ import { describe, expect, it, vi } from 'vitest'
 import QaEvaluationView from './QaEvaluationView.vue'
 
 describe('问答评测结果', () => {
+  it('查询新运行时恢复全部筛选，并明确显示当前结果的运行编号', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => new Response(JSON.stringify({
+      runId: String(input).endsWith('run-2') ? 'run-2' : 'run-1', datasetVersion: 'v1',
+      assessment: { passed: true, failures: [] }, historicalAssessment: { passed: true, failures: [] },
+      caseResults: [{ caseId: 'case-1', requestId: 'request', expectedRefusal: false, status: 'ANSWERED', reason: null,
+        expectedEvidence: 0, retrievedEvidence: 0, generatedClaims: 0, reviewedClaims: 0, supportedClaims: 0, leakageCount: 0 }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+    const wrapper = mount(QaEvaluationView)
+    await wrapper.get('input[name="runId"]').setValue('run-1')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    await wrapper.get('select[name="filter"]').setValue('failed')
+    await wrapper.get('input[name="runId"]').setValue('run-2')
+    expect(wrapper.get('[data-result-run]').text()).toContain('run-1')
+    await wrapper.get('form').trigger('submit'); await flushPromises()
+    expect(wrapper.get('[data-result-run]').text()).toContain('run-2')
+    expect(wrapper.text()).toContain('case-1')
+    wrapper.unmount()
+  })
   it('显示逐案例拒答原因、审核计数和当前门禁', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       runId: 'run-1', datasetVersion: 'v1', assessment: { passed: false, failures: ['CLAIM_REVIEW_COVERAGE', 'REFUSAL_DIAGNOSTICS_INCOMPLETE'] },

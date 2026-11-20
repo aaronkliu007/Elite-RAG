@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import { clearCsrfToken } from '../api/http'
+import { setQuestionDraft, takeQuestionDraft } from '../qaDraft'
 import QaView from './QaView.vue'
 
 function json(body: unknown, status = 200) {
@@ -27,6 +28,19 @@ async function mountAt(path = '/qa') {
 
 describe('知识问答页', () => {
   beforeEach(() => { clearCsrfToken(); vi.restoreAllMocks() })
+
+  it('接收工作台的问题草稿，不自动提交且读取后清除', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    setQuestionDraft('公司制度是什么？')
+    const { wrapper, router } = await mountAt()
+    await flushPromises()
+    expect((wrapper.get('textarea[name="question"]').element as HTMLTextAreaElement).value).toBe('公司制度是什么？')
+    expect(router.currentRoute.value.fullPath).toBe('/qa')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(takeQuestionDraft()).toBe('')
+    wrapper.unmount()
+  })
 
   it('每个新问题只生成一个幂等键，并在提交期间阻止重复请求', async () => {
     let resolveQuestion: ((response: Response) => void) | undefined
@@ -98,6 +112,46 @@ describe('知识问答页', () => {
     expect(restoring.wrapper.get('[data-state="loading"]').attributes('role')).toBe('status')
     resolveRestore?.(json(answered))
     await flushPromises()
+  })
+
+  it('恢复历史结果时禁止提交，并在浏览器切换记录时更新结果', async () => {
+    let finishFirst!: (response: Response) => void
+    const firstResponse = new Promise<Response>((resolve) => { finishFirst = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('request-first')) return firstResponse
+      return json({ ...answered, requestId: 'request-second', answer: '第二条回答' })
+    }))
+    const { wrapper, router } = await mountAt('/qa?requestId=request-first')
+    await wrapper.get('textarea[name="question"]').setValue('新问题')
+    expect(wrapper.get('[data-action="ask"]').attributes('disabled')).toBeDefined()
+    await router.push('/qa?requestId=request-second')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第二条回答')
+    finishFirst(json({ ...answered, requestId: 'request-first', answer: '过期回答' }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('第二条回答')
+    expect(wrapper.text()).not.toContain('过期回答')
+    wrapper.unmount()
+  })
+
+  it('离开问答页后迟到的回答不会把用户带回问答页', async () => {
+    let finish!: (response: Response) => void
+    const pending = new Promise<Response>((resolve) => { finish = resolve })
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith('/csrf')
+        ? json({ headerName: 'X-CSRF-TOKEN', parameterName: '_csrf', token: 'csrf' })
+        : pending,
+    ))
+    const { wrapper, router } = await mountAt()
+    await wrapper.get('textarea[name="question"]').setValue('新的问题')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    await router.push('/search')
+    const replace = vi.spyOn(router, 'replace')
+    wrapper.unmount()
+    finish(json(answered))
+    await flushPromises()
+    expect(replace).not.toHaveBeenCalled()
   })
 
   it('依据冲突时提供检索入口，不把问题放进链接或改变拒答结果', async () => {

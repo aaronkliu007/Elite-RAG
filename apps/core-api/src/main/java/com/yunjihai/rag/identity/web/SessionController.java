@@ -58,7 +58,7 @@ public class SessionController {
         HttpSession session = request.getSession(true);
         request.changeSessionId();
         var principal = new SessionPrincipal(
-                result.userId(), result.username(), result.displayName(), issued.version(), clock.instant());
+                result.userId(), result.username(), result.displayName(), issued.version(), clock.instant(), result.passwordChangeRequired());
         Authentication authenticated = UsernamePasswordAuthenticationToken.authenticated(
                 principal, null, List.of());
         var context = SecurityContextHolder.createEmptyContext();
@@ -78,6 +78,21 @@ public class SessionController {
         }
     }
 
+    @PostMapping("/change-initial-password")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void changeInitialPassword(@RequestBody ChangePasswordRequest command, Authentication authentication,
+                                      HttpServletRequest request) {
+        if (authentication == null || !(authentication.getPrincipal() instanceof SessionPrincipal principal)
+                || !principal.passwordChangeRequired()) {
+            throw new org.springframework.security.access.AccessDeniedException("无需首次修改密码");
+        }
+        authenticationService.changeInitialPassword(principal.userId(), principal.username(),
+                command.currentPassword(), command.newPassword(), sessions);
+        SecurityContextHolder.clearContext();
+        HttpSession session = request.getSession(false);
+        if (session != null) session.invalidate();
+    }
+
     @GetMapping("/me")
     public SessionView me(Authentication authentication) {
         if (authentication == null || !(authentication.getPrincipal() instanceof SessionPrincipal principal)) {
@@ -95,9 +110,11 @@ public class SessionController {
     public record LoginRequest(String username, char[] password) {
     }
 
-    public record SessionView(UUID userId, String username, String displayName) {
+    public record ChangePasswordRequest(char[] currentPassword, char[] newPassword) { }
+
+    public record SessionView(UUID userId, String username, String displayName, boolean passwordChangeRequired) {
         private static SessionView from(SessionPrincipal principal) {
-            return new SessionView(principal.userId(), principal.username(), principal.displayName());
+            return new SessionView(principal.userId(), principal.username(), principal.displayName(), principal.passwordChangeRequired());
         }
     }
 

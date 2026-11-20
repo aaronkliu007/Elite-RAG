@@ -49,6 +49,15 @@ public final class SessionVersionFilter extends OncePerRequestFilter {
                 reject(request, response);
                 return;
             }
+            String path = request.getServletPath();
+            if (principal.passwordChangeRequired() && path.startsWith("/api/")
+                    && !java.util.Set.of("/api/v1/session/me", "/api/v1/session/csrf", "/api/v1/session/logout",
+                            "/api/v1/session/change-initial-password").contains(path)) {
+                response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+                response.setContentType("application/json;charset=UTF-8");
+                response.getWriter().write("{\"code\":\"PASSWORD_CHANGE_REQUIRED\",\"message\":\"请先修改初始密码\"}");
+                return;
+            }
         }
         filterChain.doFilter(request, response);
     }

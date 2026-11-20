@@ -19,10 +19,10 @@ import java.util.UUID;
 
 public final class JdbcUserAccountStore implements UserAccountStore {
     private static final String SELECT_ACCOUNT = """
-            SELECT u.id, c.username_normalized, u.display_name, u.enabled, u.session_version,
+            SELECT u.id, COALESCE(c.username_normalized, u.external_id) AS username_normalized, u.display_name, u.enabled, u.session_version,
                    u.created_at, u.updated_at
             FROM app_user u
-            JOIN local_credential c ON c.user_id = u.id
+            LEFT JOIN local_credential c ON c.user_id = u.id
             """;
 
     private final JdbcClient jdbc;
@@ -83,7 +83,7 @@ public final class JdbcUserAccountStore implements UserAccountStore {
     @Override
     public List<UserAccount> list() {
         try {
-            return jdbc.sql(SELECT_ACCOUNT + " ORDER BY c.username_normalized")
+            return jdbc.sql(SELECT_ACCOUNT + " ORDER BY COALESCE(c.username_normalized, u.external_id)")
                     .query(JdbcUserAccountStore::map)
                     .list();
         } catch (DataAccessException failure) {

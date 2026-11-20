@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import SpaceDetailView from './SpaceDetailView.vue'
+import { knowledgeApi } from '../api/knowledge'
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -34,7 +35,7 @@ async function mountAtSpace() {
 describe('知识空间详情页', () => {
   beforeEach(() => vi.restoreAllMocks())
 
-  it('空间管理员看到成员管理，且超长名称可查看完整值', async () => {
+  it('空间详情不提供成员管理，且超长名称可查看完整值', async () => {
     const paths: string[] = []
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input)
@@ -49,8 +50,9 @@ describe('知识空间详情页', () => {
 
     expect(wrapper.get('[data-space-name]').attributes('title')).toBe(longSpace.name)
     expect(wrapper.get('[data-space-description]').attributes('title')).toBe(longSpace.description)
-    expect(wrapper.text()).toContain('成员与角色管理')
-    expect(paths.some((path) => path.includes('/members?'))).toBe(true)
+    expect(wrapper.text()).not.toContain('成员与角色管理')
+    expect(wrapper.find('[data-action="jump-to-members"]').exists()).toBe(false)
+    expect(paths.some((path) => path.includes('/members?'))).toBe(false)
   })
 
   it('普通成员仅看到只读说明，不请求受限成员接口', async () => {
@@ -66,7 +68,19 @@ describe('知识空间详情页', () => {
 
     expect(wrapper.text()).toContain('当前为只读访问')
     expect(wrapper.find('[data-form="grant-member"]').exists()).toBe(false)
+    expect(wrapper.find('[data-action="jump-to-members"]').exists()).toBe(false)
     expect(paths.some((path) => path.includes('/members?'))).toBe(false)
+  })
+
+  it('编辑者查看空间文档并可进入上传，不被误标为只读', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json([{ ...longSpace, allowedActions: ['VIEW', 'SEARCH', 'CREATE_DOCUMENT'] }])))
+    vi.spyOn(knowledgeApi, 'listDocuments').mockResolvedValue([{ id:'doc-1', title:'交付指南.docx', ownerName:'—', lifecycleStatus:'PUBLISHED', parseStatus:'SUCCEEDED', updatedAt:'2026-01-01T00:00:00Z' }])
+    const wrapper = await mountAtSpace()
+    await flushPromises()
+    expect(wrapper.text()).toContain('交付指南.docx')
+    expect(wrapper.text()).not.toContain('当前为只读访问')
+    expect(wrapper.find('a[href="/upload?spaceId=10000000-0000-7000-8000-000000000001"]').exists()).toBe(true)
+    expect(wrapper.find('a[href="/documents/doc-1"]').exists()).toBe(true)
   })
 
   it('加载失败时显示中文原因和重试操作', async () => {

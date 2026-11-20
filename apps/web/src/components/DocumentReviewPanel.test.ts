@@ -16,6 +16,12 @@ function document(overrides: Partial<KnowledgeDocument> = {}): KnowledgeDocument
 }
 
 describe('真实文档审核操作', () => {
+  it('生命周期状态使用中文展示', () => {
+    const published = document({ versions: [{ id: 'v', versionNumber: 1, status: 'PUBLISHED', parseStatus: 'SUCCEEDED', createdAt: '2026-10-09T00:00:00Z', parseErrorCode: null }] })
+    const wrapper = mount(DocumentReviewPanel, { props: { document: published } })
+    expect(wrapper.text()).toContain('已发布')
+    expect(wrapper.text()).not.toContain('PUBLISHED')
+  })
   it('编辑者仅在解析成功后提交审核', async () => {
     const pending = document({ versions: [{ id: 'version-1', versionNumber: 1, status: 'DRAFT', parseStatus: 'RUNNING', createdAt: '2026-10-09T00:00:00Z', parseErrorCode: null }] })
     const pendingWrapper = mount(DocumentReviewPanel, { props: { document: pending } })

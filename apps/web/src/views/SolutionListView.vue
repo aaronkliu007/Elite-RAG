@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import { ApiRequestError } from '../api/http'
@@ -18,9 +18,18 @@ const error = ref('')
 const mutationError = ref('')
 const name = ref('')
 const initialText = ref('')
+const spaceDrafts = new Map<string, { name: string, initialText: string }>()
 const createKey = ref('')
+let createPayload = ''
+let active = true
 const page = ref(1)
 const pageSize = 20
+let listRequest = 0
+let spaceLoadGeneration = 0
+const spacePage = ref(1)
+const hasMoreSpaces = ref(false)
+const loadingMoreSpaces = ref(false)
+const moreSpacesError = ref('')
 const selectedSpace = computed(() => spaces.value.find((item) => item.id === selectedSpaceId.value))
 const canCreate = computed(() => selectedSpace.value?.allowedActions.includes('CREATE_DOCUMENT') ?? false)
 const hasNext = computed(() => solutions.value.length === pageSize)
@@ -36,35 +45,78 @@ function message(failure: unknown, fallback: string) {
 }
 
 async function loadList() {
-  if (!selectedSpaceId.value) { solutions.value = []; return }
+  const request = ++listRequest
+  const spaceId = selectedSpaceId.value
+  const requestedPage = page.value
+  if (!spaceId) { solutions.value = []; loadingList.value = false; return }
   loadingList.value = true
+  solutions.value = []
   error.value = ''
   try {
-    solutions.value = await solutionsApi.list(selectedSpaceId.value, page.value, pageSize)
+    const response = await solutionsApi.list(spaceId, requestedPage, pageSize)
+    if (request === listRequest) solutions.value = response
   } catch (failure) {
-    solutions.value = []
-    error.value = message(failure, '加载方案失败，请稍后重试')
+    if (request === listRequest) error.value = message(failure, '加载方案失败，请稍后重试')
   } finally {
-    loadingList.value = false
+    if (request === listRequest) loadingList.value = false
   }
 }
 
 async function load() {
+  const generation = ++spaceLoadGeneration
+  const requested = String(route.params.spaceId ?? '')
+  if (requested && requested !== selectedSpaceId.value) {
+    listRequest++
+    selectedSpaceId.value = ''
+    solutions.value = []
+    loadingList.value = false
+  }
   loading.value = true
   error.value = ''
   try {
-    spaces.value = await spacesApi.listSpaces()
-    const requested = String(route.params.spaceId ?? '')
-    selectedSpaceId.value = spaces.value.some((item) => item.id === requested) ? requested : (spaces.value[0]?.id ?? '')
-    if (selectedSpaceId.value && requested !== selectedSpaceId.value) {
+    let page = 1
+    let batch = await spacesApi.listSpaces()
+    if (!active || generation !== spaceLoadGeneration) return
+    const found = [...batch]
+    while (requested && !found.some(item => item.id === requested) && batch.length === 100) {
+      batch = await spacesApi.listSpaces(++page)
+      if (!active || generation !== spaceLoadGeneration) return
+      const known = new Set(found.map(item => item.id))
+      found.push(...batch.filter(item => !known.has(item.id)))
+    }
+    spaces.value = found
+    spacePage.value = page
+    hasMoreSpaces.value = batch.length === 100
+    if (requested && !found.some(item => item.id === requested)) {
+      selectedSpaceId.value = ''
+      error.value = '空间不存在或无权访问'
+      return
+    }
+    selectedSpaceId.value = requested || (spaces.value[0]?.id ?? '')
+    if (selectedSpaceId.value && !requested) {
       await router.replace(`/spaces/${encodeURIComponent(selectedSpaceId.value)}/solutions`)
     }
-    await loadList()
+    void loadList()
   } catch (failure) {
-    error.value = message(failure, '加载知识空间失败，请稍后重试')
+    if (active && generation === spaceLoadGeneration) error.value = message(failure, '加载知识空间失败，请稍后重试')
   } finally {
-    loading.value = false
+    if (active && generation === spaceLoadGeneration) loading.value = false
   }
+}
+
+async function loadMoreSpaces() {
+  if (!hasMoreSpaces.value || loadingMoreSpaces.value) return
+  const generation = spaceLoadGeneration
+  loadingMoreSpaces.value = true; moreSpacesError.value = ''
+  try {
+    const batch = await spacesApi.listSpaces(spacePage.value + 1)
+    if (!active || generation !== spaceLoadGeneration) return
+    const known = new Set(spaces.value.map(item => item.id))
+    spaces.value.push(...batch.filter(item => !known.has(item.id)))
+    spacePage.value++; hasMoreSpaces.value = batch.length === 100
+  } catch (failure) {
+    if (active && generation === spaceLoadGeneration) moreSpacesError.value = message(failure, '加载更多空间失败')
+  } finally { if (active && generation === spaceLoadGeneration) loadingMoreSpaces.value = false }
 }
 
 async function chooseSpace() {
@@ -81,16 +133,23 @@ async function changePage(next: number) {
 
 async function createSolution() {
   if (!canCreate.value || !selectedSpaceId.value || !name.value.trim() || !initialText.value.trim() || creating.value) return
-  createKey.value ||= crypto.randomUUID()
+  const spaceId = selectedSpaceId.value
+  const payload = JSON.stringify([spaceId, name.value.trim(), initialText.value.trim()])
+  if (!createKey.value || createPayload !== payload) createKey.value = crypto.randomUUID()
+  createPayload = payload
   creating.value = true
   mutationError.value = ''
   try {
-    const result = await solutionsApi.create(selectedSpaceId.value, name.value.trim(),
+    const result = await solutionsApi.create(spaceId, name.value.trim(),
       [{ category: 'UNKNOWN', text: initialText.value.trim(), sources: [] }], 0, createKey.value)
+    if (!active || selectedSpaceId.value !== spaceId) return
     createKey.value = ''
+    createPayload = ''
     await router.push(`/solutions/${encodeURIComponent(result.solutionId)}`)
   } catch (failure) {
+    if (!active || selectedSpaceId.value !== spaceId) return
     mutationError.value = message(failure, '创建方案失败，请稍后重试')
+    if (failure instanceof ApiRequestError && failure.status < 500) { createKey.value = ''; createPayload = '' }
     if (failure instanceof ApiRequestError && failure.status === 409) {
       createKey.value = ''
       await loadList()
@@ -101,34 +160,28 @@ async function createSolution() {
 }
 
 onMounted(load)
+onBeforeUnmount(() => { active = false; listRequest++; spaceLoadGeneration++ })
+watch(selectedSpaceId, (next, previous) => {
+  if (previous) spaceDrafts.set(previous, { name: name.value, initialText: initialText.value })
+  const draft = spaceDrafts.get(next)
+  name.value = draft?.name ?? ''
+  initialText.value = draft?.initialText ?? ''
+  mutationError.value = ''
+  createKey.value = ''
+  createPayload = ''
+}, { flush: 'sync' })
 watch(() => route.params.spaceId, (next) => {
   const target = String(next ?? '')
   if (spaces.value.some((item) => item.id === target) && target !== selectedSpaceId.value) {
     selectedSpaceId.value = target
     page.value = 1
     void loadList()
-  }
+  } else if (target && !spaces.value.some((item) => item.id === target)) void load()
 })
 </script>
 
 <template>
   <section class="solution-list">
-    <header class="page-header">
-      <div class="header-copy">
-        <p class="eyebrow">
-          组织知识复用
-        </p>
-        <h2>方案工作台</h2>
-        <p>在有权知识空间内编写需求和大纲，并保留人工确认记录。</p>
-      </div>
-      <RouterLink
-        class="back-link"
-        to="/"
-      >
-        返回知识空间
-      </RouterLink>
-    </header>
-
     <div
       v-if="loading"
       class="state"
@@ -155,22 +208,111 @@ watch(() => route.params.spaceId, (next) => {
       当前没有可访问的知识空间。
     </div>
     <template v-else>
-      <div class="space-toolbar">
-        <label>知识空间
-          <select
-            v-model="selectedSpaceId"
-            name="solution-space"
-            @change="chooseSpace"
+      <section
+        class="list-card"
+        aria-label="方案列表"
+      >
+        <div class="space-toolbar">
+          <label>知识空间
+            <select
+              v-model="selectedSpaceId"
+              name="solution-space"
+              :disabled="creating"
+              @change="chooseSpace"
+            >
+              <option
+                v-for="space in spaces"
+                :key="space.id"
+                :value="space.id"
+              >{{ space.name }}</option>
+            </select>
+          </label>
+          <button
+            v-if="hasMoreSpaces"
+            type="button"
+            class="button"
+            data-action="more-solution-spaces"
+            :disabled="loadingMoreSpaces || creating"
+            @click="loadMoreSpaces"
           >
-            <option
-              v-for="space in spaces"
-              :key="space.id"
-              :value="space.id"
-            >{{ space.name }}</option>
-          </select>
-        </label>
-        <span :title="selectedSpace?.name">{{ selectedSpace?.name }}</span>
-      </div>
+            {{ loadingMoreSpaces ? '正在加载…' : moreSpacesError ? '重试加载空间' : '加载更多空间' }}
+          </button>
+        </div>
+        <p
+          v-if="moreSpacesError"
+          class="state state-error"
+          role="alert"
+        >
+          {{ moreSpacesError }}
+        </p>
+        <div class="list-heading">
+          <h3>方案列表</h3><span>第 {{ page }} 页</span>
+        </div>
+        <div
+          v-if="loadingList"
+          class="state"
+          aria-live="polite"
+        >
+          正在加载方案…
+        </div>
+        <div
+          v-else-if="error"
+          class="state state-error"
+          role="alert"
+        >
+          {{ error }} <button
+            type="button"
+            @click="loadList"
+          >
+            重试
+          </button>
+        </div>
+        <div
+          v-else-if="solutions.length === 0"
+          class="state"
+        >
+          暂无方案。可从下方创建第一份方案。
+        </div>
+        <ul
+          v-else
+          class="solution-items"
+        >
+          <li
+            v-for="solution in solutions"
+            :key="solution.id"
+          >
+            <RouterLink
+              :to="`/solutions/${encodeURIComponent(solution.id)}`"
+              class="solution-link"
+            >
+              <span class="solution-main"><strong
+                data-solution-name
+                :title="solution.name"
+              >{{ solution.name }}</strong>
+              </span>
+              <span class="phase-tag">{{ phaseLabel[solution.phase] }}</span>
+              <time :datetime="solution.updatedAt">{{ new Date(solution.updatedAt).toLocaleDateString('zh-CN') }}</time>
+              <span aria-hidden="true">查看 →</span>
+            </RouterLink>
+          </li>
+        </ul>
+        <div class="pagination">
+          <button
+            type="button"
+            :disabled="page === 1 || loadingList"
+            @click="changePage(page - 1)"
+          >
+            上一页
+          </button>
+          <button
+            type="button"
+            :disabled="!hasNext || loadingList"
+            @click="changePage(page + 1)"
+          >
+            下一页
+          </button>
+        </div>
+      </section>
 
       <form
         v-if="canCreate"
@@ -179,7 +321,7 @@ watch(() => route.params.spaceId, (next) => {
         @submit.prevent="createSolution"
       >
         <div class="form-heading">
-          <strong>新建方案</strong><span>先记录一条待确认需求，之后可补充有来源的事实。</span>
+          <strong>新建方案</strong>
         </div>
         <label>方案名称<input
           v-model="name"
@@ -210,92 +352,20 @@ watch(() => route.params.spaceId, (next) => {
           {{ mutationError }}
         </p>
       </form>
-
-      <section
-        class="list-card"
-        aria-label="方案列表"
-      >
-        <div class="list-heading">
-          <h3>方案列表</h3><span>第 {{ page }} 页</span>
-        </div>
-        <div
-          v-if="loadingList"
-          class="state"
-          aria-live="polite"
-        >
-          正在加载方案…
-        </div>
-        <div
-          v-else-if="error"
-          class="state state-error"
-          role="alert"
-        >
-          {{ error }} <button
-            type="button"
-            @click="loadList"
-          >
-            重试
-          </button>
-        </div>
-        <div
-          v-else-if="solutions.length === 0"
-          class="state"
-        >
-          暂无方案。可从上方创建第一份方案。
-        </div>
-        <ul
-          v-else
-          class="solution-items"
-        >
-          <li
-            v-for="solution in solutions"
-            :key="solution.id"
-          >
-            <RouterLink
-              :to="`/solutions/${encodeURIComponent(solution.id)}`"
-              class="solution-link"
-            >
-              <span class="solution-main"><strong
-                                            data-solution-name
-                                            :title="solution.name"
-                                          >{{ solution.name }}</strong>
-                <small :title="solution.id">{{ solution.id }}</small></span>
-              <span class="phase-tag">{{ phaseLabel[solution.phase] }}</span>
-              <time :datetime="solution.updatedAt">{{ new Date(solution.updatedAt).toLocaleDateString('zh-CN') }}</time>
-              <span aria-hidden="true">查看 →</span>
-            </RouterLink>
-          </li>
-        </ul>
-        <div class="pagination">
-          <button
-            type="button"
-            :disabled="page === 1 || loadingList"
-            @click="changePage(page - 1)"
-          >
-            上一页
-          </button>
-          <button
-            type="button"
-            :disabled="!hasNext || loadingList"
-            @click="changePage(page + 1)"
-          >
-            下一页
-          </button>
-        </div>
-      </section>
     </template>
   </section>
 </template>
 
 <style scoped>
-.solution-list { display: grid; gap: 22px; min-width: 0; }
-.page-header, .space-toolbar, .create-card, .list-card { min-width: 0; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: #fff; box-shadow: var(--shadow-panel); }
-.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 24px; }
+.solution-list { display: grid; gap: 14px; min-width: 0; }
+.space-toolbar, .create-card, .list-card { min-width: 0; border: 1px solid var(--color-border); border-radius: var(--radius-panel); background: #fff; box-shadow: var(--shadow-panel); }
+.page-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 0 0 2px; }
 .header-copy { min-width: 0; } .eyebrow { margin: 0; color: var(--color-accent); font-size: 12px; font-weight: 800; }
-h2 { margin: 5px 0 8px; font-size: clamp(26px, 3vw, 36px); } .page-header p:last-child { margin: 0; color: var(--color-muted); }
+h2 { margin: 0 0 4px; font-size: 24px; letter-spacing: -.03em; } .page-header p:last-child { margin: 0; color: var(--color-muted); font-size: 13px; }
 .back-link { flex: 0 0 auto; color: var(--color-accent); font-weight: 750; }
-.space-toolbar { display: flex; align-items: end; gap: 18px; padding: 16px 20px; }
-.space-toolbar label { display: grid; gap: 6px; min-width: 220px; color: var(--color-muted); font-size: 13px; font-weight: 700; }
+.space-toolbar { display: flex; align-items: center; gap: 12px; padding: 0 0 14px; border: 0; border-radius: 0; box-shadow: none; }
+.space-toolbar label { display: flex; align-items:center; gap: 12px; min-width: 0; color: var(--color-muted); font-size: 13px; font-weight: 700; }
+.space-toolbar select { width:min(340px, 50vw); }
 .space-toolbar span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-muted); }
 .create-card { display: grid; grid-template-columns: minmax(170px, 1fr) minmax(240px, 1fr) auto; align-items: end; gap: 14px; padding: 20px; }
 .form-heading { grid-column: 1 / -1; display: grid; gap: 4px; }.form-heading strong { font-size: 18px; }.form-heading span { color: var(--color-muted); font-size: 13px; }

@@ -24,6 +24,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Isolated synthetic infrastructure only; no production data, models or credentials are logged. */
 @EnabledIfEnvironmentVariable(named="RAG_SYNTH_COMPLETE_REPLAY",matches="true")
 class Synthetic42CompleteScreeningDiagnosticTest {
+    @Test
+    @EnabledIfEnvironmentVariable(named="RAG_SYNTH_VISUAL_USER_AUDIT",matches="true")
+    void syntheticVisualAdministratorCanListUsers() {
+        try (var context=startSyntheticContext()) {
+            var jdbc=context.getBean(JdbcClient.class);
+            var actor=jdbc.sql("SELECT user_id FROM local_credential WHERE username_normalized=:name")
+                    .param("name","synthetic-admin").query(UUID.class).single();
+            assertThat(context.getBeansOfType(com.yunjihai.rag.identity.local.UserAdministrationService.class)).isNotEmpty();
+            assertThat(context.getBeansOfType(com.yunjihai.rag.access.role.RoleAssignmentService.class)).isNotEmpty();
+            assertThat(context.getBeansOfType(com.yunjihai.rag.api.idempotency.IdempotencyService.class)).isNotEmpty();
+            System.out.println("SYNTH_CONTROLLERS admin="+context.getBeansOfType(com.yunjihai.rag.identity.web.AdminUserController.class).size()
+                    +" document="+context.getBeansOfType(com.yunjihai.rag.knowledge.web.DocumentController.class).size()
+                    +" search="+context.getBeansOfType(com.yunjihai.rag.retrieval.web.SearchController.class).size()
+                    +" solution="+context.getBeansOfType(com.yunjihai.rag.solution.web.SolutionController.class).size());
+            var controller=context.getBean(com.yunjihai.rag.identity.web.AdminUserController.class);
+            var auth=org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated(actor.toString(),null,java.util.List.of());
+            assertThat(controller.list(auth,1,1)).hasSize(1);
+        }
+    }
     private static volatile com.yunjihai.rag.qa.model.GroundedAnswerPrompt diagnosticPrompt;
     private static volatile com.yunjihai.rag.qa.model.ModelGeneration diagnosticGeneration;
 
@@ -932,7 +951,7 @@ class Synthetic42CompleteScreeningDiagnosticTest {
         }
         config.put("rag.minio.endpoint","true".equals(System.getenv("RAG_SYNTH_ALT_MINIO_PORT"))
                 ? "http://127.0.0.1:29000" : "http://127.0.0.1:19000");
-        config.put("rag.minio.access-key","rag_synthetic_app");
+        config.put("rag.minio.access-key",System.getenv().getOrDefault("RAG_SYNTH_MINIO_ACCESS_KEY","rag_synthetic_app"));
         config.put("rag.minio.secret-key",required("RAG_MINIO_SECRET_KEY"));
         config.put("rag.minio.bucket","rag-documents");
         config.put("rag.opensearch.enabled","true");

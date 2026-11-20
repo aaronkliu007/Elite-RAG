@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 
-import { documentsApi, type DocumentAction, type KnowledgeDocument, type ParseErrorCode, type ParseStatus } from '../api/documents'
+import { documentsApi, type DocumentAction, type KnowledgeDocument, type ParseErrorCode } from '../api/documents'
+import { documentStatusLabels, parseStatusLabels as parseLabels } from '../documentLabels'
 
 const props = defineProps<{ document: KnowledgeDocument }>()
 const emit = defineEmits<{ submitReview: [], reject: [comment: string], publish: [] }>()
@@ -10,7 +11,6 @@ const latest = computed(() => props.document.versions.at(-1))
 const can = (action: DocumentAction) => props.document.allowedActions.includes(action)
 const canSubmit = computed(() => can('SUBMIT_REVIEW') && latest.value?.status === 'DRAFT' && latest.value.parseStatus === 'SUCCEEDED')
 const canPublish = computed(() => can('PUBLISH') && latest.value?.status === 'IN_REVIEW' && latest.value.parseStatus === 'SUCCEEDED')
-const parseLabels: Record<ParseStatus, string> = { PENDING: '等待解析', RUNNING: '解析中', SUCCEEDED: '解析成功', FAILED: '解析失败' }
 const errorLabels: Record<ParseErrorCode, string> = {
   UNSUPPORTED: '不支持的文件内容', ENCRYPTED: '文档已加密', LIMIT_EXCEEDED: '文件超出处理限制',
   CONVERSION_FAILED: '文档转换失败', TIMEOUT: '解析超时',
@@ -26,18 +26,9 @@ function reject() {
   <article class="review-panel">
     <header class="review-header">
       <div class="title-block">
-        <p class="eyebrow">
-          文档审核
-        </p>
         <h2 :title="document.title">
           {{ document.title }}
         </h2>
-        <p
-          class="document-id"
-          :title="document.id"
-        >
-          ID：{{ document.id }}
-        </p>
       </div>
       <div class="header-actions">
         <a
@@ -83,7 +74,7 @@ function reject() {
         <span class="status-tag">{{ latest ? parseLabels[latest.parseStatus] : '暂无版本' }}</span>
       </div>
       <p v-if="latest">
-        V{{ latest.versionNumber }} · {{ latest.status }}
+        V{{ latest.versionNumber }} · {{ documentStatusLabels[latest.status] ?? latest.status }}
       </p>
       <p
         v-if="latest?.parseStatus === 'FAILED' && latest.parseErrorCode"
@@ -136,7 +127,7 @@ function reject() {
               v-for="version in document.versions"
               :key="version.id"
             >
-              <td>V{{ version.versionNumber }}</td><td>{{ version.status }}</td><td>{{ parseLabels[version.parseStatus] }}</td><td>{{ new Date(version.createdAt).toLocaleString('zh-CN', { hour12: false }) }}</td><td>
+              <td>V{{ version.versionNumber }}</td><td>{{ documentStatusLabels[version.status] ?? version.status }}</td><td>{{ parseLabels[version.parseStatus] ?? version.parseStatus }}</td><td>{{ new Date(version.createdAt).toLocaleString('zh-CN', { hour12: false }) }}</td><td>
                 <span
                   class="truncate mono"
                   :title="version.id"

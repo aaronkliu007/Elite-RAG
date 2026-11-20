@@ -26,6 +26,19 @@ class BootstrapAdministratorTest {
     private static final Instant NOW = Instant.parse("2026-10-08T05:00:00Z");
 
     @Test
+    void acceptsRequestedDefaultAdministratorCredentialsDuringBootstrapOnly() {
+        var fixture = fixture(new BootstrapAdminProperties("admin", "admin", "系统管理员"));
+        fixture.bootstrap.initialize();
+        assertThat(fixture.accounts.values).singleElement().satisfies(account ->
+                assertThat(account.username()).isEqualTo("admin"));
+        assertThat(fixture.credentials.values).singleElement().satisfies(credential ->
+                {
+                    assertThat(credential.passwordHash()).isEqualTo("admin");
+                    assertThat(credential.passwordChangeRequired()).isTrue();
+                });
+    }
+
+    @Test
     void createsExactlyOneAdministratorWhenNoneExistsAndConfigurationIsComplete() {
         var fixture = fixture(new BootstrapAdminProperties("root", "a-strong-password", "平台管理员"));
 

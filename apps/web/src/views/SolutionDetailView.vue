@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RouterLink, onBeforeRouteLeave, useRoute } from 'vue-router'
+import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
 
 import { ApiRequestError } from '../api/http'
 import SolutionSectionGenerationPanel from '../components/SolutionSectionGenerationPanel.vue'
@@ -22,6 +22,7 @@ interface RequirementDraft extends RequirementItemInput {
 }
 
 const route = useRoute()
+let loadGeneration = 0
 const session = useSessionStore()
 const solutionId = computed(() => String(route.params.solutionId ?? ''))
 const solution = ref<SolutionDetail | null>(null)
@@ -128,31 +129,42 @@ function adoptLoaded(value: SolutionDetail) {
 
 async function load(force = false) {
   if (dirty.value && !force && !window.confirm('存在未保存的修改，确定重新加载吗？')) return
+  const generation = ++loadGeneration
+  const id = solutionId.value
   loading.value = true
   error.value = ''
   mutationError.value = ''
   try {
-    adoptLoaded(await solutionsApi.get(solutionId.value))
+    const loaded = await solutionsApi.get(id)
+    if (generation !== loadGeneration) return
+    adoptLoaded(loaded)
     if (solution.value?.finalizedVersionId && solution.value.sourceAccessValid) {
       try {
-        feedbackItems.value = await solutionsApi.feedbackMine(solutionId.value, solution.value.finalizedVersionId)
+        const feedback = await solutionsApi.feedbackMine(id, solution.value.finalizedVersionId)
+        if (generation !== loadGeneration) return
+        feedbackItems.value = feedback
       } catch (failure) {
+        if (generation !== loadGeneration) return
         feedbackError.value = message(failure, '加载反馈记录失败，请重试')
       }
     }
     if (solution.value?.sourceAccessValid && solution.value.outlineConfirmation?.valid
         && Object.keys(solution.value.adoptedSectionVersionIds ?? {}).length > 0) {
       try {
-        finalizationReview.value = await solutionsApi.finalizationReview(solutionId.value)
+        const review = await solutionsApi.finalizationReview(id)
+        if (generation !== loadGeneration) return
+        finalizationReview.value = review
       } catch (failure) {
+        if (generation !== loadGeneration) return
         reviewError.value = message(failure, '加载定稿核验失败，请重试')
       }
     }
   } catch (failure) {
+    if (generation !== loadGeneration) return
     if (!dirty.value) solution.value = null
     error.value = message(failure, '加载方案失败，请稍后重试')
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
@@ -350,13 +362,15 @@ async function submitFeedback() {
 }
 
 onBeforeRouteLeave(() => !dirty.value || window.confirm('存在未保存的修改，确定离开方案吗？'))
+onBeforeRouteUpdate((to, from) => to.params.solutionId === from.params.solutionId
+  || !dirty.value || window.confirm('存在未保存的修改，确定切换方案吗？'))
 function beforeUnload(event: BeforeUnloadEvent) {
   if (!dirty.value) return
   event.preventDefault()
   event.returnValue = ''
 }
 onMounted(() => { window.addEventListener('beforeunload', beforeUnload); void load() })
-onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
+onUnmounted(() => { loadGeneration++; window.removeEventListener('beforeunload', beforeUnload) })
 </script>
 
 <template>
@@ -395,9 +409,6 @@ onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
           <h2 :title="solution.name">
             {{ solution.name }}
           </h2>
-          <p :title="solution.id">
-            方案 ID：{{ solution.id }}
-          </p>
         </div>
         <div class="header-meta">
           <span class="phase-tag">{{ phaseLabel[solution.phase] }}</span><span>聚合修订 {{ solution.revision }}</span>

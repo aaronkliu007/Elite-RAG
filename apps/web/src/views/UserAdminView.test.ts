@@ -3,7 +3,9 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory } from 'vue-router'
 
-import { clearCsrfToken } from '../api/http'
+import { ApiRequestError, clearCsrfToken } from '../api/http'
+import { adminApi } from '../api/admin'
+import { dingtalkApi } from '../api/dingtalk'
 import { createAppRouter } from '../router'
 import { useSessionStore } from '../stores/session'
 import KnowledgeHomeView from './KnowledgeHomeView.vue'
@@ -29,7 +31,68 @@ describe('用户管理页', () => {
   beforeEach(() => {
     clearCsrfToken()
     vi.restoreAllMocks()
+    vi.spyOn(dingtalkApi, 'status').mockResolvedValue({ configured: false, authoritativeScopeConfirmed: false })
     setActivePinia(createPinia())
+  })
+
+  it('支持加载超过一百人的用户列表，失败时保留已加载用户并重试', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({ ...alice, id: `u${i}`, username: `user${i}`, displayName: `用户${i}` }))
+    const list = vi.spyOn(adminApi, 'listUsers').mockResolvedValueOnce(firstPage).mockRejectedValueOnce(new Error('网络中断')).mockResolvedValueOnce([{ ...alice, id: 'later', username: 'later', displayName: '后续用户' }])
+    const wrapper = mount(UserAdminView)
+    await flushPromises()
+    await wrapper.get('[data-action="more-users"]').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('用户0')
+    expect(wrapper.get('[role="alert"]').text()).toContain('加载更多用户失败')
+    await wrapper.get('[data-action="more-users"]').trigger('click'); await flushPromises()
+    expect(wrapper.text()).toContain('后续用户')
+    expect(list.mock.calls.map(call => call[0])).toEqual([undefined, 2, 2])
+    expect(wrapper.find('[data-action="more-users"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('取消重置密码后关闭表单并清空输入', async () => {
+    vi.spyOn(adminApi, 'listUsers').mockResolvedValue([alice])
+    const wrapper = mount(UserAdminView)
+    await flushPromises()
+    await wrapper.get('[data-action="show-reset"]').trigger('click')
+    await wrapper.get('input[name="resetPassword"]').setValue('临时密码-123456789')
+    await wrapper.get('[data-action="cancel-reset"]').trigger('click')
+    expect(wrapper.find('input[name="resetPassword"]').exists()).toBe(false)
+    await wrapper.get('[data-action="show-reset"]').trigger('click')
+    expect((wrapper.get('input[name="resetPassword"]').element as HTMLInputElement).value).toBe('')
+    wrapper.unmount()
+  })
+
+  it('可复制用户 ID 用于空间成员授权，并明确提示结果', async () => {
+    vi.spyOn(adminApi, 'listUsers').mockResolvedValue([alice])
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const wrapper = mount(UserAdminView)
+    await flushPromises()
+    await wrapper.get('[data-action="copy-user-id"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledWith(alice.id)
+    expect(wrapper.get('[data-copy-status]').text()).toContain('已复制用户 ID')
+    wrapper.unmount()
+    vi.unstubAllGlobals()
+  })
+
+  it('刷新用户列表后忽略此前分页请求的迟到结果', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, i) => ({ ...alice, id: `u${i}`, username: `user${i}` }))
+    let finish!: (value: typeof firstPage) => void
+    const pending = new Promise<typeof firstPage>((resolve) => { finish = resolve })
+    vi.spyOn(adminApi, 'listUsers').mockResolvedValueOnce(firstPage).mockReturnValueOnce(pending).mockResolvedValueOnce([{ ...alice, id: 'fresh', username: 'fresh', displayName: '刷新后用户' }])
+    vi.spyOn(adminApi, 'setEnabled').mockRejectedValue(new ApiRequestError('状态冲突', 409, 'CONFLICT', '', {}))
+    const wrapper = mount(UserAdminView)
+    await flushPromises()
+    await wrapper.get('[data-action="more-users"]').trigger('click')
+    await wrapper.findAll('[data-action="toggle-user"]')[0]!.trigger('click')
+    await flushPromises()
+    finish([{ ...alice, id: 'stale', username: 'stale', displayName: '过期用户' }])
+    await flushPromises()
+    expect(wrapper.text()).toContain('刷新后用户')
+    expect(wrapper.text()).not.toContain('过期用户')
+    wrapper.unmount()
   })
 
   it('拒绝非系统管理员进入用户管理路由', async () => {
@@ -57,7 +120,7 @@ describe('用户管理页', () => {
     expect(router.currentRoute.value.path).toBe('/')
   })
 
-  it('系统管理员在知识空间首页看到用户入口，并在创建冲突后刷新空间列表', async () => {
+  it('知识空间不重复展示用户入口，并在创建冲突后刷新空间列表', async () => {
     const createdSpace = {
       id: '10000000-0000-7000-8000-000000000001',
       name: '研发知识空间',
@@ -91,7 +154,10 @@ describe('用户管理页', () => {
     const wrapper = mount(KnowledgeHomeView, { global: { plugins: [pinia, router] } })
     await flushPromises()
 
-    expect(wrapper.get('a[href="/admin/users"]').text()).toContain('用户管理')
+    expect(wrapper.find('a[href="/admin/users"]').exists()).toBe(false)
+    expect(wrapper.get('[data-form="create-space"]').attributes('style')).toContain('display: none')
+    await wrapper.get('button[data-action="open-create-space"]').trigger('click')
+    expect(wrapper.get('button[data-action="open-create-space"]').attributes('aria-expanded')).toBe('true')
     await wrapper.get('input[name="spaceName"]').setValue('研发知识空间')
     await wrapper.get('textarea[name="spaceDescription"]').setValue('研发制度和技术资产')
     await wrapper.get('[data-form="create-space"]').trigger('submit')
@@ -144,6 +210,9 @@ describe('用户管理页', () => {
     expect(wrapper.get('[data-user-name]').attributes('title')).toBe(alice.displayName)
     expect(wrapper.get('[data-user-username]').attributes('title')).toBe(alice.username)
 
+    expect(wrapper.get('[data-form="create-user"]').attributes('style')).toContain('display: none')
+    await wrapper.get('button[data-action="open-create-user"]').trigger('click')
+    expect(wrapper.get('button[data-action="open-create-user"]').attributes('aria-expanded')).toBe('true')
     await wrapper.get('input[name="username"]').setValue('bob')
     await wrapper.get('input[name="displayName"]').setValue('鲍勃')
     await wrapper.get('input[name="password"]').setValue('long-password-123')
