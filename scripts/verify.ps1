@@ -6,11 +6,7 @@ $uvCommand = Get-Command uv -ErrorAction SilentlyContinue
 $uvExecutable = if ($uvCommand) { $uvCommand.Source } elseif (Test-Path $uvCandidate) { $uvCandidate } else { $null }
 $dockerCommand = Get-Command docker -ErrorAction SilentlyContinue
 $mavenCommand = Get-Command mvn -ErrorAction SilentlyContinue
-$licenseFile = if ($env:RAG_MINIO_LICENSE_FILE) {
-    $env:RAG_MINIO_LICENSE_FILE
-} else {
-    'E:\git_secrets\Elite-RAG\minio.license'
-}
+$licenseFile = $env:RAG_MINIO_LICENSE_FILE
 
 if (-not $uvExecutable) {
     throw 'uv was not found. Install uv 0.12.18 or add uv to PATH.'
@@ -18,8 +14,8 @@ if (-not $uvExecutable) {
 if (-not $dockerCommand) {
     throw 'Docker CLI was not found. Install Docker Desktop and add docker to PATH.'
 }
-if (-not (Test-Path -LiteralPath $licenseFile -PathType Leaf)) {
-    throw "AIStor license file was not found at the configured path: $licenseFile"
+if ([string]::IsNullOrWhiteSpace($licenseFile) -or -not (Test-Path -LiteralPath $licenseFile -PathType Leaf)) {
+    throw 'Set RAG_MINIO_LICENSE_FILE to an existing AIStor license file outside the repository.'
 }
 
 & $dockerCommand.Source info --format '{{.ServerVersion}}' | Out-Null

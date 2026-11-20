@@ -2,7 +2,7 @@
 
 > **面向执行者：** 必须使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 逐任务执行。任务步骤用 `- [ ]` 跟踪。
 
-**目标：** 在 `E:\git_repo\Elite-RAG` 中交付可持久化、可从浏览器操作的方案创建、需求确认与大纲确认闭环。
+**目标：** 在 `<项目根目录>` 中交付可持久化、可从浏览器操作的方案创建、需求确认与大纲确认闭环。
 
 **架构：** 现有纯 Java 方案领域模型保留；Spring 应用层接入 PostgreSQL 事务、来源权限和精简幂等记录，再向现有 Session API 和 Vue 页面提供受权视图。每条写路径均以当前版本、权限和事务作为门禁。
 
@@ -12,7 +12,7 @@
 
 ## 全局约束
 
-- 工作目录固定为 `E:\git_repo\Elite-RAG`，分支为 `solution-workbench-core`；仅做本地提交，不主动推送。
+- 工作目录为项目根目录，分支为 `solution-workbench-core`；仅做本地提交，不主动推送。
 - 一家公司一套实例，PostgreSQL 是方案业务状态的事实源。
 - Web API 使用 `/api/v1`；用户身份和时间由服务端确定。
 - 方案与版本正文不得进入日志、审计和幂等记录。

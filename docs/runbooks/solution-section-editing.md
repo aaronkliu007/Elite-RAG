@@ -22,6 +22,6 @@
 
 ## 验证与限制
 
-在 `E:\git_repo\Elite-RAG` 运行 `scripts/verify.ps1`，或分别运行 Core API Maven 测试、`pnpm --dir apps/web test -- --run` 和 `pnpm --dir apps/web exec playwright test`。自动化验收涵盖并发冲突、候选版本不可变、证据撤权、原始证据链追溯、人工风险签认、Word 导出，以及桌面和窄屏页面。
+在 `<项目根目录>` 运行 `scripts/verify.ps1`，或分别运行 Core API Maven 测试、`pnpm --dir apps/web test -- --run` 和 `pnpm --dir apps/web exec playwright test`。自动化验收涵盖并发冲突、候选版本不可变、证据撤权、原始证据链追溯、人工风险签认、Word 导出，以及桌面和窄屏页面。
 
 本地验收不能代替真实审批模型、真实脱敏数据、容量、恢复和安全测试；当前系统仍不具备生产准入。

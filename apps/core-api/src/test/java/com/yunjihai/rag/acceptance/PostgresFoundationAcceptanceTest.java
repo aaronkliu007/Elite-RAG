@@ -525,9 +525,9 @@ class PostgresFoundationAcceptanceTest {
 
 final class LocalFoundationInfrastructure {
     static final String AISTOR_IMAGE = "quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3";
-    static final Path LICENSE = Path.of(java.util.Optional.ofNullable(System.getenv("RAG_MINIO_LICENSE_FILE"))
+    static final Path LICENSE = java.util.Optional.ofNullable(System.getenv("RAG_MINIO_LICENSE_FILE"))
             .filter(value -> !value.isBlank())
-            .orElse("E:\\git_secrets\\Elite-RAG\\minio.license"));
+            .map(Path::of).orElse(null);
     static final String DATABASE = "rag_acceptance";
     static final String MIGRATION_USER = "migration_owner";
     static final String MIGRATION_PASSWORD = "migration_test_only";
@@ -545,7 +545,6 @@ final class LocalFoundationInfrastructure {
     private static final GenericContainer<?> MINIO = new GenericContainer<>(DockerImageName.parse(AISTOR_IMAGE))
             .withEnv("MINIO_ROOT_USER", MINIO_ROOT_USER)
             .withEnv("MINIO_ROOT_PASSWORD", MINIO_ROOT_PASSWORD)
-            .withFileSystemBind(LICENSE.toString(), "/minio.license", BindMode.READ_ONLY)
             .withFileSystemBind(APP_POLICY.toString(), "/rag-documents-app-policy.json", BindMode.READ_ONLY)
             .withCommand("server", "/data", "--console-address", ":9001", "--license", "/minio.license")
             .withExposedPorts(9000)
@@ -572,12 +571,13 @@ final class LocalFoundationInfrastructure {
 
     static synchronized void start() {
         if (started) return;
-        if (!Files.isRegularFile(LICENSE)) {
+        if (LICENSE == null || !Files.isRegularFile(LICENSE)) {
             throw new IllegalStateException("AISTOR_LICENSE_MISSING");
         }
         if (!Files.isRegularFile(APP_POLICY)) {
             throw new IllegalStateException("AISTOR_APP_POLICY_MISSING");
         }
+        MINIO.withFileSystemBind(LICENSE.toString(), "/minio.license", BindMode.READ_ONLY);
         POSTGRES.start();
         MINIO.start();
         try (var connection = DriverManager.getConnection(

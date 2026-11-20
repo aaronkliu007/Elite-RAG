@@ -31,7 +31,7 @@ Core API 使用 `local` profile。分章生成需要启用 OpenSearch 检索；�
 验证命令：
 
 ```powershell
-Set-Location 'E:\git_repo\Elite-RAG'
+Set-Location '<项目根目录>'
 $env:JAVA_HOME = 'C:\Program Files\Zulu\zulu-21'
 .\mvnw.cmd -pl apps/core-api -am test
 ```

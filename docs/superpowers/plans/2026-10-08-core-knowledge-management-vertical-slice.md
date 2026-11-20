@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 固定工作目录为 `E:\git_repo\Elite-RAG`，分支为 `solution-workbench-core`。
+- 在项目根目录工作，分支为 `solution-workbench-core`。
 - 所有新增文档、界面文字、错误消息和运行说明使用中文。
 - 每家公司独立部署一套实例；本批不增加 SaaS 多租户或逐行 `tenant_id`。
 - Spring Boot 持有身份、权限、事务、审计和基础设施凭据；Python Worker 保持无状态。
@@ -743,7 +743,7 @@ Expected: 首次在未补齐 Compose/配置或验收辅助上 FAIL。
 
 - [ ] **Step 3: 补齐 Compose、验证脚本和运行手册**
 
-Compose 只绑定本机开发端口；license 只读挂载 `E:\git_secrets\Elite-RAG\minio.license`；README 标明“受控测试可用、尚未生产准入”。手册包含管理员引导、账号恢复、任务重试、全文降级、索引重建、撤权验证和已知限制。
+Compose 只绑定本机开发端口；license 只读挂载 `<仓库外密钥目录>\minio.license`；README 标明“受控测试可用、尚未生产准入”。手册包含管理员引导、账号恢复、任务重试、全文降级、索引重建、撤权验证和已知限制。
 
 - [ ] **Step 4: 运行全量验证**
 

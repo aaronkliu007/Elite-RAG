@@ -17,23 +17,24 @@
 
 ## 3. 本地依赖启动
 
-唯一项目目录：
+项目可检出到任意目录；以下路径是占位符，请替换为本机实际路径：
 
 ```text
-E:\git_repo\Elite-RAG
+<项目根目录>
 ```
 
 AIStor 许可证保持在仓库外：
 
 ```text
-E:\git_secrets\Elite-RAG\minio.license
+<仓库外密钥目录>\minio.license
 ```
 
 准备并启动：
 
 ```powershell
-Set-Location 'E:\git_repo\Elite-RAG'
+Set-Location '<项目根目录>'
 Copy-Item infra/compose/.env.example infra/compose/.env
+# 在 .env 中填写 RAG_MINIO_LICENSE_FILE 的实际绝对路径。
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml up -d --wait
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml ps
 ```

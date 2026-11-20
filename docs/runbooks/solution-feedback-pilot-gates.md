@@ -12,7 +12,7 @@
 
 ## 自动化验证
 
-在 `E:\git_repo\Elite-RAG` 执行：
+在 `<项目根目录>` 执行：
 
 ```powershell
 .\mvnw.cmd -o -pl apps/core-api -am test

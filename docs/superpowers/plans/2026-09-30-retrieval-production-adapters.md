@@ -12,7 +12,7 @@
 
 ## 全局约束
 
-- 固定工作目录为 `E:\git_repo\Elite-RAG`；不得在名称包含额外反斜杠或 `_repo` 前多一个反斜杠的目录工作。
+- 在实际检出的项目根目录工作。
 - PostgreSQL 是文档、组织、发布状态与 ACL 的唯一权威源；OpenSearch 必须可以删除后重建。
 - OpenSearch 服务端固定 `opensearchproject/opensearch:3.8.0`，Java 客户端固定 `org.opensearch.client:opensearch-java:3.9.0`；使用 `ApacheHttpClient5Transport`，不得引入已弃用的 High Level REST Client。
 - 中文与混合技术文本使用 OpenSearch 内置 `cjk` analyzer，不要求额外分词插件。
@@ -506,7 +506,7 @@ docker compose --env-file infra/compose/.env.example -f infra/compose/compose.ya
 
 - [ ] **步骤 6：执行隔离 Compose 冒烟验收**
 
-使用临时 project name 和临时非敏感测试凭据启动 PostgreSQL、AIStor、OpenSearch；等待三者健康、`minio-init` 成功退出，运行索引初始化/重建/一次检索验收后 `docker compose down -v`。许可证只从 `E:\git_secrets\Elite-RAG\minio.license` 挂载，不复制进仓库或日志。
+使用临时 project name 和临时非敏感测试凭据启动 PostgreSQL、AIStor、OpenSearch；等待三者健康、`minio-init` 成功退出，运行索引初始化/重建/一次检索验收后 `docker compose down -v`。许可证只从 `<仓库外密钥目录>\minio.license` 挂载，不复制进仓库或日志。
 
 预期：三项依赖健康、重建成功、全文检索返回、向量显示允许降级，清理后无本批容器和卷残留。
 

@@ -107,7 +107,7 @@ Embedding 与查询向量必须使用相同模型和维度。已有无向量索�
 管理员可在应用启动前通过环境变量 `RAG_QA_EVALUATION_DATASET_PATH` 指定独立维护的黄金集 JSON 文件，例如：
 
 ```powershell
-$env:RAG_QA_EVALUATION_DATASET_PATH = 'E:\git_secrets\Elite-RAG\reviewed-qa-dataset.json'
+$env:RAG_QA_EVALUATION_DATASET_PATH = '<仓库外密钥目录>\reviewed-qa-dataset.json'
 ```
 
 该文件必须是应用进程可读取的绝对路径，最大 10 MiB，格式沿用内置黄金集。未配置时仍加载内置合成集；路径错误、文件无效、重复字段、尾随 JSON 或超限时启动失败，不会静默回退。配置在进程启动时读取，修改文件后需安全重启并重新评测；数据集内容变化会使旧记录不再通过当前门禁。文件应存放在代码仓库之外并限制访问，标注不得包含不适合本评测环境处理的信息。

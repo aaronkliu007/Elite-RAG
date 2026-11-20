@@ -13,7 +13,7 @@
 方案工作台默认要求编辑者与确认者是不同用户。配置项 `rag.solution.review.allow-self-confirmation` 默认 `false`；受控验收和正常部署保持默认值。若企业策略需要改变，须先完成独立的权限和审计评审，不能仅通过前端按钮修改。
 
 ```powershell
-Set-Location 'E:\git_repo\Elite-RAG'
+Set-Location '<项目根目录>'
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml up -d --wait
 # 按 README 的“Core API 本地启动与健康检查”导入应用账号变量。
 $env:SPRING_PROFILES_ACTIVE = 'local'
@@ -23,7 +23,7 @@ $env:SPRING_PROFILES_ACTIVE = 'local'
 另一终端启动页面：
 
 ```powershell
-Set-Location 'E:\git_repo\Elite-RAG'
+Set-Location '<项目根目录>'
 corepack pnpm --dir apps/web dev
 ```
 

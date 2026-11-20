@@ -14,7 +14,7 @@
 
 ## 2. 已确认约束
 
-- 固定工作目录为 `E:\git_repo\Elite-RAG`。
+- 在项目根目录工作。
 - 采用“OpenSearch 双路召回 + Java 应用层 RRF”方案，不使用 OpenSearch Hybrid Search Pipeline 代替现有业务内核。
 - Java 21 / Spring Boot 是投影编排、检索和事务边界所有者。
 - PostgreSQL 是文档、发布状态、组织关系和 ACL 的唯一权威源。

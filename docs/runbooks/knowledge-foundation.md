@@ -4,25 +4,26 @@
 
 本手册用于第一批 PostgreSQL、Flyway、官方 AIStor 和生产适配器的研发联调与故障定位。当前实现已具备真实基础设施验收，但不代表真实钉钉、恶意软件扫描、备份恢复、云模型和投产准入已经完成。禁止接入真实客户资料和创建任何试点标签。
 
-## 2. 固定目录与密钥规则
+## 2. 项目目录与密钥规则
 
-唯一项目目录：
+项目可检出到任意目录；以下路径是占位符，请替换为本机实际路径：
 
 ```text
-E:\git_repo\Elite-RAG
+<项目根目录>
 ```
 
 AIStor Free 许可证：
 
 ```text
-E:\git_secrets\Elite-RAG\minio.license
+<仓库外密钥目录>\minio.license
 ```
 
-注意 `git_repo` 和 `git_secrets` 都是单个目录名。许可证只允许仓库外保存并只读挂载；任何脚本、测试、日志和报告都不得读取或输出其内容。
+许可证只允许仓库外保存并只读挂载；任何脚本、测试、日志和报告都不得读取或输出其内容。
 
 ```powershell
-Set-Location 'E:\git_repo\Elite-RAG'
+Set-Location '<项目根目录>'
 Copy-Item infra/compose/.env.example infra/compose/.env
+# 在 .env 中填写 RAG_MINIO_LICENSE_FILE 的实际绝对路径。
 ```
 
 本机 `.env` 已由 Git 忽略。示例口令不是生产密钥，不得复用到共享环境。生产和共享环境必须通过密钥系统注入，并至少满足：
@@ -33,10 +34,10 @@ Copy-Item infra/compose/.env.example infra/compose/.env
 - Core API 不得接收 AIStor 根凭据，Python Worker 不得接收数据库或对象存储凭据；
 - 工单、截图和日志只能记录密钥版本或指纹，不能记录明文。
 
-若许可证不在默认位置，可只在当前终端设置路径：
+运行验证脚本或 Maven 集成测试前，在当前终端设置许可证路径：
 
 ```powershell
-$env:RAG_MINIO_LICENSE_FILE = 'E:\git_secrets\Elite-RAG\minio.license'
+$env:RAG_MINIO_LICENSE_FILE = '<仓库外密钥目录>\minio.license'
 ```
 
 ## 3. 启动与停止

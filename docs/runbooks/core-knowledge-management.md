@@ -6,11 +6,11 @@
 
 不得接入真实客户敏感资料，不得把本手册当作生产部署方案。正式试点前仍需完成企业恶意文件扫描、备份恢复演练、容量压测、渗透测试、日志与指标平台、TLS、OpenSearch 安全插件、密钥托管和发布审批。
 
-固定目录如下，两个目录名都不包含额外反斜杠：
+以下路径是占位符，请替换为本机实际路径：
 
 ```text
-项目：E:\git_repo\Elite-RAG
-许可证：E:\git_secrets\Elite-RAG\minio.license
+项目：<项目根目录>
+许可证：<仓库外密钥目录>\minio.license
 ```
 
 许可证只读挂载到 AIStor，不得复制进仓库、日志、截图或工单。
@@ -20,8 +20,9 @@
 先准备本机配置并校验 Compose：
 
 ```powershell
-Set-Location 'E:\git_repo\Elite-RAG'
+Set-Location '<项目根目录>'
 Copy-Item infra/compose/.env.example infra/compose/.env
+# 在 .env 中填写 RAG_MINIO_LICENSE_FILE 的实际绝对路径。
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml config --quiet
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml up -d --wait
 docker compose --env-file infra/compose/.env -f infra/compose/compose.yaml ps

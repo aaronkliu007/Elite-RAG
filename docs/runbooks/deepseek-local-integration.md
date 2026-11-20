@@ -2,16 +2,18 @@
 
 本文用于在隔离测试环境中，以虚构或获准脱敏的材料联调现有问答及方案工作台；不代表已通过生产准入。原始文档、解析内容、索引和业务数据仍保存在内网，只有经过现有鉴权、范围控制和脱敏处理的最小上下文可发送至经审批的模型接口。
 
+文中的 `<项目根目录>` 和 `<仓库外密钥目录>` 均为占位符，执行命令前请替换为实际路径。
+
 ## 1. 准备密钥
 
-由密钥所有者通过公司认可的方式获取 DeepSeek 官方 API 密钥。将密钥以纯文本保存在仓库外的 `E:\git_secrets\Elite-RAG\deepseek-api-key.txt`，文件只包含密钥；限制 Windows 文件读取权限，只授权实际运维账号。不要把密钥发到聊天、工单或日志，也不要提交到 Git。
+由密钥所有者通过公司认可的方式获取 DeepSeek 官方 API 密钥。将密钥以纯文本保存在仓库外的 `<仓库外密钥目录>\deepseek-api-key.txt`，文件只包含密钥；限制 Windows 文件读取权限，只授权实际运维账号。不要把密钥发到聊天、工单或日志，也不要提交到 Git。
 
 问答审计还需要一个独立且稳定的问题摘要 HMAC 密钥（至少 32 个 UTF-8 字节），不能使用 API 密钥代替。可由管理员在同一仓库外密钥目录保存为 `qa-question-hmac.key`。该密钥必须长期安全保存：重启时使用同一密钥，不得随意更换或打印。
 
 如果该文件尚不存在，可由密钥管理员在自己的 PowerShell 中运行以下命令创建随机密钥；已有文件会保留。目录应事先由管理员创建并限制读取权限。
 
 ```powershell
-$ragQaHmacPath = 'E:\git_secrets\Elite-RAG\qa-question-hmac.key'
+$ragQaHmacPath = '<仓库外密钥目录>\qa-question-hmac.key'
 if (-not (Test-Path -LiteralPath $ragQaHmacPath)) {
     $ragRandomBytes = New-Object byte[] 32
     $ragRng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
@@ -24,14 +26,14 @@ if (-not (Test-Path -LiteralPath $ragQaHmacPath)) {
 
 ## 2. 准备运行环境
 
-按 [README](../../README.md) 使用项目目录 `E:\git_repo\Elite-RAG` 启动隔离测试基础设施，并在启动 Core API 的同一个 PowerShell 窗口中按 README 导入数据库和对象存储的应用账号配置。不要启动云模型调用来验证真实资料；先使用虚构材料，并确认出站与数据策略已审批。
+按 [README](../../README.md) 使用项目目录 `<项目根目录>` 启动隔离测试基础设施，并在启动 Core API 的同一个 PowerShell 窗口中按 README 导入数据库和对象存储的应用账号配置。不要启动云模型调用来验证真实资料；先使用虚构材料，并确认出站与数据策略已审批。
 
 在启动 Core API 前执行以下配置，`Get-Content` 的结果只赋值给进程变量，不会显示密钥：
 
 ```powershell
-Set-Location 'E:\git_repo\Elite-RAG'
-$ragDeepSeekKeyPath = 'E:\git_secrets\Elite-RAG\deepseek-api-key.txt'
-$ragQaHmacPath = 'E:\git_secrets\Elite-RAG\qa-question-hmac.key'
+Set-Location '<项目根目录>'
+$ragDeepSeekKeyPath = '<仓库外密钥目录>\deepseek-api-key.txt'
+$ragQaHmacPath = '<仓库外密钥目录>\qa-question-hmac.key'
 if (-not (Test-Path -LiteralPath $ragDeepSeekKeyPath -PathType Leaf)) { throw 'DeepSeek 密钥文件不存在' }
 if (-not (Test-Path -LiteralPath $ragQaHmacPath -PathType Leaf)) { throw '问答 HMAC 密钥文件不存在' }
 $env:RAG_AI_API_KEY = (Get-Content -LiteralPath $ragDeepSeekKeyPath -Raw).Trim()

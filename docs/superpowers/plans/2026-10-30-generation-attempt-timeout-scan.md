@@ -12,7 +12,7 @@
 
 ## 全局约束
 
-- 在 `E:\git_repo\Elite-RAG` 工作；中文文档；只提交本地 Git commit。
+- 在 `<项目根目录>` 工作；中文文档；只提交本地 Git commit。
 - 只处理 `PENDING`、`RETRIEVING`、`GENERATING`；不重发模型请求，不改变已完成结果。
 - 租约使用数据库时钟；并发扫描不能重复转移同一尝试。
 

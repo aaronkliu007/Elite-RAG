@@ -28,21 +28,11 @@
 
 不得上传真实客户资料，不得宣称已经投产，也不得创建 `pilot-foundation-v1`、`pilot-retrieval-v1` 或 `pilot-workbench-v1` 标签。
 
-## 固定目录与许可证
+## 项目目录与许可证
 
-项目唯一工作目录：
+项目可以检出到任意目录。以下命令均在项目根目录执行；文档中出现的 `<项目根目录>` 和 `<仓库外密钥目录>` 是需要按实际环境替换的占位符。
 
-```text
-E:\git_repo\Elite-RAG
-```
-
-AIStor Free 许可证放在仓库外：
-
-```text
-E:\git_secrets\Elite-RAG\minio.license
-```
-
-许可证不得复制进仓库、提交到 Git、粘贴到日志或工单。Compose 和 Testcontainers 只以只读方式挂载该文件。`scripts/verify.ps1` 只检查文件是否存在，不读取或输出内容。需要改路径时只在当前终端设置 `RAG_MINIO_LICENSE_FILE`。
+将 AIStor Free 许可证保存在仓库外，配置 `RAG_MINIO_LICENSE_FILE` 为实际文件的绝对路径。许可证不得复制进仓库、提交到 Git、粘贴到日志或工单。Compose 和 Testcontainers 只以只读方式挂载该文件；`scripts/verify.ps1` 只检查文件是否存在，不读取或输出内容。
 
 ## 本地基础设施
 
@@ -51,8 +41,10 @@ E:\git_secrets\Elite-RAG\minio.license
 先从示例创建仅供本机使用的环境文件：
 
 ```powershell
-Set-Location 'E:\git_repo\Elite-RAG'
 Copy-Item infra/compose/.env.example infra/compose/.env
+# 在 infra/compose/.env 中将 RAG_MINIO_LICENSE_FILE 填为实际许可证的绝对路径。
+# 运行 scripts/verify.ps1 或 Maven 集成测试前，还需在当前终端设置：
+$env:RAG_MINIO_LICENSE_FILE = '<仓库外许可证文件的绝对路径>'
 ```
 
 `.env` 不得提交。示例值只用于隔离开发；部署或共享环境必须从密钥系统注入独立随机凭据。数据库迁移账号与运行账号必须分离；AIStor 根账号只负责初始化，Core API 使用仅限 `rag-documents` 桶的应用账号，禁止把根账号提供给应用。

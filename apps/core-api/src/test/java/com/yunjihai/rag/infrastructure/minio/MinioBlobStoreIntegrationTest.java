@@ -39,9 +39,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MinioBlobStoreIntegrationTest {
     private static final String IMAGE = "quay.io/minio/aistor/minio@sha256:107cf2014a9583c74c11e3cdbd6903d89c2244355886b89ce532f4ecae9c23f3";
-    private static final Path LICENSE = Path.of(java.util.Optional.ofNullable(System.getenv("RAG_MINIO_LICENSE_FILE"))
+    private static final Path LICENSE = java.util.Optional.ofNullable(System.getenv("RAG_MINIO_LICENSE_FILE"))
             .filter(value -> !value.isBlank())
-            .orElse("E:\\git_secrets\\Elite-RAG\\minio.license"));
+            .map(Path::of).orElse(null);
     private static final String ROOT_USER = "task7-root-user";
     private static final String ROOT_PASSWORD = "task7-root-password-only";
     private static final String BUCKET = "task7-documents";
@@ -54,7 +54,6 @@ class MinioBlobStoreIntegrationTest {
     private static final GenericContainer<?> MINIO = new GenericContainer<>(DockerImageName.parse(IMAGE))
             .withEnv("MINIO_ROOT_USER", ROOT_USER)
             .withEnv("MINIO_ROOT_PASSWORD", ROOT_PASSWORD)
-            .withFileSystemBind(LICENSE.toString(), "/minio.license", BindMode.READ_ONLY)
             .withCommand("server", "/data", "--console-address", ":9001", "--license", "/minio.license")
             .withExposedPorts(9000)
             .waitingFor(Wait.forHttp("/minio/health/ready").forPort(9000)
@@ -67,7 +66,8 @@ class MinioBlobStoreIntegrationTest {
     @BeforeAll
     static void startMinio() throws Exception {
         org.junit.jupiter.api.Assumptions.assumeTrue(
-                Files.isRegularFile(LICENSE), "仓库外 AIStor license 不存在，跳过官方 AIStor 协议测试");
+                LICENSE != null && Files.isRegularFile(LICENSE), "未配置有效的 RAG_MINIO_LICENSE_FILE，跳过官方 AIStor 协议测试");
+        MINIO.withFileSystemBind(LICENSE.toString(), "/minio.license", BindMode.READ_ONLY);
         MINIO.start();
         admin = MinioClient.builder().endpoint(MINIO.getHost(), MINIO.getMappedPort(9000), false)
                 .credentials(ROOT_USER, ROOT_PASSWORD).build();
